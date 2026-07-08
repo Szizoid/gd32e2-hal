@@ -1,0 +1,13 @@
+# Build everything for the Cortex-M23 core of the GD32E230.
+[build]
+target = "thumbv8m.base-none-eabi"
+
+[target.thumbv8m.base-none-eabi]
+# link.x comes from cortex-m-rt; it `INCLUDE`s our memory.x (placed on the linker
+# search path by build.rs).
+rustflags = ["-C", "link-arg=-Tlink.x"]
+
+# Convenience: `cargo bin` produces the flashable firmware.bin for the
+# All-In-One Programmer. Requires cargo-binutils + llvm-tools (see README).
+[alias]
+bin = "objcopy --release -- -O binary firmware.bin"

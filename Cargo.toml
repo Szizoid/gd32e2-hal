@@ -1,0 +1,32 @@
+[package]
+name = "gd32e230k8u6-template"
+version = "0.1.0"
+edition = "2021"
+authors = ["Ivan"]
+description = "Bare-metal Rust firmware template for GD32E230K8U6 (Cortex-M23), PAC-only, no HAL"
+
+[dependencies]
+# Cortex-M runtime + intrinsics. critical-section-single-core provides the
+# critical-section implementation that the gd32e2 `critical-section` feature needs.
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7.3"
+panic-halt = "0.2.0"
+
+# Peripheral Access Crate (PAC) for the GD32E2 family.
+# `gd32e230` selects our exact chip family; `rt` pulls cortex-m-rt interrupt
+# vectors; `critical-section` enables safe interrupt-free register access.
+[dependencies.gd32e2]
+version = "0.9.1"
+features = ["gd32e230", "rt", "critical-section"]
+
+# Release profile tuned for a small, predictable binary. Debug info stays in the
+# ELF but is dropped by objcopy when producing the .bin, so it costs nothing on chip.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+debug = true
+overflow-checks = false
+
+[profile.dev]
+opt-level = 1

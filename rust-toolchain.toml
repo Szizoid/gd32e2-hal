@@ -1,0 +1,4 @@
+[toolchain]
+channel = "stable"
+targets = ["thumbv8m.base-none-eabi"]
+components = ["llvm-tools"]

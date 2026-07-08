@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+*.bin
+*.hex
+
+# Keep the docs/ folder but ignore the large vendor PDFs you drop in.
+docs/*.pdf
