@@ -1,4 +1,6 @@
 [toolchain]
-channel = "stable"
+# Host switched to the GNU ABI so build scripts / proc-macros link with the
+# bundled mingw linker instead of MSVC's link.exe (no Visual Studio needed).
+channel = "stable-x86_64-pc-windows-gnu"
 targets = ["thumbv8m.base-none-eabi"]
 components = ["llvm-tools"]
