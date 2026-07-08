@@ -1,76 +1,160 @@
-# GD32E230K8U6 — bare-metal Rust template
+# gd32e230-hal
 
-Шаблон проекта для новых прошивок на GD32E230K8U6 (Cortex-M23), PAC-only
-(`gd32e2` крейт, без HAL — для GD32E230 полноценного HAL на Rust не существует).
-Выделен из рабочего проекта [gd32e230-adc-logger] с исправленными на реальном
-железе граблями — не переоткрывай их заново.
+[English](#english) · [Русский](#русский)
 
-## Что тут generic (готово к использованию как есть)
+---
 
-- **Инфраструктура сборки**: `Cargo.toml`, `.cargo/config.toml`, `build.rs`,
-  `memory.x`, `rust-toolchain.toml`, `.gitignore`, `.zed/settings.json`.
-  Target `thumbv8m.base-none-eabi`, флеш/ОЗУ под K8U6 (48K/8K — используемая
-  на практике проверенная раскладка, физически чип 64K, см. комментарий в
-  `memory.x`).
-- **`src/rcu.rs`, `src/gpio.rs`, `src/usart.rs`** — универсальные паттерны
-  (тактирование по шинам, режимы ножек/AF, USART 115200 8N1). Пины/каналы в
-  них конкретные под прошлый проект — меняй под свою разводку.
-- **`src/fmt.rs`** — полностью generic, без `format!`/кучи, ASCII-форматирование
-  чисел в буфер фиксированного размера.
+## English
 
-## Что тут пример под конкретную задачу (адаптируй или удаляй)
+A hardware abstraction layer (HAL) for the **GD32E230K8U6** microcontroller
+(Cortex-M23 core), written in Rust from scratch on top of the
+[`gd32e2`](https://crates.io/crates/gd32e2) PAC.
 
-- **`src/adc.rs`, `src/pwm.rs`** — рабочие, проверенные на железе модули для
-  типовых задач (АЦП с самокалибровкой, ШИМ на general-purpose таймере). Каналы/
-  пины/частоты в них и в `config.rs` — из прошлого проекта, замени под свои.
-- **`src/config.rs`** — демонстрирует паттерн: исходные константы + производные,
-  вычисляемые компилятором. Значения — плейсхолдеры.
-- **`src/main.rs`** — минимальный скелет: такты → GPIO → USART → heartbeat.
-  `adc`/`pwm` подключены как модули, но не вызываются — раскомментируй
-  использование по надобности.
+> ⚠️ **Work in progress.** The HAL is written incrementally and by hand — to
+> genuinely understand both the hardware and Rust's type system. The API is
+> unstable; the crate currently lives as a module inside the project (`src/hal/`)
+> and will later be extracted into a standalone library.
 
-## ВАЖНАЯ находка — не наступи повторно
+### Philosophy
 
-**АЦП не заработает без явного выбора источника тактов.** По умолчанию
-(`RCU_CFG2.ADCSEL = 0` после сброса) `CK_ADC` берётся от **CK_IRC28M** — отдельного
-генератора, который никогда не включается сам. Настройки `RCU_CFG0.ADCPSC`
-(наш делитель от APB2) при этом **полностью игнорируются**. Без тактов АЦП
-самокалибровка (`CLB`) никогда не завершается — код виснет в `adc::init`
-**навсегда**, при этом остальная периферия (например, независимый от CPU
-аппаратный таймер ШИМ) продолжает работать, что сбивает с толку при отладке.
+There is no full-featured HAL for the GD32E230 in the Rust ecosystem, so the raw
+PAC (`gd32e2` — direct register access) is used as the base, and a safe, ergonomic
+layer is built on top. Principles:
 
-Фикс уже в `rcu.rs`: `rcu.cfg2().modify(|_, w| w.adcsel().set_bit())` — явно
-выбрать `CK_APB2` как источник `CK_ADC`. См. User Manual §10.4.1–10.4.3 и
-раздел RCU_CFG2. Если АЦП не нужен в новом проекте — просто не зови `adc::init`,
-но саму строку в `rcu.rs` можно оставить безвредно.
+- **Errors at compile time, not on the board.** A pin's mode is encoded in its type
+  (typestate): `Pin<Input>` physically has no `set_high` method, and the ownership
+  system won't let you reconfigure a single pin twice.
+- **Zero-cost.** The abstractions compile down to the same register writes as
+  hand-written PAC code: no runtime overhead, `Pin<Output>` is 2 bytes.
+- **`#![no_std]`, no heap.**
 
-Также: официальная процедура калибровки (§10.4.1) требует ждать только
-`CLB=0`; `RSTCLB` — опциональный шаг, ждать его очистки не нужно (на практике
-он не всегда самоочищается, и это тоже источник зависания).
+### What's implemented
 
-## Hard constraints проекта (унаследовано из brief)
+**GPIO** (`src/hal/gpio.rs`):
 
-- **PAC only, no HAL.**
-- **Нет отладочного зонда** — прошивка только через UART-бутлоадер (GD32 All-In-One
-  Programmer). Никаких RTT/`defmt`/semihosting — весь вывод через USART0.
-- `#![no_std]` / `#![no_main]`, `panic-halt`.
+- Typestate pins `Pin<MODE>` with modes `Input` / `Output` / `Analog`.
+- Handing out pins: `split_gpioa` / `split_gpiob` consume the port singleton and
+  return a set of individual pins — each pin's uniqueness is guaranteed by the compiler.
+- Mode transitions: `into_output` / `into_input` / `into_analog`.
+- Output: `set_high` / `set_low` — atomically via the `BOP` / `BC` registers.
+- Input: `is_high` / `is_low` — via `ISTAT`.
 
-## Регистры — верифицируй, не угадывай
+```rust
+let dp = gd32e230::Peripherals::take().unwrap();
+let parts = split_gpioa(dp.gpioa);
+let mut led = parts.pa5.into_output();
+led.set_high();
+```
 
-`gd32e2` генерируется из патченных SVD; имена полей проверяй по факту:
-- `cargo doc --open` (после `cargo build`) — точные Rust-идентификаторы.
-- `docs/GD32E23x_User_Manual.pdf` — семантика регистров (положи файл сам,
-  см. `docs/README.md`).
-- `docs/GD32E230xx_Datasheet.pdf` — распиновка, электрические лимиты.
+### Project constraints
 
-## Сборка
+- **PAC-only base, no third-party HAL.**
+- **No debug probe** — flashing only via the UART bootloader (GD32 All-In-One
+  Programmer); all output over USART0 (115200 8N1). No RTT / `defmt` / semihosting.
+- Target `thumbv8m.base-none-eabi`, flash 48K / RAM 8K.
+
+### Building
 
 ```sh
 cargo build --release
-cargo bin        # -> firmware.bin (нужен cargo-binutils + llvm-tools)
+cargo bin            # -> firmware.bin (needs cargo-binutils + llvm-tools)
 ```
 
-Флешить через GD32 All-In-One Programmer на `0x08000000`, читать в Hterm
-@ 115200 8N1.
+Flash to `0x08000000`, read the log in a terminal @ 115200 8N1.
 
-[gd32e230-adc-logger]: ../
+> On Windows without Visual Studio the host is switched to the GNU toolchain (see
+> `rust-toolchain.toml`) so the MSVC linker isn't required.
+
+### Roadmap
+
+- [ ] `GpioExt` trait + associated types — idiomatic `dp.gpioa.split()`.
+- [ ] `into_alternate` — alternate pin functions (AF0..7, `AFSEL` register).
+- [ ] `embedded-hal` 1.0 trait impls (`OutputPin` / `InputPin`) for compatibility
+      with portable drivers.
+- [ ] `OMODE` / `OSPD` / `PUD` configuration (push-pull/open-drain, speed, pulls).
+- [ ] Peripherals: USART, timers / PWM, ADC, SPI, I²C.
+- [ ] Extract the HAL into a standalone library crate.
+
+### Registers
+
+`gd32e2` is generated from patched SVDs; field names should be verified against
+`docs/GD32E23x_User_Manual.pdf` (see `docs/README.md` — the PDFs are kept locally and
+are not committed to git).
+
+---
+
+## Русский
+
+HAL (hardware abstraction layer) для микроконтроллера **GD32E230K8U6** (ядро
+Cortex-M23), написанный на Rust с нуля поверх PAC-крейта
+[`gd32e2`](https://crates.io/crates/gd32e2).
+
+> ⚠️ **Работа в процессе.** HAL пишется постепенно и вручную — ради глубокого
+> понимания и железа, и системы типов Rust. API нестабилен, крейт пока живёт как
+> модуль внутри проекта (`src/hal/`), позже будет вынесен в отдельную библиотеку.
+
+### Философия
+
+Полноценного HAL для GD32E230 в экосистеме Rust нет, поэтому за основу взят «сырой»
+PAC (`gd32e2` — прямой доступ к регистрам), а поверх строится безопасный и
+эргономичный слой. Принципы:
+
+- **Ошибки — на этапе компиляции, а не на плате.** Режим ноги закодирован в её типе
+  (typestate): у `Pin<Input>` физически нет метода `set_high`, а перенастроить одну
+  ногу дважды не даст система владения.
+- **Zero-cost.** Абстракции компилируются в те же записи в регистры, что и ручной
+  PAC-код: никакого оверхеда в рантайме, `Pin<Output>` весит 2 байта.
+- **`#![no_std]`, без кучи.**
+
+### Что уже есть
+
+**GPIO** (`src/hal/gpio.rs`):
+
+- Typestate-пины `Pin<MODE>` с режимами `Input` / `Output` / `Analog`.
+- Раздача ног: `split_gpioa` / `split_gpiob` поглощают синглтон порта и возвращают
+  набор отдельных пинов — уникальность каждой ноги гарантирована компилятором.
+- Переходы режимов: `into_output` / `into_input` / `into_analog`.
+- Выход: `set_high` / `set_low` — атомарно через регистры `BOP` / `BC`.
+- Вход: `is_high` / `is_low` — через `ISTAT`.
+
+```rust
+let dp = gd32e230::Peripherals::take().unwrap();
+let parts = split_gpioa(dp.gpioa);
+let mut led = parts.pa5.into_output();
+led.set_high();
+```
+
+### Ограничения проекта
+
+- **PAC-only база, без сторонних HAL.**
+- **Нет отладочного зонда** — прошивка только через UART-бутлоадер (GD32 All-In-One
+  Programmer), вывод через USART0 (115200 8N1). Никаких RTT / `defmt` / semihosting.
+- Target `thumbv8m.base-none-eabi`, флеш 48K / ОЗУ 8K.
+
+### Сборка
+
+```sh
+cargo build --release
+cargo bin            # -> firmware.bin (нужны cargo-binutils + llvm-tools)
+```
+
+Прошивать на `0x08000000`, читать лог в терминале @ 115200 8N1.
+
+> На Windows без Visual Studio host переключён на GNU-toolchain (см.
+> `rust-toolchain.toml`), чтобы не требовался MSVC-линкер.
+
+### Roadmap
+
+- [ ] Трейт `GpioExt` + ассоциированные типы — идиоматичный `dp.gpioa.split()`.
+- [ ] `into_alternate` — альтернативные функции ног (AF0..7, регистр `AFSEL`).
+- [ ] Реализация трейтов `embedded-hal` 1.0 (`OutputPin` / `InputPin`) для
+      совместимости с портируемыми драйверами.
+- [ ] Настройка `OMODE` / `OSPD` / `PUD` (push-pull/open-drain, скорость, подтяжки).
+- [ ] Периферия: USART, таймеры / PWM, ADC, SPI, I²C.
+- [ ] Вынос HAL в отдельный крейт-библиотеку.
+
+### Регистры
+
+`gd32e2` сгенерирован из патченных SVD; имена полей стоит сверять по
+`docs/GD32E23x_User_Manual.pdf` (см. `docs/README.md` — PDF лежат локально, в git не
+входят).

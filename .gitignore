@@ -2,6 +2,7 @@
 **/*.rs.bk
 *.bin
 *.hex
+CLAUDE.md
 
 # Reference manuals — large binaries, kept local only (see docs/README.md)
 /docs/*.pdf
