@@ -3,5 +3,5 @@
 *.bin
 *.hex
 
-# Keep the docs/ folder but ignore the large vendor PDFs you drop in.
-docs/*.pdf
+# Reference manuals — large binaries, kept local only (see docs/README.md)
+/docs/*.pdf
