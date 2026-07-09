@@ -4,6 +4,7 @@ use gd32e2::gd32e230;
 pub struct Input;
 pub struct Output;
 pub struct Analog;
+pub struct Alternate;
 
 pub enum Port {
     A,
@@ -82,6 +83,37 @@ impl<MODE> Pin<MODE> {
         }
     }
 
+    fn set_af(&self, af: u8) {
+        let is_afsel0 = self.pin < 8;
+        let offset = (self.pin % 8) * 4;
+        match self.port {
+            Port::A => {
+                let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
+                if is_afsel0 {
+                    gpio.afsel0().modify(|r, w| unsafe {
+                        w.bits((r.bits() & !(0b1111 << offset)) | ((af as u32) << offset))
+                    });
+                } else {
+                    gpio.afsel1().modify(|r, w| unsafe {
+                        w.bits((r.bits() & !(0b1111 << offset)) | ((af as u32) << offset))
+                    });
+                }
+            }
+            Port::B => {
+                let gpio = unsafe { &*gd32e230::Gpiob::ptr() };
+                if is_afsel0 {
+                    gpio.afsel0().modify(|r, w| unsafe {
+                        w.bits((r.bits() & !(0b1111 << offset)) | ((af as u32) << offset))
+                    });
+                } else {
+                    gpio.afsel1().modify(|r, w| unsafe {
+                        w.bits((r.bits() & !(0b1111 << offset)) | ((af as u32) << offset))
+                    });
+                }
+            }
+        }
+    }
+
     pub fn into_input(self) -> Pin<Input> {
         self.set_mode(0b00);
         Pin {
@@ -100,6 +132,15 @@ impl<MODE> Pin<MODE> {
     }
     pub fn into_analog(self) -> Pin<Analog> {
         self.set_mode(0b11);
+        Pin {
+            port: self.port,
+            pin: self.pin,
+            _mode: PhantomData,
+        }
+    }
+    pub fn into_alternate(self, af: u8) -> Pin<Alternate> {
+        self.set_mode(0b10);
+        self.set_af(af);
         Pin {
             port: self.port,
             pin: self.pin,
