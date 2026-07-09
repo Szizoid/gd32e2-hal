@@ -19,6 +19,23 @@ pub struct Pin<MODE> {
     _mode: PhantomData<MODE>,
 }
 
+pub enum Pull {
+    None,
+    Up,
+    Down,
+}
+
+pub enum Speed {
+    M2,
+    M10,
+    M50,
+}
+
+pub enum OutputType {
+    PushPull,
+    OpenDrain,
+}
+
 impl ErrorType for Pin<Output> {
     type Error = Infallible;
 }
@@ -91,7 +108,7 @@ impl<MODE> Pin<MODE> {
             }
         }
     }
-    fn set_af(&self, af: u8) {
+    fn set_af(&self, af: u32) {
         let is_afsel0 = self.pin < 8;
         let offset = (self.pin % 8) * 4;
         match self.port {
@@ -99,11 +116,11 @@ impl<MODE> Pin<MODE> {
                 let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
                 if is_afsel0 {
                     gpio.afsel0().modify(|r, w| unsafe {
-                        w.bits((r.bits() & !(0b1111 << offset)) | ((af as u32) << offset))
+                        w.bits((r.bits() & !(0b1111 << offset)) | (af << offset))
                     });
                 } else {
                     gpio.afsel1().modify(|r, w| unsafe {
-                        w.bits((r.bits() & !(0b1111 << offset)) | ((af as u32) << offset))
+                        w.bits((r.bits() & !(0b1111 << offset)) | (af << offset))
                     });
                 }
             }
@@ -111,13 +128,64 @@ impl<MODE> Pin<MODE> {
                 let gpio = unsafe { &*gd32e230::Gpiob::ptr() };
                 if is_afsel0 {
                     gpio.afsel0().modify(|r, w| unsafe {
-                        w.bits((r.bits() & !(0b1111 << offset)) | ((af as u32) << offset))
+                        w.bits((r.bits() & !(0b1111 << offset)) | (af << offset))
                     });
                 } else {
                     gpio.afsel1().modify(|r, w| unsafe {
-                        w.bits((r.bits() & !(0b1111 << offset)) | ((af as u32) << offset))
+                        w.bits((r.bits() & !(0b1111 << offset)) | (af << offset))
                     });
                 }
+            }
+        }
+    }
+    fn set_pud(&self, bits: u32) {
+        let offset = self.pin * 2;
+        match self.port {
+            Port::A => {
+                let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
+                gpio.pud().modify(|r, w| unsafe {
+                    w.bits((r.bits() & !(0b11 << offset)) | (bits << offset))
+                });
+            }
+            Port::B => {
+                let gpio = unsafe { &*gd32e230::Gpiob::ptr() };
+                gpio.pud().modify(|r, w| unsafe {
+                    w.bits((r.bits() & !(0b11 << offset)) | (bits << offset))
+                });
+            }
+        }
+    }
+    fn set_ospd(&self, bits: u32) {
+        let offset = self.pin * 2;
+        match self.port {
+            Port::A => {
+                let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
+                gpio.ospd().modify(|r, w| unsafe {
+                    w.bits((r.bits() & !(0b11 << offset)) | (bits << offset))
+                });
+            }
+            Port::B => {
+                let gpio = unsafe { &*gd32e230::Gpiob::ptr() };
+                gpio.ospd().modify(|r, w| unsafe {
+                    w.bits((r.bits() & !(0b11 << offset)) | (bits << offset))
+                });
+            }
+        }
+    }
+    fn set_omode(&self, bits: u32) {
+        let offset = self.pin;
+        match self.port {
+            Port::A => {
+                let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
+                gpio.omode().modify(|r, w| unsafe {
+                    w.bits((r.bits() & !(0b1 << offset)) | (bits << offset))
+                });
+            }
+            Port::B => {
+                let gpio = unsafe { &*gd32e230::Gpiob::ptr() };
+                gpio.omode().modify(|r, w| unsafe {
+                    w.bits((r.bits() & !(0b1 << offset)) | (bits << offset))
+                });
             }
         }
     }
@@ -148,11 +216,32 @@ impl<MODE> Pin<MODE> {
     }
     pub fn into_alternate(self, af: u8) -> Pin<Alternate> {
         self.set_mode(0b10);
-        self.set_af(af);
+        self.set_af(af as u32);
         Pin {
             port: self.port,
             pin: self.pin,
             _mode: PhantomData,
+        }
+    }
+
+    pub fn set_pull(&self, p: Pull) {
+        match p {
+            Pull::None => self.set_pud(0b00),
+            Pull::Up => self.set_pud(0b01),
+            Pull::Down => self.set_pud(0b10),
+        }
+    }
+    pub fn set_speed(&self, s: Speed) {
+        match s {
+            Speed::M2 => self.set_ospd(0b00),
+            Speed::M10 => self.set_ospd(0b01),
+            Speed::M50 => self.set_ospd(0b11),
+        }
+    }
+    pub fn set_output_type(&self, t: OutputType) {
+        match t {
+            OutputType::PushPull => self.set_omode(0b0),
+            OutputType::OpenDrain => self.set_omode(0b1),
         }
     }
 }
