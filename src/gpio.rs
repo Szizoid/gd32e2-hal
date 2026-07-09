@@ -1,4 +1,6 @@
+use core::convert::Infallible;
 use core::marker::PhantomData;
+use embedded_hal::digital::{ErrorType, InputPin, OutputPin};
 use gd32e2::gd32e230;
 
 pub struct Input;
@@ -17,8 +19,43 @@ pub struct Pin<MODE> {
     _mode: PhantomData<MODE>,
 }
 
-impl Pin<Input> {
-    pub fn is_high(&self) -> bool {
+impl ErrorType for Pin<Output> {
+    type Error = Infallible;
+}
+impl OutputPin for Pin<Output> {
+    fn set_high(&mut self) -> Result<(), Self::Error> {
+        match self.port {
+            Port::A => {
+                let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
+                gpio.bop().write(|w| unsafe { w.bits(1 << self.pin) });
+            }
+            Port::B => {
+                let gpio = unsafe { &*gd32e230::Gpiob::ptr() };
+                gpio.bop().write(|w| unsafe { w.bits(1 << self.pin) });
+            }
+        }
+        Ok(())
+    }
+    fn set_low(&mut self) -> Result<(), Self::Error> {
+        match self.port {
+            Port::A => {
+                let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
+                gpio.bc().write(|w| unsafe { w.bits(1 << self.pin) });
+            }
+            Port::B => {
+                let gpio = unsafe { &*gd32e230::Gpiob::ptr() };
+                gpio.bc().write(|w| unsafe { w.bits(1 << self.pin) });
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ErrorType for Pin<Input> {
+    type Error = Infallible;
+}
+impl InputPin for Pin<Input> {
+    fn is_high(&mut self) -> Result<bool, Self::Error> {
         let bits = match self.port {
             Port::A => {
                 let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
@@ -29,38 +66,10 @@ impl Pin<Input> {
                 gpio.istat().read().bits()
             }
         };
-        ((bits >> self.pin) & 0b1) == 0b1
+        Ok(((bits >> self.pin) & 0b1) == 0b1)
     }
-    pub fn is_low(&self) -> bool {
-        !self.is_high()
-    }
-}
-
-impl Pin<Output> {
-    pub fn set_high(&mut self) {
-        match self.port {
-            Port::A => {
-                let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
-                gpio.bop().write(|w| unsafe { w.bits(1 << self.pin) });
-            }
-            Port::B => {
-                let gpio = unsafe { &*gd32e230::Gpiob::ptr() };
-                gpio.bop().write(|w| unsafe { w.bits(1 << self.pin) });
-            }
-        }
-    }
-
-    pub fn set_low(&mut self) {
-        match self.port {
-            Port::A => {
-                let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
-                gpio.bc().write(|w| unsafe { w.bits(1 << self.pin) });
-            }
-            Port::B => {
-                let gpio = unsafe { &*gd32e230::Gpiob::ptr() };
-                gpio.bc().write(|w| unsafe { w.bits(1 << self.pin) });
-            }
-        }
+    fn is_low(&mut self) -> Result<bool, Self::Error> {
+        Ok(!self.is_high()?)
     }
 }
 
@@ -82,7 +91,6 @@ impl<MODE> Pin<MODE> {
             }
         }
     }
-
     fn set_af(&self, af: u8) {
         let is_afsel0 = self.pin < 8;
         let offset = (self.pin % 8) * 4;

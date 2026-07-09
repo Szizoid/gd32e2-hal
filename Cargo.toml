@@ -2,7 +2,7 @@
 name = "gd32e230-hal"
 version = "0.1.0"
 edition = "2021"
-authors = ["Ivan"]
+authors = ["Szizoid"]
 description = "HAL for GD32E230 (Cortex-M23)"
 
 [dependencies]
@@ -11,6 +11,10 @@ description = "HAL for GD32E230 (Cortex-M23)"
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
 cortex-m-rt = "0.7.3"
 panic-halt = "0.2.0"
+
+# Standard trait interface (traits only, not a HAL impl). Implementing these lets
+# portable drivers work against our Pin types. Provides digital::{OutputPin, InputPin}.
+embedded-hal = "1.0"
 
 # Peripheral Access Crate (PAC) for the GD32E2 family.
 # `gd32e230` selects our exact chip family; `rt` pulls cortex-m-rt interrupt

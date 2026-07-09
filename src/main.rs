@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use embedded_hal::digital::OutputPin;
 use gd32e230_hal::gpio::GpioExt;
 use panic_halt as _;
 
@@ -12,6 +13,6 @@ fn main() -> ! {
     let dp = gd32e230::Peripherals::take().unwrap();
     let parts = dp.gpioa.split();
     let mut pa5 = parts.pa5.into_output();
-    pa5.set_high();
+    pa5.set_high().unwrap();
     loop {}
 }
