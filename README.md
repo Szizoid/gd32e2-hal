@@ -12,8 +12,9 @@ A hardware abstraction layer (HAL) for the **GD32E230K8U6** microcontroller
 
 > ⚠️ **Work in progress.** The HAL is written incrementally and by hand — to
 > genuinely understand both the hardware and Rust's type system. The API is
-> unstable; the crate currently lives as a module inside the project (`src/hal/`)
-> and will later be extracted into a standalone library.
+> unstable. The package is a library crate (`src/lib.rs` → `gpio`, `rcu` modules)
+> plus a small on-hardware test bench binary (`src/main.rs`); the HAL will later be
+> extracted into a standalone library.
 
 ### Philosophy
 
@@ -21,29 +22,56 @@ There is no full-featured HAL for the GD32E230 in the Rust ecosystem, so the raw
 PAC (`gd32e2` — direct register access) is used as the base, and a safe, ergonomic
 layer is built on top. Principles:
 
-- **Errors at compile time, not on the board.** A pin's mode is encoded in its type
-  (typestate): `Pin<Input>` physically has no `set_high` method, and the ownership
-  system won't let you reconfigure a single pin twice.
+- **Errors at compile time, not on the board.** A pin's identity and mode are
+  encoded in its type: `Pin<'A', 5, Input>` physically has no `set_high` method, an
+  invalid alternate function (`into_alternate::<3>()` on a pin that lacks AF3) fails
+  to compile, and the ownership system won't let you reconfigure a single pin twice
+  or use a port before its clock is enabled.
 - **Zero-cost.** The abstractions compile down to the same register writes as
-  hand-written PAC code: no runtime overhead, `Pin<Output>` is 2 bytes.
+  hand-written PAC code: no runtime overhead. Pin identity lives entirely in the type
+  (const generics), so `Pin` is zero-sized.
 - **`#![no_std]`, no heap.**
 
 ### What's implemented
 
-**GPIO** (`src/hal/gpio.rs`):
+**GPIO** (`src/gpio.rs`):
 
-- Typestate pins `Pin<MODE>` with modes `Input` / `Output` / `Analog`.
-- Handing out pins: `split_gpioa` / `split_gpiob` consume the port singleton and
-  return a set of individual pins — each pin's uniqueness is guaranteed by the compiler.
-- Mode transitions: `into_output` / `into_input` / `into_analog`.
-- Output: `set_high` / `set_low` — atomically via the `BOP` / `BC` registers.
-- Input: `is_high` / `is_low` — via `ISTAT`.
+- Const-generic pins `Pin<const P: char, const N: u8, MODE>` — the port (`'A'`/`'B'`)
+  and pin number live in the type; `Pin` is a ZST.
+- Modes as typestate: `Input`, `Analog`, `Alternate`, and `Output<PushPull>` /
+  `Output<OpenDrain>` (the output type is in the type too).
+- Handing out pins: `dp.gpioa.split(&mut rcu)` (trait `GpioExt`) consumes the port
+  singleton, **enables its clock**, and returns the individual pins — each pin's
+  uniqueness is guaranteed by the compiler, and you cannot obtain pins without a clock.
+- Mode transitions: `into_input` / `into_output` (push-pull default) /
+  `into_push_pull_output` / `into_open_drain_output` / `into_analog`.
+- Alternate functions with **compile-time validation**: `into_alternate::<AF>()` — the
+  AF number is a const generic checked against a per-pin map (`ValidAf`); an invalid
+  number does not compile. The map is transcribed from the datasheet (Table 2-13/2-14).
+- `embedded-hal` 1.0: `OutputPin` / `InputPin` (`Error = Infallible`) — portable drivers
+  work against these pins.
+- Per-pin configuration: `set_pull` (`PUD`), `set_speed` (`OSPD`).
+
+**RCU** (`src/rcu.rs`):
+
+- `dp.rcu.constrain()` (trait `RcuExt`) wraps the raw peripheral in a managed `Rcu`.
+- Peripheral clock gating: `enable_gpioa` / `enable_gpiob` (+ `disable_*`) via `AHBEN`,
+  using the typed PAC API. Wired into `split`, so a port is guaranteed clocked before use.
+- The system clock tree (IRC8M / HXTAL / PLL → CK_SYS, bus prescalers) is not configured
+  yet — the chip runs on the default IRC8M.
 
 ```rust
+use embedded_hal::digital::OutputPin;
+use gd32e230_hal::gpio::GpioExt;
+use gd32e230_hal::rcu::RcuExt;
+
 let dp = gd32e230::Peripherals::take().unwrap();
-let parts = split_gpioa(dp.gpioa);
+let mut rcu = dp.rcu.constrain();
+let parts = dp.gpioa.split(&mut rcu);        // enables the GPIOA clock
 let mut led = parts.pa5.into_output();
-led.set_high();
+led.set_high().unwrap();
+
+let _tx = parts.pa9.into_alternate::<1>();   // USART0_TX; ::<3>() would not compile
 ```
 
 ### Project constraints
@@ -67,11 +95,15 @@ Flash to `0x08000000`, read the log in a terminal @ 115200 8N1.
 
 ### Roadmap
 
-- [ ] `GpioExt` trait + associated types — idiomatic `dp.gpioa.split()`.
-- [ ] `into_alternate` — alternate pin functions (AF0..7, `AFSEL` register).
-- [ ] `embedded-hal` 1.0 trait impls (`OutputPin` / `InputPin`) for compatibility
-      with portable drivers.
-- [ ] `OMODE` / `OSPD` / `PUD` configuration (push-pull/open-drain, speed, pulls).
+- [x] `GpioExt` trait — idiomatic `dp.gpioa.split()`.
+- [x] `into_alternate` — alternate pin functions (`AFSEL` register).
+- [x] `embedded-hal` 1.0 trait impls (`OutputPin` / `InputPin`).
+- [x] `OMODE` / `OSPD` / `PUD` configuration (push-pull/open-drain, speed, pulls).
+- [x] Output type as typestate (`Output<PushPull>` / `Output<OpenDrain>`).
+- [x] Const-generic pins + compile-time alternate-function validation.
+- [x] RCU: peripheral clock gating, enforced at `split`.
+- [ ] RCU: clock tree (IRC8M / HXTAL / PLL → CK_SYS, AHB/APB prescalers).
+- [ ] `StatefulOutputPin` (`toggle` / `is_set_*`), GPIO `LOCK`, ports C / F.
 - [ ] Peripherals: USART, timers / PWM, ADC, SPI, I²C.
 - [ ] Extract the HAL into a standalone library crate.
 
@@ -90,8 +122,9 @@ Cortex-M23), написанный на Rust с нуля поверх PAC-кре�
 [`gd32e2`](https://crates.io/crates/gd32e2).
 
 > ⚠️ **Работа в процессе.** HAL пишется постепенно и вручную — ради глубокого
-> понимания и железа, и системы типов Rust. API нестабилен, крейт пока живёт как
-> модуль внутри проекта (`src/hal/`), позже будет вынесен в отдельную библиотеку.
+> понимания и железа, и системы типов Rust. API нестабилен. Пакет — это
+> библиотечный крейт (`src/lib.rs` → модули `gpio`, `rcu`) плюс небольшой бинарь-стенд
+> для проверки на железе (`src/main.rs`); позже HAL будет вынесен в отдельную библиотеку.
 
 ### Философия
 
@@ -99,29 +132,57 @@ Cortex-M23), написанный на Rust с нуля поверх PAC-кре�
 PAC (`gd32e2` — прямой доступ к регистрам), а поверх строится безопасный и
 эргономичный слой. Принципы:
 
-- **Ошибки — на этапе компиляции, а не на плате.** Режим ноги закодирован в её типе
-  (typestate): у `Pin<Input>` физически нет метода `set_high`, а перенастроить одну
-  ногу дважды не даст система владения.
+- **Ошибки — на этапе компиляции, а не на плате.** Идентичность и режим ноги закодированы
+  в её типе: у `Pin<'A', 5, Input>` физически нет метода `set_high`, неверная
+  альтернативная функция (`into_alternate::<3>()` на ноге без AF3) не компилируется, а
+  перенастроить одну ногу дважды или использовать порт до включения его такта не даст
+  система владения.
 - **Zero-cost.** Абстракции компилируются в те же записи в регистры, что и ручной
-  PAC-код: никакого оверхеда в рантайме, `Pin<Output>` весит 2 байта.
+  PAC-код: никакого оверхеда в рантайме. Идентичность ноги целиком в типе (const
+  generics), поэтому `Pin` — нулевого размера.
 - **`#![no_std]`, без кучи.**
 
 ### Что уже есть
 
-**GPIO** (`src/hal/gpio.rs`):
+**GPIO** (`src/gpio.rs`):
 
-- Typestate-пины `Pin<MODE>` с режимами `Input` / `Output` / `Analog`.
-- Раздача ног: `split_gpioa` / `split_gpiob` поглощают синглтон порта и возвращают
-  набор отдельных пинов — уникальность каждой ноги гарантирована компилятором.
-- Переходы режимов: `into_output` / `into_input` / `into_analog`.
-- Выход: `set_high` / `set_low` — атомарно через регистры `BOP` / `BC`.
-- Вход: `is_high` / `is_low` — через `ISTAT`.
+- Const-generic пины `Pin<const P: char, const N: u8, MODE>` — порт (`'A'`/`'B'`) и
+  номер ноги живут в типе; `Pin` — ZST.
+- Режимы как typestate: `Input`, `Analog`, `Alternate`, и `Output<PushPull>` /
+  `Output<OpenDrain>` (тип выхода тоже в типе).
+- Раздача ног: `dp.gpioa.split(&mut rcu)` (трейт `GpioExt`) поглощает синглтон порта,
+  **включает его такт** и возвращает отдельные пины — уникальность каждой ноги гарантирована
+  компилятором, а получить пины без такта нельзя.
+- Переходы режимов: `into_input` / `into_output` (push-pull по умолчанию) /
+  `into_push_pull_output` / `into_open_drain_output` / `into_analog`.
+- Альтернативные функции с **проверкой на компиляции**: `into_alternate::<AF>()` — номер AF
+  это const-параметр, сверяемый с per-pin картой (`ValidAf`); неверный номер не
+  компилируется. Карта перенесена из datasheet (Table 2-13/2-14).
+- `embedded-hal` 1.0: `OutputPin` / `InputPin` (`Error = Infallible`) — портируемые драйверы
+  работают с этими пинами.
+- Пер-пиновая настройка: `set_pull` (`PUD`), `set_speed` (`OSPD`).
+
+**RCU** (`src/rcu.rs`):
+
+- `dp.rcu.constrain()` (трейт `RcuExt`) оборачивает сырой периферал в управляемый `Rcu`.
+- Гейтинг тактов периферии: `enable_gpioa` / `enable_gpiob` (+ `disable_*`) через `AHBEN`,
+  типизированным API PAC. Вплетён в `split` — порт гарантированно затактован перед
+  использованием.
+- Дерево тактов (IRC8M / HXTAL / PLL → CK_SYS, прескейлеры шин) пока не настраивается —
+  чип работает на дефолтном IRC8M.
 
 ```rust
+use embedded_hal::digital::OutputPin;
+use gd32e230_hal::gpio::GpioExt;
+use gd32e230_hal::rcu::RcuExt;
+
 let dp = gd32e230::Peripherals::take().unwrap();
-let parts = split_gpioa(dp.gpioa);
+let mut rcu = dp.rcu.constrain();
+let parts = dp.gpioa.split(&mut rcu);        // включает такт GPIOA
 let mut led = parts.pa5.into_output();
-led.set_high();
+led.set_high().unwrap();
+
+let _tx = parts.pa9.into_alternate::<1>();   // USART0_TX; ::<3>() не скомпилируется
 ```
 
 ### Ограничения проекта
@@ -145,11 +206,15 @@ cargo bin            # -> firmware.bin (нужны cargo-binutils + llvm-tools)
 
 ### Roadmap
 
-- [ ] Трейт `GpioExt` + ассоциированные типы — идиоматичный `dp.gpioa.split()`.
-- [ ] `into_alternate` — альтернативные функции ног (AF0..7, регистр `AFSEL`).
-- [ ] Реализация трейтов `embedded-hal` 1.0 (`OutputPin` / `InputPin`) для
-      совместимости с портируемыми драйверами.
-- [ ] Настройка `OMODE` / `OSPD` / `PUD` (push-pull/open-drain, скорость, подтяжки).
+- [x] Трейт `GpioExt` — идиоматичный `dp.gpioa.split()`.
+- [x] `into_alternate` — альтернативные функции ног (регистр `AFSEL`).
+- [x] Реализация трейтов `embedded-hal` 1.0 (`OutputPin` / `InputPin`).
+- [x] Настройка `OMODE` / `OSPD` / `PUD` (push-pull/open-drain, скорость, подтяжки).
+- [x] Тип выхода как typestate (`Output<PushPull>` / `Output<OpenDrain>`).
+- [x] Const-generic пины + проверка альтернативных функций на компиляции.
+- [x] RCU: гейтинг тактов периферии, обязательный на `split`.
+- [ ] RCU: дерево тактов (IRC8M / HXTAL / PLL → CK_SYS, прескейлеры AHB/APB).
+- [ ] `StatefulOutputPin` (`toggle` / `is_set_*`), GPIO `LOCK`, порты C / F.
 - [ ] Периферия: USART, таймеры / PWM, ADC, SPI, I²C.
 - [ ] Вынос HAL в отдельный крейт-библиотеку.
 
