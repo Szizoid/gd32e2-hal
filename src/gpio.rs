@@ -4,7 +4,11 @@ use embedded_hal::digital::{ErrorType, InputPin, OutputPin};
 use gd32e2::gd32e230;
 
 pub struct Input;
-pub struct Output;
+pub struct PushPull;
+pub struct OpenDrain;
+pub struct Output<OTYPE> {
+    _otype: PhantomData<OTYPE>,
+}
 pub struct Analog;
 pub struct Alternate;
 
@@ -31,21 +35,20 @@ pub enum Speed {
     M50,
 }
 
-pub enum OutputType {
-    PushPull,
-    OpenDrain,
-}
-
-impl ErrorType for Pin<Output> {
+impl<OTYPE> ErrorType for Pin<Output<OTYPE>> {
     type Error = Infallible;
 }
-impl OutputPin for Pin<Output> {
+impl<OTYPE> OutputPin for Pin<Output<OTYPE>> {
     fn set_high(&mut self) -> Result<(), Self::Error> {
-        self.gpio_reg().bop().write(|w| unsafe { w.bits(1 << self.pin) });
+        self.gpio_reg()
+            .bop()
+            .write(|w| unsafe { w.bits(1 << self.pin) });
         Ok(())
     }
     fn set_low(&mut self) -> Result<(), Self::Error> {
-        self.gpio_reg().bc().write(|w| unsafe { w.bits(1 << self.pin) });
+        self.gpio_reg()
+            .bc()
+            .write(|w| unsafe { w.bits(1 << self.pin) });
         Ok(())
     }
 }
@@ -118,13 +121,26 @@ impl<MODE> Pin<MODE> {
             _mode: PhantomData,
         }
     }
-    pub fn into_output(self) -> Pin<Output> {
+    pub fn into_push_pull_output(self) -> Pin<Output<PushPull>> {
         self.set_mode(0b01);
+        self.set_omode(0b0);
         Pin {
             port: self.port,
             pin: self.pin,
             _mode: PhantomData,
         }
+    }
+    pub fn into_open_drain_output(self) -> Pin<Output<OpenDrain>> {
+        self.set_mode(0b01);
+        self.set_omode(0b1);
+        Pin {
+            port: self.port,
+            pin: self.pin,
+            _mode: PhantomData,
+        }
+    }
+    pub fn into_output(self) -> Pin<Output<PushPull>> {
+        self.into_push_pull_output()
     }
     pub fn into_analog(self) -> Pin<Analog> {
         self.set_mode(0b11);
@@ -156,12 +172,6 @@ impl<MODE> Pin<MODE> {
             Speed::M2 => self.set_ospd(0b00),
             Speed::M10 => self.set_ospd(0b01),
             Speed::M50 => self.set_ospd(0b11),
-        }
-    }
-    pub fn set_output_type(&self, t: OutputType) {
-        match t {
-            OutputType::PushPull => self.set_omode(0b0),
-            OutputType::OpenDrain => self.set_omode(0b1),
         }
     }
 }
