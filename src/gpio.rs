@@ -41,29 +41,11 @@ impl ErrorType for Pin<Output> {
 }
 impl OutputPin for Pin<Output> {
     fn set_high(&mut self) -> Result<(), Self::Error> {
-        match self.port {
-            Port::A => {
-                let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
-                gpio.bop().write(|w| unsafe { w.bits(1 << self.pin) });
-            }
-            Port::B => {
-                let gpio = unsafe { &*gd32e230::Gpiob::ptr() };
-                gpio.bop().write(|w| unsafe { w.bits(1 << self.pin) });
-            }
-        }
+        self.gpio_reg().bop().write(|w| unsafe { w.bits(1 << self.pin) });
         Ok(())
     }
     fn set_low(&mut self) -> Result<(), Self::Error> {
-        match self.port {
-            Port::A => {
-                let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
-                gpio.bc().write(|w| unsafe { w.bits(1 << self.pin) });
-            }
-            Port::B => {
-                let gpio = unsafe { &*gd32e230::Gpiob::ptr() };
-                gpio.bc().write(|w| unsafe { w.bits(1 << self.pin) });
-            }
-        }
+        self.gpio_reg().bc().write(|w| unsafe { w.bits(1 << self.pin) });
         Ok(())
     }
 }
@@ -73,16 +55,7 @@ impl ErrorType for Pin<Input> {
 }
 impl InputPin for Pin<Input> {
     fn is_high(&mut self) -> Result<bool, Self::Error> {
-        let bits = match self.port {
-            Port::A => {
-                let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
-                gpio.istat().read().bits()
-            }
-            Port::B => {
-                let gpio = unsafe { &*gd32e230::Gpiob::ptr() };
-                gpio.istat().read().bits()
-            }
-        };
+        let bits = self.gpio_reg().istat().read().bits();
         Ok(((bits >> self.pin) & 0b1) == 0b1)
     }
     fn is_low(&mut self) -> Result<bool, Self::Error> {
@@ -91,103 +64,50 @@ impl InputPin for Pin<Input> {
 }
 
 impl<MODE> Pin<MODE> {
+    fn gpio_reg(&self) -> &gd32e230::gpioa::RegisterBlock {
+        let ptr = match self.port {
+            Port::A => gd32e230::Gpioa::ptr(),
+            Port::B => gd32e230::Gpiob::ptr() as *const _,
+        };
+        unsafe { &*ptr }
+    }
+
     fn set_mode(&self, mode: u32) {
         let offset = self.pin * 2;
-        match self.port {
-            Port::A => {
-                let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
-                gpio.ctl().modify(|r, w| unsafe {
-                    w.bits((r.bits() & !(0b11 << offset)) | (mode << offset))
-                });
-            }
-            Port::B => {
-                let gpio = unsafe { &*gd32e230::Gpiob::ptr() };
-                gpio.ctl().modify(|r, w| unsafe {
-                    w.bits((r.bits() & !(0b11 << offset)) | (mode << offset))
-                });
-            }
-        }
+        self.gpio_reg()
+            .ctl()
+            .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (mode << offset)) });
     }
     fn set_af(&self, af: u32) {
         let is_afsel0 = self.pin < 8;
         let offset = (self.pin % 8) * 4;
-        match self.port {
-            Port::A => {
-                let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
-                if is_afsel0 {
-                    gpio.afsel0().modify(|r, w| unsafe {
-                        w.bits((r.bits() & !(0b1111 << offset)) | (af << offset))
-                    });
-                } else {
-                    gpio.afsel1().modify(|r, w| unsafe {
-                        w.bits((r.bits() & !(0b1111 << offset)) | (af << offset))
-                    });
-                }
-            }
-            Port::B => {
-                let gpio = unsafe { &*gd32e230::Gpiob::ptr() };
-                if is_afsel0 {
-                    gpio.afsel0().modify(|r, w| unsafe {
-                        w.bits((r.bits() & !(0b1111 << offset)) | (af << offset))
-                    });
-                } else {
-                    gpio.afsel1().modify(|r, w| unsafe {
-                        w.bits((r.bits() & !(0b1111 << offset)) | (af << offset))
-                    });
-                }
-            }
+        if is_afsel0 {
+            self.gpio_reg().afsel0().modify(|r, w| unsafe {
+                w.bits((r.bits() & !(0b1111 << offset)) | (af << offset))
+            });
+        } else {
+            self.gpio_reg().afsel1().modify(|r, w| unsafe {
+                w.bits((r.bits() & !(0b1111 << offset)) | (af << offset))
+            });
         }
     }
     fn set_pud(&self, bits: u32) {
         let offset = self.pin * 2;
-        match self.port {
-            Port::A => {
-                let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
-                gpio.pud().modify(|r, w| unsafe {
-                    w.bits((r.bits() & !(0b11 << offset)) | (bits << offset))
-                });
-            }
-            Port::B => {
-                let gpio = unsafe { &*gd32e230::Gpiob::ptr() };
-                gpio.pud().modify(|r, w| unsafe {
-                    w.bits((r.bits() & !(0b11 << offset)) | (bits << offset))
-                });
-            }
-        }
+        self.gpio_reg()
+            .pud()
+            .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (bits << offset)) });
     }
     fn set_ospd(&self, bits: u32) {
         let offset = self.pin * 2;
-        match self.port {
-            Port::A => {
-                let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
-                gpio.ospd().modify(|r, w| unsafe {
-                    w.bits((r.bits() & !(0b11 << offset)) | (bits << offset))
-                });
-            }
-            Port::B => {
-                let gpio = unsafe { &*gd32e230::Gpiob::ptr() };
-                gpio.ospd().modify(|r, w| unsafe {
-                    w.bits((r.bits() & !(0b11 << offset)) | (bits << offset))
-                });
-            }
-        }
+        self.gpio_reg()
+            .ospd()
+            .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (bits << offset)) });
     }
     fn set_omode(&self, bits: u32) {
         let offset = self.pin;
-        match self.port {
-            Port::A => {
-                let gpio = unsafe { &*gd32e230::Gpioa::ptr() };
-                gpio.omode().modify(|r, w| unsafe {
-                    w.bits((r.bits() & !(0b1 << offset)) | (bits << offset))
-                });
-            }
-            Port::B => {
-                let gpio = unsafe { &*gd32e230::Gpiob::ptr() };
-                gpio.omode().modify(|r, w| unsafe {
-                    w.bits((r.bits() & !(0b1 << offset)) | (bits << offset))
-                });
-            }
-        }
+        self.gpio_reg()
+            .omode()
+            .modify(|r, w| unsafe { w.bits((r.bits() & !(0b1 << offset)) | (bits << offset)) });
     }
 
     pub fn into_input(self) -> Pin<Input> {
