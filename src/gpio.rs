@@ -108,23 +108,32 @@ impl<MODE> Pin<MODE> {
     }
 }
 
+pub trait GpioExt {
+    type Parts;
+    fn split(self) -> Self::Parts;
+}
+
 macro_rules! gpio {
-    ($Parts:ident, $split:ident, $Gpio:ty, $port:expr, [ $($name:ident : $num:literal),+ $(,)? ]) => {
+    ($Parts:ident, $Gpio:ty, $port:expr, [ $($name:ident : $num:literal),+ $(,)? ]) => {
         pub struct $Parts {
             $( pub $name: Pin<Input>, )+
         }
-        pub fn $split(_gpio: $Gpio) -> $Parts {
-            $Parts {
-                $( $name: Pin { port: $port, pin: $num, _mode: PhantomData }, )+
+
+        impl GpioExt for $Gpio {
+            type Parts = $Parts;
+            fn split(self) -> Self::Parts {
+                $Parts {
+                    $( $name: Pin { port: $port, pin: $num, _mode: PhantomData }, )+
+                }
             }
         }
     };
 }
 
-gpio!(PartsA, split_gpioa, gd32e230::Gpioa, Port::A,
+gpio!(PartsA, gd32e230::Gpioa, Port::A,
     [pa0:0, pa1:1, pa2:2, pa3:3, pa4:4, pa5:5, pa6:6, pa7:7,
      pa8:8, pa9:9, pa10:10, pa11:11, pa12:12, pa13:13, pa14:14, pa15:15]);
 
-gpio!(PartsB, split_gpiob, gd32e230::Gpiob, Port::B,
+gpio!(PartsB, gd32e230::Gpiob, Port::B,
     [pb0:0, pb1:1, pb2:2, pb3:3, pb4:4, pb5:5, pb6:6, pb7:7,
      pb8:8, pb9:9, pb10:10, pb11:11, pb12:12, pb13:13, pb14:14, pb15:15]);
