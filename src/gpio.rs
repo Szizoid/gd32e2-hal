@@ -30,7 +30,6 @@ pub enum Speed {
 
 pub trait ValidAf<const AF: u8> {}
 
-// Разворачивает карту AF: одна строка `'A' 9 => [1, 3]` на ногу → по impl-у на каждый AF.
 macro_rules! pin_af {
     ( $( $p:literal $n:literal => [ $($af:literal),* $(,)? ] ),* $(,)? ) => {
         $( $( impl<MODE> ValidAf<$af> for Pin<$p, $n, MODE> {} )* )*
