@@ -38,8 +38,8 @@ layer is built on top. Principles:
 
 - Const-generic pins `Pin<const P: char, const N: u8, MODE>` — the port (`'A'`/`'B'`)
   and pin number live in the type; `Pin` is a ZST.
-- Modes as typestate: `Input`, `Analog`, `Alternate`, and `Output<PushPull>` /
-  `Output<OpenDrain>` (the output type is in the type too).
+- Modes as typestate: `Input`, `Analog`, `Alternate<const AF: u8>` (the AF number stays in
+  the type), and `Output<PushPull>` / `Output<OpenDrain>` (the output type is in the type too).
 - Handing out pins: `dp.gpioa.split(&mut rcu)` (trait `GpioExt`) consumes the port
   singleton, **enables its clock**, and returns the individual pins — each pin's
   uniqueness is guaranteed by the compiler, and you cannot obtain pins without a clock.
@@ -49,14 +49,16 @@ layer is built on top. Principles:
   AF number is a const generic checked against a per-pin map (`ValidAf`); an invalid
   number does not compile. The map is transcribed from the datasheet (Table 2-13/2-14).
 - `embedded-hal` 1.0: `OutputPin` / `InputPin` (`Error = Infallible`) — portable drivers
-  work against these pins.
+  work against these pins. `Output<OpenDrain>` also implements `InputPin` (reading back an
+  open-drain line, e.g. for I2C clock-stretching).
 - Per-pin configuration: `set_pull` (`PUD`), `set_speed` (`OSPD`).
 
 **RCU** (`src/rcu.rs`):
 
 - `dp.rcu.constrain()` (trait `RcuExt`) wraps the raw peripheral in a managed `Rcu`.
-- Peripheral clock gating: `enable_gpioa` / `enable_gpiob` (+ `disable_*`) via `AHBEN`,
-  using the typed PAC API. Wired into `split`, so a port is guaranteed clocked before use.
+- Peripheral clock gating: a generic `Enable` trait (`enable` / `disable`), implemented
+  per-peripheral by the `bus!` macro (one line: peripheral type → register → bit) instead of
+  hand-written methods on `Rcu`. Wired into `split`, so a port is guaranteed clocked before use.
 - The system clock tree (IRC8M / HXTAL / PLL → CK_SYS, bus prescalers) is not configured
   yet — the chip runs on the default IRC8M.
 
@@ -148,8 +150,8 @@ PAC (`gd32e2` — прямой доступ к регистрам), а пове�
 
 - Const-generic пины `Pin<const P: char, const N: u8, MODE>` — порт (`'A'`/`'B'`) и
   номер ноги живут в типе; `Pin` — ZST.
-- Режимы как typestate: `Input`, `Analog`, `Alternate`, и `Output<PushPull>` /
-  `Output<OpenDrain>` (тип выхода тоже в типе).
+- Режимы как typestate: `Input`, `Analog`, `Alternate<const AF: u8>` (номер AF остаётся в
+  типе), и `Output<PushPull>` / `Output<OpenDrain>` (тип выхода тоже в типе).
 - Раздача ног: `dp.gpioa.split(&mut rcu)` (трейт `GpioExt`) поглощает синглтон порта,
   **включает его такт** и возвращает отдельные пины — уникальность каждой ноги гарантирована
   компилятором, а получить пины без такта нельзя.
@@ -159,14 +161,16 @@ PAC (`gd32e2` — прямой доступ к регистрам), а пове�
   это const-параметр, сверяемый с per-pin картой (`ValidAf`); неверный номер не
   компилируется. Карта перенесена из datasheet (Table 2-13/2-14).
 - `embedded-hal` 1.0: `OutputPin` / `InputPin` (`Error = Infallible`) — портируемые драйверы
-  работают с этими пинами.
+  работают с этими пинами. `Output<OpenDrain>` тоже реализует `InputPin` (чтение состояния
+  open-drain-линии, например для I2C clock-stretching).
 - Пер-пиновая настройка: `set_pull` (`PUD`), `set_speed` (`OSPD`).
 
 **RCU** (`src/rcu.rs`):
 
 - `dp.rcu.constrain()` (трейт `RcuExt`) оборачивает сырой периферал в управляемый `Rcu`.
-- Гейтинг тактов периферии: `enable_gpioa` / `enable_gpiob` (+ `disable_*`) через `AHBEN`,
-  типизированным API PAC. Вплетён в `split` — порт гарантированно затактован перед
+- Гейтинг тактов периферии: генерик-трейт `Enable` (`enable`/`disable`), реализуемый под
+  каждую периферию макросом `bus!` (одна строка: тип периферии → регистр → бит) вместо
+  ручных методов на `Rcu`. Вплетён в `split` — порт гарантированно затактован перед
   использованием.
 - Дерево тактов (IRC8M / HXTAL / PLL → CK_SYS, прескейлеры шин) пока не настраивается —
   чип работает на дефолтном IRC8M.

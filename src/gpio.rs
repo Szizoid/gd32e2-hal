@@ -12,7 +12,7 @@ pub struct Output<OTYPE> {
     _otype: PhantomData<OTYPE>,
 }
 pub struct Analog;
-pub struct Alternate;
+pub struct Alternate<const AF: u8>;
 
 pub struct Pin<const P: char, const N: u8, MODE> {
     _mode: PhantomData<MODE>,
@@ -95,11 +95,19 @@ impl<const P: char, const N: u8> ErrorType for Pin<P, N, Input> {
 }
 impl<const P: char, const N: u8> InputPin for Pin<P, N, Input> {
     fn is_high(&mut self) -> Result<bool, Self::Error> {
-        let bits = self.gpio_reg().istat().read().bits();
-        Ok(((bits >> N) & 0b1) == 0b1)
+        Ok(self.read_pin())
     }
     fn is_low(&mut self) -> Result<bool, Self::Error> {
-        Ok(!self.is_high()?)
+        Ok(!self.read_pin())
+    }
+}
+
+impl<const P: char, const N: u8> InputPin for Pin<P, N, Output<OpenDrain>> {
+    fn is_high(&mut self) -> Result<bool, Self::Error> {
+        Ok(self.read_pin())
+    }
+    fn is_low(&mut self) -> Result<bool, Self::Error> {
+        Ok(!self.read_pin())
     }
 }
 
@@ -111,6 +119,11 @@ impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
             gd32e230::Gpiob::ptr() as *const _
         };
         unsafe { &*ptr }
+    }
+
+    fn read_pin(&self) -> bool {
+        let bits = self.gpio_reg().istat().read().bits();
+        ((bits >> N) & 0b1) == 0b1
     }
 
     fn set_mode(&self, mode: u32) {
@@ -172,7 +185,7 @@ impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
         self.set_mode(0b11);
         Pin { _mode: PhantomData }
     }
-    pub fn into_alternate<const AF: u8>(self) -> Pin<P, N, Alternate>
+    pub fn into_alternate<const AF: u8>(self) -> Pin<P, N, Alternate<AF>>
     where
         Self: ValidAf<AF>,
     {
