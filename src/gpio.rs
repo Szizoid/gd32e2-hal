@@ -19,15 +19,15 @@ pub struct Pin<const P: char, const N: u8, MODE> {
 }
 
 pub enum Pull {
-    None,
+    Floating,
     Up,
     Down,
 }
 
 pub enum Speed {
-    M2,
-    M10,
-    M50,
+    Mhz2,
+    Mhz10,
+    Mhz50,
 }
 
 pub trait ValidAf<const AF: u8> {}
@@ -183,16 +183,16 @@ impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
 
     pub fn set_pull(&self, p: Pull) {
         match p {
-            Pull::None => self.set_pud(0b00),
+            Pull::Floating => self.set_pud(0b00),
             Pull::Up => self.set_pud(0b01),
             Pull::Down => self.set_pud(0b10),
         }
     }
     pub fn set_speed(&self, s: Speed) {
         match s {
-            Speed::M2 => self.set_ospd(0b00),
-            Speed::M10 => self.set_ospd(0b01),
-            Speed::M50 => self.set_ospd(0b11),
+            Speed::Mhz2 => self.set_ospd(0b00),
+            Speed::Mhz10 => self.set_ospd(0b01),
+            Speed::Mhz50 => self.set_ospd(0b11),
         }
     }
 }
@@ -203,23 +203,23 @@ pub trait GpioExt {
 }
 
 macro_rules! gpio {
-    ($Parts:ident, $Gpio:ty, $P:literal, $enable:ident, [ $($name:ident : $num:literal),+ $(,)? ]) => {
+    ($Parts:ident, $Gpio:ty, $P:literal, [ $($name:ident : $num:literal),+ $(,)? ]) => {
         pub struct $Parts { $( pub $name: Pin<$P, $num, Input>, )+ }
 
         impl GpioExt for $Gpio {
             type Parts = $Parts;
             fn split(self, rcu: &mut Rcu) -> Self::Parts {
-                rcu.$enable();
+                <$Gpio as crate::rcu::Enable>::enable(rcu);
                 $Parts { $( $name: Pin::<$P, $num, Input> { _mode: PhantomData }, )+ }
             }
         }
     };
 }
 
-gpio!(PartsA, gd32e230::Gpioa, 'A', enable_gpioa,
+gpio!(PartsA, gd32e230::Gpioa, 'A',
     [pa0:0, pa1:1, pa2:2, pa3:3, pa4:4, pa5:5, pa6:6, pa7:7,
      pa8:8, pa9:9, pa10:10, pa11:11, pa12:12, pa13:13, pa14:14, pa15:15]);
 
-gpio!(PartsB, gd32e230::Gpiob, 'B', enable_gpiob,
+gpio!(PartsB, gd32e230::Gpiob, 'B',
     [pb0:0, pb1:1, pb2:2, pb3:3, pb4:4, pb5:5, pb6:6, pb7:7,
      pb8:8, pb9:9, pb10:10, pb11:11, pb12:12, pb13:13, pb14:14, pb15:15]);

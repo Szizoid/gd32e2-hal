@@ -14,17 +14,27 @@ impl RcuExt for gd32e230::Rcu {
     }
 }
 
-impl Rcu {
-    pub fn enable_gpioa(&mut self) {
-        self.rcu.ahben().modify(|_, w| w.paen().enabled());
-    }
-    pub fn disable_gpioa(&mut self) {
-        self.rcu.ahben().modify(|_, w| w.paen().disabled());
-    }
-    pub fn enable_gpiob(&mut self) {
-        self.rcu.ahben().modify(|_, w| w.pben().enabled());
-    }
-    pub fn disable_gpiob(&mut self) {
-        self.rcu.ahben().modify(|_, w| w.pben().disabled());
-    }
+pub trait Enable {
+    fn enable(rcu: &mut Rcu);
+    fn disable(rcu: &mut Rcu);
+}
+
+macro_rules! bus {
+    ($($Periph:ty => $reg:ident, $bit:ident,)+) => {
+        $(
+            impl Enable for $Periph {
+                fn enable(rcu: &mut Rcu) {
+                    rcu.rcu.$reg().modify(|_, w| w.$bit().enabled());
+                }
+                fn disable(rcu: &mut Rcu) {
+                    rcu.rcu.$reg().modify(|_, w| w.$bit().disabled());
+                }
+            }
+        )+
+    };
+}
+
+bus! {
+    gd32e230::Gpioa => ahben, paen,
+    gd32e230::Gpiob => ahben, pben,
 }

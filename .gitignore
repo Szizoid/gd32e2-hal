@@ -1,4 +1,5 @@
 /target
+/others-hal
 **/*.rs.bk
 *.bin
 *.hex
