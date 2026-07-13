@@ -1,12 +1,14 @@
 use gd32e2::gd32e230;
 
 const IRC8M: u32 = 8_000_000;
+const PLL_SRC: u32 = IRC8M / 2;
 
 #[derive(Clone, Copy)]
 pub struct Clocks {
     hclk: u32,
     pclk1: u32,
     pclk2: u32,
+    sysclk: u32,
 }
 
 impl Clocks {
@@ -19,12 +21,16 @@ impl Clocks {
     pub fn pclk2(&self) -> u32 {
         self.pclk2
     }
+    pub fn sysclk(&self) -> u32 {
+        self.sysclk
+    }
 }
 
 pub struct CFGR {
     hclk: Option<u32>,
     pclk1: Option<u32>,
     pclk2: Option<u32>,
+    sysclk: Option<u32>,
 }
 
 impl Default for CFGR {
@@ -33,6 +39,7 @@ impl Default for CFGR {
             hclk: Option::None,
             pclk1: Option::None,
             pclk2: Option::None,
+            sysclk: Option::None,
         }
     }
 }
@@ -64,6 +71,11 @@ impl CFGR {
         let real_freq = source / real_div;
         (real_div, real_freq)
     }
+    fn nearest_multiplier_pll(desired: u32) -> (u32, u32) {
+        let mult = (desired / PLL_SRC).clamp(2, 18);
+        let real_freq = mult * PLL_SRC;
+        (mult, real_freq)
+    }
 
     pub fn hclk(mut self, freq: u32) -> Self {
         self.hclk = Some(freq);
@@ -77,11 +89,55 @@ impl CFGR {
         self.pclk2 = Some(freq);
         self
     }
+    pub fn sysclk(mut self, freq: u32) -> Self {
+        self.sysclk = Some(freq);
+        self
+    }
 
-    pub fn freeze(self, rcu: &mut Rcu) -> Clocks {
-        let (ahb_div, hclk) = Self::nearest_devisor_ahb(IRC8M, self.hclk);
+    pub fn freeze(self, rcu: &mut Rcu, fmc: &mut gd32e230::Fmc) -> Clocks {
+        let sysclk = match self.sysclk {
+            Option::None => IRC8M,
+            Option::Some(desired) => {
+                let (mult, real_sysclk) = Self::nearest_multiplier_pll(desired);
+                rcu.rcu.cfg0().modify(|_, w| {
+                    let w = w.pllsel().irc8m_2();
+                    match mult {
+                        2 => w.pllmf().mul2().pllmf_msb().none(),
+                        3 => w.pllmf().mul3().pllmf_msb().none(),
+                        4 => w.pllmf().mul4().pllmf_msb().none(),
+                        5 => w.pllmf().mul5().pllmf_msb().none(),
+                        6 => w.pllmf().mul6().pllmf_msb().none(),
+                        7 => w.pllmf().mul7().pllmf_msb().none(),
+                        8 => w.pllmf().mul8().pllmf_msb().none(),
+                        9 => w.pllmf().mul9().pllmf_msb().none(),
+                        10 => w.pllmf().mul10().pllmf_msb().none(),
+                        11 => w.pllmf().mul11().pllmf_msb().none(),
+                        12 => w.pllmf().mul12().pllmf_msb().none(),
+                        13 => w.pllmf().mul13().pllmf_msb().none(),
+                        14 => w.pllmf().mul14().pllmf_msb().none(),
+                        15 => w.pllmf().mul15().pllmf_msb().none(),
+                        16 => w.pllmf().mul16().pllmf_msb().none(),
+                        17 => w.pllmf().mul2().pllmf_msb().plus15(),
+                        18 => w.pllmf().mul3().pllmf_msb().plus15(),
+                        _ => unreachable!(),
+                    }
+                });
+                rcu.rcu.ctl0().modify(|_, w| w.pllen().on());
+                while rcu.rcu.ctl0().read().pllstb().is_not_ready() {}
+                real_sysclk
+            }
+        };
+        let (ahb_div, hclk) = Self::nearest_devisor_ahb(sysclk, self.hclk);
         let (apb1_div, pclk1) = Self::nearest_devisor_apb(hclk, self.pclk1);
         let (apb2_div, pclk2) = Self::nearest_devisor_apb(hclk, self.pclk2);
+
+        fmc.ws().modify(|_, w| match hclk {
+            0..=24_000_000 => w.wscnt().ws0(),
+            24_000_001..=48_000_000 => w.wscnt().ws1(),
+            48_000_001..=72_000_000 => w.wscnt().ws2(),
+            _ => unreachable!(),
+        });
+
         rcu.rcu.cfg0().modify(|_, w| {
             let w = match ahb_div {
                 1 => w.ahbpsc().div1(),
@@ -103,16 +159,26 @@ impl CFGR {
                 16 => w.apb1psc().div16(),
                 _ => unreachable!(),
             };
-            match apb2_div {
+            let w = match apb2_div {
                 1 => w.apb2psc().div1(),
                 2 => w.apb2psc().div2(),
                 4 => w.apb2psc().div4(),
                 8 => w.apb2psc().div8(),
                 16 => w.apb2psc().div16(),
                 _ => unreachable!(),
+            };
+            if self.sysclk.is_some() {
+                w.scs().pll()
+            } else {
+                w
             }
         });
-        Clocks { hclk, pclk1, pclk2 }
+        Clocks {
+            hclk,
+            pclk1,
+            pclk2,
+            sysclk,
+        }
     }
 }
 
