@@ -1,6 +1,6 @@
 use core::convert::Infallible;
 use core::marker::PhantomData;
-use embedded_hal::digital::{ErrorType, InputPin, OutputPin};
+use embedded_hal::digital::{ErrorType, InputPin, OutputPin, StatefulOutputPin};
 use gd32e2::gd32e230;
 
 use crate::rcu::Rcu;
@@ -13,6 +13,7 @@ pub struct Output<OTYPE> {
 }
 pub struct Analog;
 pub struct Alternate<const AF: u8>;
+pub struct Debugger;
 
 pub struct Pin<const P: char, const N: u8, MODE> {
     _mode: PhantomData<MODE>,
@@ -76,6 +77,13 @@ pin_af! {
     'B' 15 => [0, 1, 2, 3],       // 0:SPI0_MOSI/SPI1_MOSI 1:TIMER14_CH1 2:TIMER0_CH2_ON 3:TIMER14_CH0_ON
 }
 
+pub trait Active {} // No Debugger
+
+impl Active for Input {}
+impl Active for Analog {}
+impl<const AF: u8> Active for Alternate<AF> {}
+impl<OTYPE> Active for Output<OTYPE> {}
+
 impl<const P: char, const N: u8, OTYPE> ErrorType for Pin<P, N, Output<OTYPE>> {
     type Error = Infallible;
 }
@@ -86,6 +94,19 @@ impl<const P: char, const N: u8, OTYPE> OutputPin for Pin<P, N, Output<OTYPE>> {
     }
     fn set_low(&mut self) -> Result<(), Self::Error> {
         self.gpio_reg().bc().write(|w| unsafe { w.bits(1 << N) });
+        Ok(())
+    }
+}
+
+impl<const P: char, const N: u8, OTYPE> StatefulOutputPin for Pin<P, N, Output<OTYPE>> {
+    fn is_set_high(&mut self) -> Result<bool, Self::Error> {
+        Ok(self.read_octl())
+    }
+    fn is_set_low(&mut self) -> Result<bool, Self::Error> {
+        Ok(!self.read_octl())
+    }
+    fn toggle(&mut self) -> Result<(), Self::Error> {
+        self.gpio_reg().tg().write(|w| unsafe { w.bits(1 << N) });
         Ok(())
     }
 }
@@ -111,18 +132,33 @@ impl<const P: char, const N: u8> InputPin for Pin<P, N, Output<OpenDrain>> {
     }
 }
 
-impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
+impl<const P: char, const N: u8> Pin<P, N, Debugger> {
+    pub unsafe fn activate(self) -> Pin<P, N, Input> {
+        Pin { _mode: PhantomData }
+    }
+}
+
+impl<const P: char, const N: u8, MODE> Pin<P, N, MODE>
+where
+    MODE: Active,
+{
     fn gpio_reg(&self) -> &gd32e230::gpioa::RegisterBlock {
-        let ptr = if P == 'A' {
-            gd32e230::Gpioa::ptr()
-        } else {
-            gd32e230::Gpiob::ptr() as *const _
+        let ptr = match P {
+            'A' => gd32e230::Gpioa::ptr(),
+            'B' => gd32e230::Gpiob::ptr() as *const _,
+            'F' => gd32e230::Gpiof::ptr() as *const _, // AFSEL0/1 and LOCK Registers is unvailable
+            _ => unreachable!(),
         };
         unsafe { &*ptr }
     }
 
     fn read_pin(&self) -> bool {
         let bits = self.gpio_reg().istat().read().bits();
+        ((bits >> N) & 0b1) == 0b1
+    }
+
+    fn read_octl(&self) -> bool {
+        let bits = self.gpio_reg().octl().read().bits();
         ((bits >> N) & 0b1) == 0b1
     }
 
@@ -216,23 +252,25 @@ pub trait GpioExt {
 }
 
 macro_rules! gpio {
-    ($Parts:ident, $Gpio:ty, $P:literal, [ $($name:ident : $num:literal),+ $(,)? ]) => {
-        pub struct $Parts { $( pub $name: Pin<$P, $num, Input>, )+ }
+    ($Parts:ident, $Gpio:ty, $P:literal, [ $($name:ident : $num:literal : $mode:ty),+ $(,)? ]) => {
+        pub struct $Parts { $( pub $name: Pin<$P, $num, $mode>, )+ }
 
         impl GpioExt for $Gpio {
             type Parts = $Parts;
             fn split(self, rcu: &mut Rcu) -> Self::Parts {
                 <$Gpio as crate::rcu::Enable>::enable(rcu);
-                $Parts { $( $name: Pin::<$P, $num, Input> { _mode: PhantomData }, )+ }
+                $Parts { $( $name: Pin::<$P, $num, $mode> { _mode: PhantomData }, )+ }
             }
         }
     };
 }
 
 gpio!(PartsA, gd32e230::Gpioa, 'A',
-    [pa0:0, pa1:1, pa2:2, pa3:3, pa4:4, pa5:5, pa6:6, pa7:7,
-     pa8:8, pa9:9, pa10:10, pa11:11, pa12:12, pa13:13, pa14:14, pa15:15]);
+    [pa0:0:Input, pa1:1:Input, pa2:2:Input, pa3:3:Input, pa4:4:Input, pa5:5:Input, pa6:6:Input, pa7:7:Input,
+     pa8:8:Input, pa9:9:Input, pa10:10:Input, pa11:11:Input, pa12:12:Input, pa13:13:Debugger, pa14:14:Debugger, pa15:15:Input]);
 
 gpio!(PartsB, gd32e230::Gpiob, 'B',
-    [pb0:0, pb1:1, pb2:2, pb3:3, pb4:4, pb5:5, pb6:6, pb7:7,
-     pb8:8, pb9:9, pb10:10, pb11:11, pb12:12, pb13:13, pb14:14, pb15:15]);
+    [pb0:0:Input, pb1:1:Input, pb2:2:Input, pb3:3:Input, pb4:4:Input, pb5:5:Input, pb6:6:Input, pb7:7:Input,
+     pb8:8:Input, pb9:9:Input, pb10:10:Input, pb11:11:Input, pb12:12:Input, pb13:13:Input, pb14:14:Input, pb15:15:Input]);
+
+gpio!(PartsF, gd32e230::Gpiof, 'F', [pf0:0:Input, pf1:1:Input]);

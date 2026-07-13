@@ -37,4 +37,5 @@ macro_rules! bus {
 bus! {
     gd32e230::Gpioa => ahben, paen,
     gd32e230::Gpiob => ahben, pben,
+    gd32e230::Gpiof => ahben, pfen,
 }
