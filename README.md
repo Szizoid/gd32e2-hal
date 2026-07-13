@@ -69,16 +69,25 @@ layer is built on top. Principles:
 - Peripheral clock gating: a generic `Enable` trait (`enable` / `disable`), implemented
   per-peripheral by the `bus!` macro (one line: peripheral type → register → bit) instead of
   hand-written methods on `Rcu`. Wired into `split`, so a port is guaranteed clocked before use.
-- The system clock tree (IRC8M / HXTAL / PLL → CK_SYS, bus prescalers) is not configured
-  yet — the chip runs on the default IRC8M.
+- System clock tree: a `CFGR` builder (`CFGR::default()`) configures `sysclk` / `hclk` /
+  `pclk1` / `pclk2`, and `.freeze(&mut rcu, &mut dp.fmc)` writes the registers and returns a
+  frozen `Clocks` (the actual resulting frequencies). PLL from IRC8M is supported
+  (`PllFreq`, 8–72 MHz in 4 MHz steps); bus prescalers use `AhbPrescaler` / `ApbPrescaler`.
+  All three are **enums, not raw `u32`** — an unreachable frequency or divider simply can't
+  be requested, it's a compile error rather than a silently-rounded value. Flash wait states
+  (`FMC.ws().wscnt`) are set from the resulting `hclk` *before* switching the system clock
+  source. `HXTAL` is out of scope for now (no crystal on this board).
 
 ```rust
 use embedded_hal::digital::OutputPin;
 use gd32e230_hal::gpio::GpioExt;
-use gd32e230_hal::rcu::RcuExt;
+use gd32e230_hal::rcu::{RcuExt, CFGR, PllFreq};
 
-let dp = gd32e230::Peripherals::take().unwrap();
+let mut dp = gd32e230::Peripherals::take().unwrap();
 let mut rcu = dp.rcu.constrain();
+let _clocks = CFGR::default()
+    .sysclk(PllFreq::Mhz48)              // PLL from IRC8M -> 48 MHz sysclk
+    .freeze(&mut rcu, &mut dp.fmc);
 let parts = dp.gpioa.split(&mut rcu);        // enables the GPIOA clock
 let mut led = parts.pa5.into_output();
 led.set_high().unwrap();
@@ -117,7 +126,9 @@ Flash to `0x08000000`, read the log in a terminal @ 115200 8N1.
 - [x] `StatefulOutputPin` (`toggle` via the atomic `TG` register / `is_set_*`).
 - [x] Port F (`PF0`/`PF1`); port C skipped (not bonded on this package).
 - [x] `Debugger` typestate for `PA13`/`PA14` (SWD pins), gated by a marker trait.
-- [ ] RCU: clock tree (IRC8M / HXTAL / PLL → CK_SYS, AHB/APB prescalers).
+- [x] RCU: clock tree — PLL from IRC8M, AHB/APB prescalers, flash wait states, typed
+      `CFGR` API (`PllFreq` / `AhbPrescaler` / `ApbPrescaler` enums, not raw `u32`).
+- [ ] RCU: `HXTAL` clock source (needs an external crystal on the board).
 - [ ] GPIO `LOCK` (low priority).
 - [ ] Peripherals: USART, timers / PWM, ADC, SPI, I²C.
 - [ ] Extract the HAL into a standalone library crate.
@@ -195,16 +206,25 @@ PAC (`gd32e2` — прямой доступ к регистрам), а пове�
   каждую периферию макросом `bus!` (одна строка: тип периферии → регистр → бит) вместо
   ручных методов на `Rcu`. Вплетён в `split` — порт гарантированно затактован перед
   использованием.
-- Дерево тактов (IRC8M / HXTAL / PLL → CK_SYS, прескейлеры шин) пока не настраивается —
-  чип работает на дефолтном IRC8M.
+- Дерево тактов: билдер `CFGR` (`CFGR::default()`) настраивает `sysclk`/`hclk`/`pclk1`/
+  `pclk2`, а `.freeze(&mut rcu, &mut dp.fmc)` пишет регистры и возвращает замороженный
+  `Clocks` (реальные получившиеся частоты). PLL от IRC8M поддержан (`PllFreq`, `8–72 МГц`
+  с шагом `4 МГц`); прескейлеры шин — через `AhbPrescaler`/`ApbPrescaler`. Все три —
+  **энумы, а не голый `u32`** — недостижимую частоту/делитель просто нельзя запросить, это
+  ошибка компиляции, а не тихое округление. Wait state'ы flash (`FMC.ws().wscnt`)
+  выставляются от получившегося `hclk` ДО переключения источника системного такта. `HXTAL`
+  пока вне скоупа (кварц на плате не запаян).
 
 ```rust
 use embedded_hal::digital::OutputPin;
 use gd32e230_hal::gpio::GpioExt;
-use gd32e230_hal::rcu::RcuExt;
+use gd32e230_hal::rcu::{RcuExt, CFGR, PllFreq};
 
-let dp = gd32e230::Peripherals::take().unwrap();
+let mut dp = gd32e230::Peripherals::take().unwrap();
 let mut rcu = dp.rcu.constrain();
+let _clocks = CFGR::default()
+    .sysclk(PllFreq::Mhz48)              // PLL от IRC8M -> 48 МГц sysclk
+    .freeze(&mut rcu, &mut dp.fmc);
 let parts = dp.gpioa.split(&mut rcu);        // включает такт GPIOA
 let mut led = parts.pa5.into_output();
 led.set_high().unwrap();
@@ -243,7 +263,9 @@ cargo bin            # -> firmware.bin (нужны cargo-binutils + llvm-tools)
 - [x] `StatefulOutputPin` (`toggle` через атомарный регистр `TG` / `is_set_*`).
 - [x] Порт F (`PF0`/`PF1`); порт C пропущен (не разведён на этом корпусе).
 - [x] Typestate `Debugger` для `PA13`/`PA14` (ноги SWD), гейт через трейт-маркер.
-- [ ] RCU: дерево тактов (IRC8M / HXTAL / PLL → CK_SYS, прескейлеры AHB/APB).
+- [x] RCU: дерево тактов — PLL от IRC8M, прескейлеры AHB/APB, flash wait states,
+      типизированный API `CFGR` (энумы `PllFreq`/`AhbPrescaler`/`ApbPrescaler`, не голый `u32`).
+- [ ] RCU: источник `HXTAL` (нужен внешний кварц на плате).
 - [ ] GPIO `LOCK` (низкий приоритет).
 - [ ] Периферия: USART, таймеры / PWM, ADC, SPI, I²C.
 - [ ] Вынос HAL в отдельный крейт-библиотеку.

@@ -1,6 +1,6 @@
 [package]
 name = "gd32e230-hal"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Szizoid"]
 description = "HAL for GD32E230 (Cortex-M23)"

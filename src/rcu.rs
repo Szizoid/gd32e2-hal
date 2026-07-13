@@ -4,6 +4,49 @@ const IRC8M: u32 = 8_000_000;
 const PLL_SRC: u32 = IRC8M / 2;
 
 #[derive(Clone, Copy)]
+pub enum PllFreq {
+    Mhz8 = 8_000_000,
+    Mhz12 = 12_000_000,
+    Mhz16 = 16_000_000,
+    Mhz20 = 20_000_000,
+    Mhz24 = 24_000_000,
+    Mhz28 = 28_000_000,
+    Mhz32 = 32_000_000,
+    Mhz36 = 36_000_000,
+    Mhz40 = 40_000_000,
+    Mhz44 = 44_000_000,
+    Mhz48 = 48_000_000,
+    Mhz52 = 52_000_000,
+    Mhz56 = 56_000_000,
+    Mhz60 = 60_000_000,
+    Mhz64 = 64_000_000,
+    Mhz68 = 68_000_000,
+    Mhz72 = 72_000_000,
+}
+
+#[derive(Clone, Copy)]
+pub enum AhbPrescaler {
+    Div1 = 1,
+    Div2 = 2,
+    Div4 = 4,
+    Div8 = 8,
+    Div16 = 16,
+    Div64 = 64,
+    Div128 = 128,
+    Div256 = 256,
+    Div512 = 512,
+}
+
+#[derive(Clone, Copy)]
+pub enum ApbPrescaler {
+    Div1 = 1,
+    Div2 = 2,
+    Div4 = 4,
+    Div8 = 8,
+    Div16 = 16,
+}
+
+#[derive(Clone, Copy)]
 pub struct Clocks {
     hclk: u32,
     pclk1: u32,
@@ -27,10 +70,10 @@ impl Clocks {
 }
 
 pub struct CFGR {
-    hclk: Option<u32>,
-    pclk1: Option<u32>,
-    pclk2: Option<u32>,
-    sysclk: Option<u32>,
+    hclk: Option<AhbPrescaler>,
+    pclk1: Option<ApbPrescaler>,
+    pclk2: Option<ApbPrescaler>,
+    sysclk: Option<PllFreq>,
 }
 
 impl Default for CFGR {
@@ -45,51 +88,23 @@ impl Default for CFGR {
 }
 
 impl CFGR {
-    fn nearest_devisor_ahb(source: u32, desired: Option<u32>) -> (u32, u32) {
-        match desired {
-            Option::None => (1, source),
-            Option::Some(d) => {
-                let div = match source / d {
-                    0..=1 => 1,
-                    2 => 2,
-                    2..=5 => 4,
-                    6..=11 => 8,
-                    12..=39 => 16,
-                    40..=95 => 64,
-                    96..=191 => 128,
-                    192..=383 => 256,
-                    _ => 512,
-                };
-                let real_freq = source / div;
-                (div, real_freq)
-            }
-        }
-    }
-    fn nearest_devisor_apb(source: u32, desired: Option<u32>) -> (u32, u32) {
-        let (div, _) = Self::nearest_devisor_ahb(source, desired);
-        let real_div = div.min(16);
-        let real_freq = source / real_div;
-        (real_div, real_freq)
-    }
-    fn nearest_multiplier_pll(desired: u32) -> (u32, u32) {
-        let mult = (desired / PLL_SRC).clamp(2, 18);
-        let real_freq = mult * PLL_SRC;
-        (mult, real_freq)
+    fn pll_multiplier(desired: PllFreq) -> u32 {
+        (desired as u32) / PLL_SRC
     }
 
-    pub fn hclk(mut self, freq: u32) -> Self {
-        self.hclk = Some(freq);
+    pub fn hclk(mut self, prescaler: AhbPrescaler) -> Self {
+        self.hclk = Some(prescaler);
         self
     }
-    pub fn pclk1(mut self, freq: u32) -> Self {
-        self.pclk1 = Some(freq);
+    pub fn pclk1(mut self, prescaler: ApbPrescaler) -> Self {
+        self.pclk1 = Some(prescaler);
         self
     }
-    pub fn pclk2(mut self, freq: u32) -> Self {
-        self.pclk2 = Some(freq);
+    pub fn pclk2(mut self, prescaler: ApbPrescaler) -> Self {
+        self.pclk2 = Some(prescaler);
         self
     }
-    pub fn sysclk(mut self, freq: u32) -> Self {
+    pub fn sysclk(mut self, freq: PllFreq) -> Self {
         self.sysclk = Some(freq);
         self
     }
@@ -98,7 +113,7 @@ impl CFGR {
         let sysclk = match self.sysclk {
             Option::None => IRC8M,
             Option::Some(desired) => {
-                let (mult, real_sysclk) = Self::nearest_multiplier_pll(desired);
+                let mult = Self::pll_multiplier(desired);
                 rcu.rcu.cfg0().modify(|_, w| {
                     let w = w.pllsel().irc8m_2();
                     match mult {
@@ -124,12 +139,16 @@ impl CFGR {
                 });
                 rcu.rcu.ctl0().modify(|_, w| w.pllen().on());
                 while rcu.rcu.ctl0().read().pllstb().is_not_ready() {}
-                real_sysclk
+                desired as u32
             }
         };
-        let (ahb_div, hclk) = Self::nearest_devisor_ahb(sysclk, self.hclk);
-        let (apb1_div, pclk1) = Self::nearest_devisor_apb(hclk, self.pclk1);
-        let (apb2_div, pclk2) = Self::nearest_devisor_apb(hclk, self.pclk2);
+
+        let ahb_presc = self.hclk.unwrap_or(AhbPrescaler::Div1);
+        let hclk = sysclk / (ahb_presc as u32);
+        let apb1_presc = self.pclk1.unwrap_or(ApbPrescaler::Div1);
+        let pclk1 = hclk / (apb1_presc as u32);
+        let apb2_presc = self.pclk2.unwrap_or(ApbPrescaler::Div1);
+        let pclk2 = hclk / (apb2_presc as u32);
 
         fmc.ws().modify(|_, w| match hclk {
             0..=24_000_000 => w.wscnt().ws0(),
@@ -139,33 +158,30 @@ impl CFGR {
         });
 
         rcu.rcu.cfg0().modify(|_, w| {
-            let w = match ahb_div {
-                1 => w.ahbpsc().div1(),
-                2 => w.ahbpsc().div2(),
-                4 => w.ahbpsc().div4(),
-                8 => w.ahbpsc().div8(),
-                16 => w.ahbpsc().div16(),
-                64 => w.ahbpsc().div64(),
-                128 => w.ahbpsc().div128(),
-                256 => w.ahbpsc().div256(),
-                512 => w.ahbpsc().div512(),
-                _ => unreachable!(),
+            let w = match ahb_presc {
+                AhbPrescaler::Div1 => w.ahbpsc().div1(),
+                AhbPrescaler::Div2 => w.ahbpsc().div2(),
+                AhbPrescaler::Div4 => w.ahbpsc().div4(),
+                AhbPrescaler::Div8 => w.ahbpsc().div8(),
+                AhbPrescaler::Div16 => w.ahbpsc().div16(),
+                AhbPrescaler::Div64 => w.ahbpsc().div64(),
+                AhbPrescaler::Div128 => w.ahbpsc().div128(),
+                AhbPrescaler::Div256 => w.ahbpsc().div256(),
+                AhbPrescaler::Div512 => w.ahbpsc().div512(),
             };
-            let w = match apb1_div {
-                1 => w.apb1psc().div1(),
-                2 => w.apb1psc().div2(),
-                4 => w.apb1psc().div4(),
-                8 => w.apb1psc().div8(),
-                16 => w.apb1psc().div16(),
-                _ => unreachable!(),
+            let w = match apb1_presc {
+                ApbPrescaler::Div1 => w.apb1psc().div1(),
+                ApbPrescaler::Div2 => w.apb1psc().div2(),
+                ApbPrescaler::Div4 => w.apb1psc().div4(),
+                ApbPrescaler::Div8 => w.apb1psc().div8(),
+                ApbPrescaler::Div16 => w.apb1psc().div16(),
             };
-            let w = match apb2_div {
-                1 => w.apb2psc().div1(),
-                2 => w.apb2psc().div2(),
-                4 => w.apb2psc().div4(),
-                8 => w.apb2psc().div8(),
-                16 => w.apb2psc().div16(),
-                _ => unreachable!(),
+            let w = match apb2_presc {
+                ApbPrescaler::Div1 => w.apb2psc().div1(),
+                ApbPrescaler::Div2 => w.apb2psc().div2(),
+                ApbPrescaler::Div4 => w.apb2psc().div4(),
+                ApbPrescaler::Div8 => w.apb2psc().div8(),
+                ApbPrescaler::Div16 => w.apb2psc().div16(),
             };
             if self.sysclk.is_some() {
                 w.scs().pll()

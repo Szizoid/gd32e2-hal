@@ -14,7 +14,7 @@ fn main() -> ! {
     let mut dp = gd32e230::Peripherals::take().unwrap();
     let mut rcu = dp.rcu.constrain();
     let _clocks = CFGR::default()
-        .sysclk(48_000_000)
+        .sysclk(gd32e230_hal::rcu::PllFreq::Mhz48)
         .freeze(&mut rcu, &mut dp.fmc);
     let parts = dp.gpioa.split(&mut rcu);
     let mut pa6 = parts.pa6.into_output();
