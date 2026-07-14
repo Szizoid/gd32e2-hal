@@ -15,6 +15,12 @@ panic-halt = "0.2.0"
 # Standard trait interface (traits only, not a HAL impl). Implementing these lets
 # portable drivers work against our Pin types. Provides digital::{OutputPin, InputPin}.
 embedded-hal = "1.0"
+# nb-based (non-blocking, WouldBlock) serial traits — split out of embedded-hal itself
+# since 1.0. Provides serial::{Read, Write}.
+embedded-hal-nb = "1.0"
+# nb::Result/nb::Error — the WouldBlock wrapper type itself, used directly in the
+# embedded-hal-nb trait signatures.
+nb = "1.0"
 
 # Peripheral Access Crate (PAC) for the GD32E2 family.
 # `gd32e230` selects our exact chip family; `rt` pulls cortex-m-rt interrupt

@@ -26,7 +26,8 @@ fn main() -> ! {
     let usart0 = Usart::new(&mut rcu, dp.usart0, tx_pin, rx_pin, 115_200, clocks);
 
     loop {
-        let byte = usart0.read_byte();
-        usart0.write_byte(byte);
+        if let Ok(byte) = usart0.read_byte() {
+            usart0.write_byte(byte);
+        }
     }
 }

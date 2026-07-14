@@ -81,10 +81,10 @@ pub struct CFGR {
 impl Default for CFGR {
     fn default() -> Self {
         CFGR {
-            hclk: Option::None,
-            pclk1: Option::None,
-            pclk2: Option::None,
-            sysclk: Option::None,
+            hclk: None,
+            pclk1: None,
+            pclk2: None,
+            sysclk: None,
         }
     }
 }
@@ -113,8 +113,8 @@ impl CFGR {
 
     pub fn freeze(self, rcu: &mut Rcu, fmc: &mut gd32e230::Fmc) -> Clocks {
         let sysclk = match self.sysclk {
-            Option::None => IRC8M,
-            Option::Some(desired) => {
+            None => IRC8M,
+            Some(desired) => {
                 let mult = Self::pll_multiplier(desired);
                 rcu.rcu.cfg0().modify(|_, w| {
                     let w = w.pllsel().irc8m_2();
