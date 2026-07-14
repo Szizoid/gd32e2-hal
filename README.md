@@ -62,6 +62,16 @@ layer is built on top. Principles:
   `Active`); the only way out is `unsafe fn activate() -> Pin<P, N, Input>`, a pure type
   relabel (no register write) — the caller is on the hook for actually reconfiguring the
   pin with a follow-up `into_*()`.
+- Full configuration lock: `lock()` runs the `LOCK` register's LKK write sequence and
+  returns `Pin<P, N, Locked<MODE>>` — a terminal typestate (no `unlock`: per the manual
+  the register stays locked until an MCU reset, so a software "unlock" would just lie
+  about the hardware state). `Locked<MODE>` doesn't implement the `Active` marker, so
+  `into_*`/`set_pull`/`set_speed` become compile-time unreachable, while `OutputPin` /
+  `InputPin` / `StatefulOutputPin` still apply — generically, via `impl<...> Trait for
+  Pin<P, N, Locked<MODE>> where Pin<P, N, MODE>: Trait`, so a locked pin keeps exactly
+  the read/write capabilities its unlocked `MODE` already had, with no per-mode
+  duplication. Gated to ports `A`/`B` by a `HasLock` marker trait — port `F` has no
+  physical `LOCK` register.
 
 **RCU** (`src/rcu.rs`):
 
@@ -77,6 +87,19 @@ layer is built on top. Principles:
   be requested, it's a compile error rather than a silently-rounded value. Flash wait states
   (`FMC.ws().wscnt`) are set from the resulting `hclk` *before* switching the system clock
   source. `HXTAL` is out of scope for now (no crystal on this board).
+- Peripheral reset: a generic `Reset` trait (`reset`), wired up alongside `Enable` by the
+  same `bus!` macro line (`AHBRST`/`APB1RST`/`APB2RST`) — pulses a peripheral back to its
+  post-reset defaults.
+- Typed frequencies (`src/time.rs`): `Hertz` / `KiloHertz` / `MegaHertz` / `Bps` /
+  `MilliSeconds` / `MicroSeconds` newtypes, a `U32Ext` extension trait (`.hz()` / `.mhz()`
+  / ...), `From` conversions between units, and `Mul`/`Div` arithmetic. `Clocks`'s four
+  getters return `Hertz` instead of a raw `u32`.
+- `CK_OUT`: `rcu.ck_out(src, div)` routes an internal clock node out onto `PA8`/`PA9` —
+  the only way to verify a real frequency with a scope or logic analyzer, since this board
+  has no debug probe. `CkOutSrc` covers the full `CKOUTSEL` mux (`None` / `Irc14m` /
+  `Lsi40k` / `Lxtal` / `Sysclk` / `Irc8m` / `Hxtal` / `Pll(PllDiv)` — the PLL branch's own
+  pre-mux divider is carried inside the enum variant, so it can't be set for any other
+  source); `CkOutDiv` is the post-mux `1..128` divider that applies to every source.
 
 ```rust
 use embedded_hal::digital::OutputPin;
@@ -128,8 +151,11 @@ Flash to `0x08000000`, read the log in a terminal @ 115200 8N1.
 - [x] `Debugger` typestate for `PA13`/`PA14` (SWD pins), gated by a marker trait.
 - [x] RCU: clock tree — PLL from IRC8M, AHB/APB prescalers, flash wait states, typed
       `CFGR` API (`PllFreq` / `AhbPrescaler` / `ApbPrescaler` enums, not raw `u32`).
+- [x] RCU: `Reset` trait for peripherals (`AHBRST`/`APB1RST`/`APB2RST`).
+- [x] Typed frequencies (`src/time.rs`, `Hertz` and friends) integrated into `Clocks`.
+- [x] RCU: `CK_OUT` (internal clock signal on `PA8`/`PA9`).
+- [x] GPIO `LOCK` (config freeze via `Locked<MODE>` typestate).
 - [ ] RCU: `HXTAL` clock source (needs an external crystal on the board).
-- [ ] GPIO `LOCK` (low priority).
 - [ ] Peripherals: USART, timers / PWM, ADC, SPI, I²C.
 - [ ] Extract the HAL into a standalone library crate.
 - [ ] Support for other GD32E230x package/pin-count variants (future, low priority).
@@ -198,6 +224,16 @@ PAC (`gd32e2` — прямой доступ к регистрам), а пове�
   трейт-маркер `Active`); единственный выход — `unsafe fn activate() -> Pin<P, N, Input>`,
   чистая смена типа без записи в регистры — реальную перенастройку ноги (`into_*()` следом)
   берёт на себя вызывающий код.
+- Полная заморозка конфигурации: `lock()` выполняет LKK-последовательность записи в
+  регистр `LOCK` и возвращает `Pin<P, N, Locked<MODE>>` — терминальный typestate (без
+  `unlock`: по мануалу регистр остаётся залоченным до сброса чипа, программный «разлок»
+  был бы ложью о состоянии железа). `Locked<MODE>` не реализует маркер `Active`, поэтому
+  `into_*`/`set_pull`/`set_speed` недостижимы на этапе компиляции, а вот `OutputPin`/
+  `InputPin`/`StatefulOutputPin` продолжают работать — обобщённо, через `impl<...> Trait
+  for Pin<P, N, Locked<MODE>> where Pin<P, N, MODE>: Trait`, так что залоченный пин
+  сохраняет ровно те возможности чтения/записи, что были у нелоченного `MODE`, без
+  дублирования под каждый режим. Доступно только на портах `A`/`B` через трейт-маркер
+  `HasLock` — у порта `F` физически нет регистра `LOCK`.
 
 **RCU** (`src/rcu.rs`):
 
@@ -214,6 +250,19 @@ PAC (`gd32e2` — прямой доступ к регистрам), а пове�
   ошибка компиляции, а не тихое округление. Wait state'ы flash (`FMC.ws().wscnt`)
   выставляются от получившегося `hclk` ДО переключения источника системного такта. `HXTAL`
   пока вне скоупа (кварц на плате не запаян).
+- Сброс периферии: генерик-трейт `Reset` (`reset`), вплетён рядом с `Enable` той же строкой
+  макроса `bus!` (`AHBRST`/`APB1RST`/`APB2RST`) — возвращает периферию в дефолт после сброса.
+- Типизированные частоты (`src/time.rs`): tuple-структы `Hertz`/`KiloHertz`/`MegaHertz`/
+  `Bps`/`MilliSeconds`/`MicroSeconds`, extension-трейт `U32Ext` (`.hz()`/`.mhz()`/...),
+  `From`-конверсии между единицами и арифметика `Mul`/`Div`. Четыре геттера `Clocks`
+  возвращают `Hertz` вместо голого `u32`.
+- `CK_OUT`: `rcu.ck_out(src, div)` выводит внутренний тактовый узел на `PA8`/`PA9` —
+  единственный способ вживую проверить реальную частоту осциллографом или логическим
+  анализатором, раз на плате нет отладочного зонда. `CkOutSrc` покрывает весь
+  мультиплексор `CKOUTSEL` (`None`/`Irc14m`/`Lsi40k`/`Lxtal`/`Sysclk`/`Irc8m`/`Hxtal`/
+  `Pll(PllDiv)` — собственный делитель ветки PLL до мультиплексора приклеен внутрь варианта
+  enum'а, так что его нельзя выставить для любого другого источника); `CkOutDiv` — общий
+  делитель `1..128` после мультиплексора, действует на любой источник.
 
 ```rust
 use embedded_hal::digital::OutputPin;
@@ -265,8 +314,11 @@ cargo bin            # -> firmware.bin (нужны cargo-binutils + llvm-tools)
 - [x] Typestate `Debugger` для `PA13`/`PA14` (ноги SWD), гейт через трейт-маркер.
 - [x] RCU: дерево тактов — PLL от IRC8M, прескейлеры AHB/APB, flash wait states,
       типизированный API `CFGR` (энумы `PllFreq`/`AhbPrescaler`/`ApbPrescaler`, не голый `u32`).
+- [x] RCU: трейт `Reset` для периферии (`AHBRST`/`APB1RST`/`APB2RST`).
+- [x] Типизированные частоты (`src/time.rs`, `Hertz` и семейство) интегрированы в `Clocks`.
+- [x] RCU: `CK_OUT` (вывод внутреннего тактового сигнала на `PA8`/`PA9`).
+- [x] GPIO `LOCK` (заморозка конфигурации через typestate `Locked<MODE>`).
 - [ ] RCU: источник `HXTAL` (нужен внешний кварц на плате).
-- [ ] GPIO `LOCK` (низкий приоритет).
 - [ ] Периферия: USART, таймеры / PWM, ADC, SPI, I²C.
 - [ ] Вынос HAL в отдельный крейт-библиотеку.
 - [ ] Поддержка других вариантов корпуса/пинаута GD32E230x (будущее, низкий приоритет).

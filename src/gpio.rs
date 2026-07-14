@@ -14,6 +14,9 @@ pub struct Output<OTYPE> {
 pub struct Analog;
 pub struct Alternate<const AF: u8>;
 pub struct Debugger;
+pub struct Locked<MODE> {
+    _mode: PhantomData<MODE>,
+}
 
 pub struct Pin<const P: char, const N: u8, MODE> {
     _mode: PhantomData<MODE>,
@@ -77,12 +80,16 @@ pin_af! {
     'B' 15 => [0, 1, 2, 3],       // 0:SPI0_MOSI/SPI1_MOSI 1:TIMER14_CH1 2:TIMER0_CH2_ON 3:TIMER14_CH0_ON
 }
 
-pub trait Active {} // No Debugger
+pub trait Active {} // No Debugger, No Locked<MODE>
 
 impl Active for Input {}
 impl Active for Analog {}
 impl<const AF: u8> Active for Alternate<AF> {}
 impl<OTYPE> Active for Output<OTYPE> {}
+
+pub trait HasLock {}
+impl<const N: u8, MODE> HasLock for Pin<'A', N, MODE> {}
+impl<const N: u8, MODE> HasLock for Pin<'B', N, MODE> {}
 
 impl<const P: char, const N: u8, OTYPE> ErrorType for Pin<P, N, Output<OTYPE>> {
     type Error = Infallible;
@@ -132,16 +139,59 @@ impl<const P: char, const N: u8> InputPin for Pin<P, N, Output<OpenDrain>> {
     }
 }
 
+impl<const P: char, const N: u8, MODE> ErrorType for Pin<P, N, Locked<MODE>> {
+    type Error = Infallible;
+}
+
+impl<const P: char, const N: u8, MODE> OutputPin for Pin<P, N, Locked<MODE>>
+where
+    Pin<P, N, MODE>: OutputPin,
+{
+    fn set_high(&mut self) -> Result<(), Self::Error> {
+        self.gpio_reg().bop().write(|w| unsafe { w.bits(1 << N) });
+        Ok(())
+    }
+    fn set_low(&mut self) -> Result<(), Self::Error> {
+        self.gpio_reg().bc().write(|w| unsafe { w.bits(1 << N) });
+        Ok(())
+    }
+}
+
+impl<const P: char, const N: u8, MODE> StatefulOutputPin for Pin<P, N, Locked<MODE>>
+where
+    Pin<P, N, MODE>: StatefulOutputPin,
+{
+    fn is_set_high(&mut self) -> Result<bool, Self::Error> {
+        Ok(self.read_octl())
+    }
+    fn is_set_low(&mut self) -> Result<bool, Self::Error> {
+        Ok(!self.read_octl())
+    }
+    fn toggle(&mut self) -> Result<(), Self::Error> {
+        self.gpio_reg().tg().write(|w| unsafe { w.bits(1 << N) });
+        Ok(())
+    }
+}
+
+impl<const P: char, const N: u8, MODE> InputPin for Pin<P, N, Locked<MODE>>
+where
+    Pin<P, N, MODE>: InputPin,
+{
+    fn is_high(&mut self) -> Result<bool, Self::Error> {
+        Ok(self.read_pin())
+    }
+    fn is_low(&mut self) -> Result<bool, Self::Error> {
+        Ok(!self.read_pin())
+    }
+}
+
 impl<const P: char, const N: u8> Pin<P, N, Debugger> {
     pub unsafe fn activate(self) -> Pin<P, N, Input> {
         Pin { _mode: PhantomData }
     }
 }
 
-impl<const P: char, const N: u8, MODE> Pin<P, N, MODE>
-where
-    MODE: Active,
-{
+impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
     fn gpio_reg(&self) -> &gd32e230::gpioa::RegisterBlock {
         let ptr = match P {
             'A' => gd32e230::Gpioa::ptr(),
@@ -161,7 +211,12 @@ where
         let bits = self.gpio_reg().octl().read().bits();
         ((bits >> N) & 0b1) == 0b1
     }
+}
 
+impl<const P: char, const N: u8, MODE> Pin<P, N, MODE>
+where
+    MODE: Active,
+{
     fn set_mode(&self, mode: u32) {
         let offset = N * 2;
         self.gpio_reg()
@@ -199,6 +254,34 @@ where
             .omode()
             .modify(|r, w| unsafe { w.bits((r.bits() & !(0b1 << offset)) | (bits << offset)) });
     }
+    fn set_lk(&self, lkk: bool) {
+        self.gpio_reg().lock().modify(|_, w| {
+            let w = match N {
+                0 => w.lk0().locked(),
+                1 => w.lk1().locked(),
+                2 => w.lk2().locked(),
+                3 => w.lk3().locked(),
+                4 => w.lk4().locked(),
+                5 => w.lk5().locked(),
+                6 => w.lk6().locked(),
+                7 => w.lk7().locked(),
+                8 => w.lk8().locked(),
+                9 => w.lk9().locked(),
+                10 => w.lk10().locked(),
+                11 => w.lk11().locked(),
+                12 => w.lk12().locked(),
+                13 => w.lk13().locked(),
+                14 => w.lk14().locked(),
+                15 => w.lk15().locked(),
+                _ => unreachable!(),
+            };
+            if lkk {
+                w.lkk().active()
+            } else {
+                w.lkk().not_active()
+            }
+        });
+    }
 
     pub fn into_input(self) -> Pin<P, N, Input> {
         self.set_mode(0b00);
@@ -227,6 +310,18 @@ where
     {
         self.set_mode(0b10);
         self.set_af(AF as u32);
+        Pin { _mode: PhantomData }
+    }
+    pub fn lock(self) -> Pin<P, N, Locked<MODE>>
+    where
+        Self: HasLock,
+    {
+        for i in 0..3 {
+            Self::set_lk(&self, i % 2 == 0);
+        }
+        for _ in 0..2 {
+            self.gpio_reg().lock().read();
+        }
         Pin { _mode: PhantomData }
     }
 
