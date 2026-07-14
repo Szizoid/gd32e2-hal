@@ -71,22 +71,12 @@ impl Clocks {
     }
 }
 
+#[derive(Default)]
 pub struct CFGR {
     hclk: Option<AhbPrescaler>,
     pclk1: Option<ApbPrescaler>,
     pclk2: Option<ApbPrescaler>,
     sysclk: Option<PllFreq>,
-}
-
-impl Default for CFGR {
-    fn default() -> Self {
-        CFGR {
-            hclk: None,
-            pclk1: None,
-            pclk2: None,
-            sysclk: None,
-        }
-    }
 }
 
 impl CFGR {

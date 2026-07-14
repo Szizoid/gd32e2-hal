@@ -1,6 +1,9 @@
 /target
 /others-hal
+**/*.bk
 **/*.rs.bk
+**/*.bak
+**/*.rs.bak
 *.bin
 *.hex
 CLAUDE.md

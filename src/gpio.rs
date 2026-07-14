@@ -186,6 +186,12 @@ where
 }
 
 impl<const P: char, const N: u8> Pin<P, N, Debugger> {
+    /// # Safety
+    ///
+    /// This only relabels the type from `Debugger` to `Input` — it performs no
+    /// register write. The pin remains physically in SWD mode until a
+    /// subsequent `into_*()` call reconfigures `CTL`. The caller must follow up
+    /// with one, or the type will no longer match the hardware state.
     pub unsafe fn activate(self) -> Pin<P, N, Input> {
         Pin { _mode: PhantomData }
     }

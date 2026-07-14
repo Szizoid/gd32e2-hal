@@ -2,7 +2,6 @@
   "lsp": {
     "rust-analyzer": {
       "initialization_options": {
-        "//": "no_std bare-metal: не проверять тестовые/бенч-таргеты — крейта `test` нет для thumbv8m.base-none-eabi (иначе rustc E0463 'can't find crate for test').",
         "cargo": {
           "allTargets": false
         },
