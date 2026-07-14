@@ -217,15 +217,26 @@ pub trait Enable {
     fn disable(rcu: &mut Rcu);
 }
 
+pub trait Reset {
+    fn reset(rcu: &mut Rcu);
+}
+
 macro_rules! bus {
-    ($($Periph:ty => $reg:ident, $bit:ident,)+) => {
+    ($($Periph:ty => $en_reg:ident, $en_bit:ident, $rst_reg:ident, $rst_bit:ident,)+) => {
         $(
             impl Enable for $Periph {
                 fn enable(rcu: &mut Rcu) {
-                    rcu.rcu.$reg().modify(|_, w| w.$bit().enabled());
+                    rcu.rcu.$en_reg().modify(|_, w| w.$en_bit().enabled());
                 }
                 fn disable(rcu: &mut Rcu) {
-                    rcu.rcu.$reg().modify(|_, w| w.$bit().disabled());
+                    rcu.rcu.$en_reg().modify(|_, w| w.$en_bit().disabled());
+                }
+            }
+
+            impl Reset for $Periph {
+                fn reset(rcu: &mut Rcu) {
+                    rcu.rcu.$rst_reg().modify(|_, w| w.$rst_bit().reset());
+                    rcu.rcu.$rst_reg().modify(|_, w| w.$rst_bit().clear_bit());
                 }
             }
         )+
@@ -233,7 +244,7 @@ macro_rules! bus {
 }
 
 bus! {
-    gd32e230::Gpioa => ahben, paen,
-    gd32e230::Gpiob => ahben, pben,
-    gd32e230::Gpiof => ahben, pfen,
+    gd32e230::Gpioa => ahben, paen, ahbrst, parst,
+    gd32e230::Gpiob => ahben, pben, ahbrst, pbrst,
+    gd32e230::Gpiof => ahben, pfen, ahbrst, pfrst,
 }
