@@ -309,4 +309,6 @@ bus! {
     gd32e230::Gpioa => ahben, paen, ahbrst, parst,
     gd32e230::Gpiob => ahben, pben, ahbrst, pbrst,
     gd32e230::Gpiof => ahben, pfen, ahbrst, pfrst,
+    gd32e230::Usart0 => apb2en, usart0en, apb2rst, usart0rst,
+    gd32e230::Usart1 => apb1en, usart1en, apb1rst, usart1rst,
 }

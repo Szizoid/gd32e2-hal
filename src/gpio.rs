@@ -45,39 +45,39 @@ macro_rules! pin_af {
 // map table AF из datasheet Table 2-13/2-14 (die-level)
 pin_af! {
     // ---- Port A ----
-    'A' 0  => [1, 4, 7],          // 1:USART0_CTS/USART1_CTS  4:I2C1_SCL  7:CMP_OUT
-    'A' 1  => [0, 1, 4, 5],       // 0:EVENTOUT 1:USART0_RTS/DE 4:I2C1_SDA 5:TIMER14_CH0_ON
-    'A' 2  => [0, 1],             // 0:TIMER14_CH0  1:USART0_TX/USART1_TX
-    'A' 3  => [0, 1],             // 0:TIMER14_CH1  1:USART0_RX/USART1_RX
-    'A' 4  => [0, 1, 4, 6],       // 0:SPI0_NSS/I2S0_WS 1:USART0_CK/USART1_CK 4:TIMER13_CH0 6:SPI1_NSS
-    'A' 5  => [0],                // 0:SPI0_SCK/I2S0_CK
-    'A' 6  => [0, 1, 2, 5, 6, 7], // 0:SPI0_MISO 1:TIMER2_CH0 2:TIMER0_BRKIN 5:TIMER15_CH0 6:EVENTOUT 7:CMP_OUT
-    'A' 7  => [0, 1, 2, 4, 5, 6], // 0:SPI0_MOSI 1:TIMER2_CH1 2:TIMER0_CH0_ON 4:TIMER13_CH0 5:TIMER16_CH0 6:EVENTOUT
-    'A' 8  => [0, 1, 2, 3, 4],    // 0:CK_OUT 1:USART0_CK 2:TIMER0_CH0 3:EVENTOUT 4:USART1_TX
-    'A' 9  => [0, 1, 2, 4, 5],    // 0:TIMER14_BRKIN 1:USART0_TX 2:TIMER0_CH1 4:I2C0_SCL 5:CK_OUT
-    'A' 10 => [0, 1, 2, 4],       // 0:TIMER16_BRKIN 1:USART0_RX 2:TIMER0_CH2 4:I2C0_SDA
+    'A' 0  => [1, 4, 7],             // 1:USART0_CTS/USART1_CTS  4:I2C1_SCL  7:CMP_OUT
+    'A' 1  => [0, 1, 4, 5],          // 0:EVENTOUT 1:USART0_RTS/DE 4:I2C1_SDA 5:TIMER14_CH0_ON
+    'A' 2  => [0, 1],                // 0:TIMER14_CH0  1:USART0_TX/USART1_TX
+    'A' 3  => [0, 1],                // 0:TIMER14_CH1  1:USART0_RX/USART1_RX
+    'A' 4  => [0, 1, 4, 6],          // 0:SPI0_NSS/I2S0_WS 1:USART0_CK/USART1_CK 4:TIMER13_CH0 6:SPI1_NSS
+    'A' 5  => [0],                   // 0:SPI0_SCK/I2S0_CK
+    'A' 6  => [0, 1, 2, 5, 6, 7],    // 0:SPI0_MISO 1:TIMER2_CH0 2:TIMER0_BRKIN 5:TIMER15_CH0 6:EVENTOUT 7:CMP_OUT
+    'A' 7  => [0, 1, 2, 4, 5, 6],    // 0:SPI0_MOSI 1:TIMER2_CH1 2:TIMER0_CH0_ON 4:TIMER13_CH0 5:TIMER16_CH0 6:EVENTOUT
+    'A' 8  => [0, 1, 2, 3, 4],       // 0:CK_OUT 1:USART0_CK 2:TIMER0_CH0 3:EVENTOUT 4:USART1_TX
+    'A' 9  => [0, 1, 2, 4, 5],       // 0:TIMER14_BRKIN 1:USART0_TX 2:TIMER0_CH1 4:I2C0_SCL 5:CK_OUT
+    'A' 10 => [0, 1, 2, 4],          // 0:TIMER16_BRKIN 1:USART0_RX 2:TIMER0_CH2 4:I2C0_SDA
     'A' 11 => [0, 1, 2, 4, 5, 6, 7], // 0:EVENTOUT 1:USART0_CTS 2:TIMER0_CH3 4:I2C0_SMBA 5:I2C1_SCL 6:SPI1_IO2 7:CMP_OUT
-    'A' 12 => [0, 1, 2, 4, 5, 6], // 0:EVENTOUT 1:USART0_RTS/DE 2:TIMER0_ETI 4:I2C0_TXFRAME 5:I2C1_SDA 6:SPI1_IO3
-    'A' 13 => [0, 1, 6],          // 0:SWDIO 1:IFRP_OUT 6:SPI1_MISO
-    'A' 14 => [0, 1, 6],          // 0:SWCLK 1:USART0_TX/USART1_TX 6:SPI1_MOSI
-    'A' 15 => [0, 1, 3, 6],       // 0:SPI0_NSS/I2S0_WS 1:USART0_RX/USART1_RX 3:EVENTOUT 6:SPI1_NSS
+    'A' 12 => [0, 1, 2, 4, 5, 6],    // 0:EVENTOUT 1:USART0_RTS/DE 2:TIMER0_ETI 4:I2C0_TXFRAME 5:I2C1_SDA 6:SPI1_IO3
+    'A' 13 => [0, 1, 6],             // 0:SWDIO 1:IFRP_OUT 6:SPI1_MISO
+    'A' 14 => [0, 1, 6],             // 0:SWCLK 1:USART0_TX/USART1_TX 6:SPI1_MOSI
+    'A' 15 => [0, 1, 3, 6],          // 0:SPI0_NSS/I2S0_WS 1:USART0_RX/USART1_RX 3:EVENTOUT 6:SPI1_NSS
     // ---- Port B ----
-    'B' 0  => [0, 1, 2, 4],       // 0:EVENTOUT 1:TIMER2_CH2 2:TIMER0_CH1_ON 4:USART1_RX
-    'B' 1  => [1, 2, 3, 6],       // 1:TIMER2_CH3 2:TIMER13_CH0 3:TIMER0_CH2_ON 6:SPI1_SCK
-    'B' 2  => [1],                // 1:TIMER2_ETI
-    'B' 3  => [0, 1],             // 0:SPI0_SCK/I2S0_CK 1:EVENTOUT
-    'B' 4  => [0, 1, 2, 4, 6],    // 0:SPI0_MISO 1:TIMER2_CH0 2:EVENTOUT 4:I2C0_TXFRAME 6:TIMER16_BRKIN
-    'B' 5  => [0, 1, 2, 3],       // 0:SPI0_MOSI 1:TIMER2_CH1 2:I2C0_SMBA 3:TIMER15_BRKIN
-    'B' 6  => [0, 1, 2],          // 0:USART0_TX 1:I2C0_SCL 2:TIMER15_CH0_ON
-    'B' 7  => [0, 1, 2],          // 0:USART0_RX 1:I2C0_SDA 2:TIMER16_CH0_ON
-    'B' 8  => [1, 2],             // 1:I2C0_SCL 2:TIMER15_CH0
-    'B' 9  => [0, 1, 2, 3, 5, 6], // 0:IFRP_OUT 1:I2C0_SDA 2:TIMER16_CH0 3:EVENTOUT 5:I2S0_MCK 6:SPI1_NSS
-    'B' 10 => [1, 6, 7],          // 1:I2C0_SCL/I2C1_SCL 6:SPI1_IO2 7:SPI1_SCK
-    'B' 11 => [0, 1, 6],          // 0:EVENTOUT 1:I2C0_SDA/I2C1_SDA 6:SPI1_IO3
-    'B' 12 => [0, 1, 2, 4],       // 0:SPI0_NSS/SPI1_NSS 1:EVENTOUT 2:TIMER0_BRKIN 4:I2C1_SMBA
-    'B' 13 => [0, 1, 2, 5],       // 0:SPI0_SCK/SPI1_SCK 1:I2C1_TXFRAME 2:TIMER0_CH0_ON 5:I2C1_SCL
-    'B' 14 => [0, 1, 2, 5],       // 0:SPI0_MISO/SPI1_MISO 1:TIMER14_CH0 2:TIMER0_CH1_ON 5:I2C1_SDA
-    'B' 15 => [0, 1, 2, 3],       // 0:SPI0_MOSI/SPI1_MOSI 1:TIMER14_CH1 2:TIMER0_CH2_ON 3:TIMER14_CH0_ON
+    'B' 0  => [0, 1, 2, 4],          // 0:EVENTOUT 1:TIMER2_CH2 2:TIMER0_CH1_ON 4:USART1_RX
+    'B' 1  => [1, 2, 3, 6],          // 1:TIMER2_CH3 2:TIMER13_CH0 3:TIMER0_CH2_ON 6:SPI1_SCK
+    'B' 2  => [1],                   // 1:TIMER2_ETI
+    'B' 3  => [0, 1],                // 0:SPI0_SCK/I2S0_CK 1:EVENTOUT
+    'B' 4  => [0, 1, 2, 4, 6],       // 0:SPI0_MISO 1:TIMER2_CH0 2:EVENTOUT 4:I2C0_TXFRAME 6:TIMER16_BRKIN
+    'B' 5  => [0, 1, 2, 3],          // 0:SPI0_MOSI 1:TIMER2_CH1 2:I2C0_SMBA 3:TIMER15_BRKIN
+    'B' 6  => [0, 1, 2],             // 0:USART0_TX 1:I2C0_SCL 2:TIMER15_CH0_ON
+    'B' 7  => [0, 1, 2],             // 0:USART0_RX 1:I2C0_SDA 2:TIMER16_CH0_ON
+    'B' 8  => [1, 2],                // 1:I2C0_SCL 2:TIMER15_CH0
+    'B' 9  => [0, 1, 2, 3, 5, 6],    // 0:IFRP_OUT 1:I2C0_SDA 2:TIMER16_CH0 3:EVENTOUT 5:I2S0_MCK 6:SPI1_NSS
+    'B' 10 => [1, 6, 7],             // 1:I2C0_SCL/I2C1_SCL 6:SPI1_IO2 7:SPI1_SCK
+    'B' 11 => [0, 1, 6],             // 0:EVENTOUT 1:I2C0_SDA/I2C1_SDA 6:SPI1_IO3
+    'B' 12 => [0, 1, 2, 4],          // 0:SPI0_NSS/SPI1_NSS 1:EVENTOUT 2:TIMER0_BRKIN 4:I2C1_SMBA
+    'B' 13 => [0, 1, 2, 5],          // 0:SPI0_SCK/SPI1_SCK 1:I2C1_TXFRAME 2:TIMER0_CH0_ON 5:I2C1_SCL
+    'B' 14 => [0, 1, 2, 5],          // 0:SPI0_MISO/SPI1_MISO 1:TIMER14_CH0 2:TIMER0_CH1_ON 5:I2C1_SDA
+    'B' 15 => [0, 1, 2, 3],          // 0:SPI0_MOSI/SPI1_MOSI 1:TIMER14_CH1 2:TIMER0_CH2_ON 3:TIMER14_CH0_ON
 }
 
 pub trait Active {} // No Debugger, No Locked<MODE>
