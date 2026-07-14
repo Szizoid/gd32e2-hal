@@ -12,9 +12,10 @@ A hardware abstraction layer (HAL) for the **GD32E230K8U6** microcontroller
 
 > ⚠️ **Work in progress.** The HAL is written incrementally and by hand — to
 > genuinely understand both the hardware and Rust's type system. The API is
-> unstable. The package is a library crate (`src/lib.rs` → `gpio`, `rcu` modules)
-> plus a small on-hardware test bench binary (`src/main.rs`); the HAL will later be
-> extracted into a standalone library.
+> unstable. The package is a library crate (`src/lib.rs` → `gpio`, `rcu`, `time`,
+> `usart` modules) plus a small on-hardware test bench binary (`src/main.rs`); the
+> HAL will later be extracted into a standalone library. `main.rs` has been flashed
+> and verified on real hardware (RCU PLL, GPIO output, USART0 TX+RX echo).
 
 ### Philosophy
 
@@ -101,21 +102,51 @@ layer is built on top. Principles:
   pre-mux divider is carried inside the enum variant, so it can't be set for any other
   source); `CkOutDiv` is the post-mux `1..128` divider that applies to every source.
 
+**USART** (`src/usart.rs`) — minimal blocking TX/RX, work in progress:
+
+- `TxPin<USART>` / `RxPin<USART>` marker traits (generic over the peripheral type, not
+  a const — the same trait covers both `Usart0` and `Usart1`), filled in by a
+  `usart_pins!` table macro from the pin/AF combinations already verified in `gpio.rs`'s
+  `pin_af!`. A pin of the wrong type or AF for a given `USARTX` simply doesn't satisfy
+  the bound — caught at compile time, not by a silently-dead UART line.
+  `Usart1` turned out to be a straight re-export of the `usart0` PAC module
+  (`pub use self::usart0 as usart1;`), so both peripherals share one `RegisterBlock`
+  type — no manual pointer-cast trick needed (unlike `Gpioa`/`Gpiob`, which are
+  layout-compatible but distinct types).
+- `BusClocks` — another type-level binding: `Usart0` runs off `pclk2` (APB2), `Usart1`
+  off `pclk1` (APB1); `USARTX::clock(&clocks)` returns the right one, so the baud-rate
+  calculation can't accidentally use the wrong bus frequency.
+- `Usart<USARTX, TX, RX>` owns the peripheral and both pins (kept, not dropped, for a
+  future `.release()`). `Usart::new(&mut rcu, usart, tx_pin, rx_pin, baud, clocks)`
+  enables the clock, resets the peripheral, computes the `BAUD` register — the whole
+  16-bit register turns out to equal `round(pclk / baud)` directly (`intdiv`/`fradiv`
+  are just its upper 12 / lower 4 bits), so no separate mantissa/fraction math is
+  needed — and turns on `UEN`/`TEN`/`REN`. Oversampling×16 only for now (the reset
+  default); ×8 and `USART0SEL` (alternate clock source) are deliberately out of scope.
+- `write_byte(&self, byte: u8)` / `read_byte(&self) -> u8` — busy-wait on `TBE`/`RBNE`
+  then hit `TDATA`/`RDATA`. No `embedded-hal-nb` traits or error handling
+  (`ORERR`/`FERR`/`PERR`) yet.
+
 ```rust
 use embedded_hal::digital::OutputPin;
 use gd32e230_hal::gpio::GpioExt;
 use gd32e230_hal::rcu::{RcuExt, CFGR, PllFreq};
+use gd32e230_hal::usart::Usart;
 
 let mut dp = gd32e230::Peripherals::take().unwrap();
 let mut rcu = dp.rcu.constrain();
-let _clocks = CFGR::default()
+let clocks = CFGR::default()
     .sysclk(PllFreq::Mhz48)              // PLL from IRC8M -> 48 MHz sysclk
     .freeze(&mut rcu, &mut dp.fmc);
 let parts = dp.gpioa.split(&mut rcu);        // enables the GPIOA clock
 let mut led = parts.pa5.into_output();
 led.set_high().unwrap();
 
-let _tx = parts.pa9.into_alternate::<1>();   // USART0_TX; ::<3>() would not compile
+let tx_pin = parts.pa9.into_alternate::<1>();    // USART0_TX; ::<3>() would not compile
+let rx_pin = parts.pa10.into_alternate::<1>();   // USART0_RX
+let usart0 = Usart::new(&mut rcu, dp.usart0, tx_pin, rx_pin, 115_200, clocks);
+let byte = usart0.read_byte();
+usart0.write_byte(byte);                          // verified on hardware: echoes back
 ```
 
 ### Project constraints
@@ -155,8 +186,12 @@ Flash to `0x08000000`, read the log in a terminal @ 115200 8N1.
 - [x] Typed frequencies (`src/time.rs`, `Hertz` and friends) integrated into `Clocks`.
 - [x] RCU: `CK_OUT` (internal clock signal on `PA8`/`PA9`).
 - [x] GPIO `LOCK` (config freeze via `Locked<MODE>` typestate).
+- [x] USART: blocking TX/RX (`Usart<USARTX, TX, RX>`, `TxPin`/`RxPin`, `BusClocks`),
+      verified on hardware via an echo loop.
+- [ ] USART: `embedded-hal-nb` traits, `.release()`, RX error handling, ×8-oversampling,
+      `USART0SEL` (alternate clock source).
 - [ ] RCU: `HXTAL` clock source (needs an external crystal on the board).
-- [ ] Peripherals: USART, timers / PWM, ADC, SPI, I²C.
+- [ ] Peripherals: timers / PWM, ADC, SPI, I²C.
 - [ ] Extract the HAL into a standalone library crate.
 - [ ] Support for other GD32E230x package/pin-count variants (future, low priority).
 
@@ -176,8 +211,10 @@ Cortex-M23), написанный на Rust с нуля поверх PAC-кре�
 
 > ⚠️ **Работа в процессе.** HAL пишется постепенно и вручную — ради глубокого
 > понимания и железа, и системы типов Rust. API нестабилен. Пакет — это
-> библиотечный крейт (`src/lib.rs` → модули `gpio`, `rcu`) плюс небольшой бинарь-стенд
-> для проверки на железе (`src/main.rs`); позже HAL будет вынесен в отдельную библиотеку.
+> библиотечный крейт (`src/lib.rs` → модули `gpio`, `rcu`, `time`, `usart`) плюс
+> небольшой бинарь-стенд для проверки на железе (`src/main.rs`); позже HAL будет
+> вынесен в отдельную библиотеку. `main.rs` уже прошит и проверен на реальном железе
+> (RCU PLL, GPIO output, USART0 TX+RX echo).
 
 ### Философия
 
@@ -264,21 +301,51 @@ PAC (`gd32e2` — прямой доступ к регистрам), а пове�
   enum'а, так что его нельзя выставить для любого другого источника); `CkOutDiv` — общий
   делитель `1..128` после мультиплексора, действует на любой источник.
 
+**USART** (`src/usart.rs`) — минимальный блокирующий TX/RX, в работе:
+
+- `TxPin<USART>`/`RxPin<USART>` — trait-marker'ы, генерик по типу периферии (не по
+  константе — один трейт покрывает и `Usart0`, и `Usart1`), заполнены макросом
+  `usart_pins!` по таблице из уже выверенных комбинаций пин/AF в `pin_af!` (`gpio.rs`).
+  Неверный пин или AF для конкретного `USARTX` просто не удовлетворяет биндингу —
+  ловится на компиляции, а не тихо мёртвой линией UART.
+  `Usart1` оказался прямым реэкспортом PAC-модуля `usart0`
+  (`pub use self::usart0 as usart1;`) — обе периферии делят один тип `RegisterBlock`,
+  ручной каст указателя не понадобился (в отличие от `Gpioa`/`Gpiob` — те совпадают по
+  раскладке, но остаются разными типами).
+- `BusClocks` — ещё один биндинг на уровне типов: `Usart0` тактуется от `pclk2` (APB2),
+  `Usart1` — от `pclk1` (APB1); `USARTX::clock(&clocks)` возвращает нужный, так что
+  расчёт `baud` не может случайно взять не ту шину.
+- `Usart<USARTX, TX, RX>` владеет периферией и обоими пинами (хранит, не роняет — ради
+  будущего `.release()`). `Usart::new(&mut rcu, usart, tx_pin, rx_pin, baud, clocks)`
+  включает такт, сбрасывает периферию, считает регистр `BAUD` — весь 16-битный регистр
+  оказывается равен `round(pclk / baud)` напрямую (`intdiv`/`fradiv` — это просто его
+  верхние 12 / нижние 4 бита), отдельная арифметика мантиссы/дроби не нужна — и
+  включает `UEN`/`TEN`/`REN`. Пока только oversampling×16 (дефолт после сброса); ×8 и
+  `USART0SEL` (альтернативный источник такта) осознанно вне скоупа.
+- `write_byte(&self, byte: u8)`/`read_byte(&self) -> u8` — busy-wait на `TBE`/`RBNE`,
+  потом запись/чтение `TDATA`/`RDATA`. Трейтов `embedded-hal-nb` и обработки ошибок
+  (`ORERR`/`FERR`/`PERR`) пока нет.
+
 ```rust
 use embedded_hal::digital::OutputPin;
 use gd32e230_hal::gpio::GpioExt;
 use gd32e230_hal::rcu::{RcuExt, CFGR, PllFreq};
+use gd32e230_hal::usart::Usart;
 
 let mut dp = gd32e230::Peripherals::take().unwrap();
 let mut rcu = dp.rcu.constrain();
-let _clocks = CFGR::default()
+let clocks = CFGR::default()
     .sysclk(PllFreq::Mhz48)              // PLL от IRC8M -> 48 МГц sysclk
     .freeze(&mut rcu, &mut dp.fmc);
 let parts = dp.gpioa.split(&mut rcu);        // включает такт GPIOA
 let mut led = parts.pa5.into_output();
 led.set_high().unwrap();
 
-let _tx = parts.pa9.into_alternate::<1>();   // USART0_TX; ::<3>() не скомпилируется
+let tx_pin = parts.pa9.into_alternate::<1>();    // USART0_TX; ::<3>() не скомпилируется
+let rx_pin = parts.pa10.into_alternate::<1>();   // USART0_RX
+let usart0 = Usart::new(&mut rcu, dp.usart0, tx_pin, rx_pin, 115_200, clocks);
+let byte = usart0.read_byte();
+usart0.write_byte(byte);                          // проверено на железе: приходит эхом
 ```
 
 ### Ограничения проекта
@@ -318,8 +385,12 @@ cargo bin            # -> firmware.bin (нужны cargo-binutils + llvm-tools)
 - [x] Типизированные частоты (`src/time.rs`, `Hertz` и семейство) интегрированы в `Clocks`.
 - [x] RCU: `CK_OUT` (вывод внутреннего тактового сигнала на `PA8`/`PA9`).
 - [x] GPIO `LOCK` (заморозка конфигурации через typestate `Locked<MODE>`).
+- [x] USART: блокирующие TX/RX (`Usart<USARTX, TX, RX>`, `TxPin`/`RxPin`, `BusClocks`),
+      проверено на железе echo-лупом.
+- [ ] USART: трейты `embedded-hal-nb`, `.release()`, обработка ошибок приёма,
+      ×8-oversampling, `USART0SEL` (альтернативный источник такта).
 - [ ] RCU: источник `HXTAL` (нужен внешний кварц на плате).
-- [ ] Периферия: USART, таймеры / PWM, ADC, SPI, I²C.
+- [ ] Периферия: таймеры / PWM, ADC, SPI, I²C.
 - [ ] Вынос HAL в отдельный крейт-библиотеку.
 - [ ] Поддержка других вариантов корпуса/пинаута GD32E230x (будущее, низкий приоритет).
 
