@@ -38,7 +38,7 @@ macro_rules! pin_af {
         $( $( impl<MODE> ValidAf<$af> for Pin<$p, $n, MODE> {} )* )*
     };
 }
-//test
+
 // map table AF из datasheet Table 2-13/2-14 (die-level)
 pin_af! {
     // ---- Port A ----
