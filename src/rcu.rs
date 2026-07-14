@@ -1,5 +1,7 @@
 use gd32e2::gd32e230;
 
+use crate::time::Hertz;
+
 const IRC8M: u32 = 8_000_000;
 const PLL_SRC: u32 = IRC8M / 2;
 
@@ -48,23 +50,23 @@ pub enum ApbPrescaler {
 
 #[derive(Clone, Copy)]
 pub struct Clocks {
-    hclk: u32,
-    pclk1: u32,
-    pclk2: u32,
-    sysclk: u32,
+    hclk: Hertz,
+    pclk1: Hertz,
+    pclk2: Hertz,
+    sysclk: Hertz,
 }
 
 impl Clocks {
-    pub fn hclk(&self) -> u32 {
+    pub fn hclk(&self) -> Hertz {
         self.hclk
     }
-    pub fn pclk1(&self) -> u32 {
+    pub fn pclk1(&self) -> Hertz {
         self.pclk1
     }
-    pub fn pclk2(&self) -> u32 {
+    pub fn pclk2(&self) -> Hertz {
         self.pclk2
     }
-    pub fn sysclk(&self) -> u32 {
+    pub fn sysclk(&self) -> Hertz {
         self.sysclk
     }
 }
@@ -190,10 +192,10 @@ impl CFGR {
             }
         });
         Clocks {
-            hclk,
-            pclk1,
-            pclk2,
-            sysclk,
+            hclk: Hertz(hclk),
+            pclk1: Hertz(pclk1),
+            pclk2: Hertz(pclk2),
+            sysclk: Hertz(sysclk),
         }
     }
 }
