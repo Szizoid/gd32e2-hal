@@ -200,8 +200,68 @@ impl CFGR {
     }
 }
 
+pub enum PllDiv {
+    Div1,
+    Div2,
+}
+
+pub enum CkOutSrc {
+    None,
+    Irc14m,
+    Lsi40k,
+    Lxtal,
+    Sysclk,
+    Irc8m,
+    Hxtal,
+    Pll(PllDiv),
+}
+
+pub enum CkOutDiv {
+    Div1,
+    Div2,
+    Div4,
+    Div8,
+    Div16,
+    Div32,
+    Div64,
+    Div128,
+}
+
 pub struct Rcu {
     rcu: gd32e230::Rcu, // Own raw Peripheral
+}
+
+impl Rcu {
+    pub fn ck_out(&mut self, src: CkOutSrc, div: CkOutDiv) {
+        self.rcu.cfg0().modify(|_, w| {
+            let w = match div {
+                CkOutDiv::Div1 => w.ckoutdiv().div1(),
+                CkOutDiv::Div2 => w.ckoutdiv().div2(),
+                CkOutDiv::Div4 => w.ckoutdiv().div4(),
+                CkOutDiv::Div8 => w.ckoutdiv().div8(),
+                CkOutDiv::Div16 => w.ckoutdiv().div16(),
+                CkOutDiv::Div32 => w.ckoutdiv().div32(),
+                CkOutDiv::Div64 => w.ckoutdiv().div64(),
+                CkOutDiv::Div128 => w.ckoutdiv().div128(),
+            };
+            match src {
+                CkOutSrc::None => w.ckoutsel().none(),
+                CkOutSrc::Irc14m => w.ckoutsel().irc14m(),
+                CkOutSrc::Lsi40k => w.ckoutsel().lsi40k(),
+                CkOutSrc::Lxtal => w.ckoutsel().lxtal(),
+                CkOutSrc::Sysclk => w.ckoutsel().sysclk(),
+                CkOutSrc::Irc8m => w.ckoutsel().irc8m(),
+                CkOutSrc::Hxtal => w.ckoutsel().hxtal(),
+                CkOutSrc::Pll(d) => {
+                    let w = w.ckoutsel().pll();
+                    match d {
+                        PllDiv::Div1 => w.plldv().div1(),
+                        PllDiv::Div2 => w.plldv().div2(),
+                    }
+                }
+            }
+        });
+    }
 }
 
 pub trait RcuExt {
