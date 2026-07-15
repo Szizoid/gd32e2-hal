@@ -1,5 +1,6 @@
+use core::marker::PhantomData;
 use core::ops::Deref;
-use embedded_hal_nb::serial::{ErrorType, Read, Write};
+use embedded_hal_nb::serial::{ErrorKind, ErrorType, Read, Write};
 use gd32e2::gd32e230;
 
 use crate::{
@@ -63,21 +64,29 @@ pub mod baud {
     pub const B921600: u32 = 921_600;
 }
 
+#[derive(Clone, Copy)]
 pub enum Oversampling {
     X8,
     X16,
 }
 
-pub enum Parity {
-    None,
-    Even,
-    Odd,
+/// 8-bit-word frame formats (`WL`/`PCEN`/`PM` in `CTL0`). `E7`/`O7` give only 7 real
+/// data bits (parity replaces the MSB); `E8`/`O8` keep the full 8 bits by widening the
+/// frame to 9 bits and putting parity in the extra bit. See `Usart::new_word` for the
+/// 9-bit-word, no-parity case, which needs a `u16`, not `u8`.
+#[derive(Clone, Copy)]
+pub enum FrameFormat {
+    N8,
+    E8,
+    O8,
+    E7,
+    O7,
 }
 
 pub struct UsartConfig {
     baud: u32,
     oversampling: Oversampling,
-    parity: Parity,
+    frame_format: FrameFormat,
 }
 
 impl UsartConfig {
@@ -89,8 +98,8 @@ impl UsartConfig {
         self.oversampling = oversampling;
         self
     }
-    pub fn parity(mut self, parity: Parity) -> Self {
-        self.parity = parity;
+    pub fn frame_format(mut self, frame_format: FrameFormat) -> Self {
+        self.frame_format = frame_format;
         self
     }
 }
@@ -100,54 +109,95 @@ impl Default for UsartConfig {
         Self {
             baud: baud::B115200,
             oversampling: Oversampling::X16,
-            parity: Parity::None,
+            frame_format: FrameFormat::N8,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Error {
-    Overrun,
-    Noise,
-    Framing,
-    Parity,
+pub struct UsartConfig9 {
+    baud: u32,
+    oversampling: Oversampling,
 }
 
-impl embedded_hal_nb::serial::Error for Error {
-    fn kind(&self) -> embedded_hal_nb::serial::ErrorKind {
-        match self {
-            Error::Overrun => embedded_hal_nb::serial::ErrorKind::Overrun,
-            Error::Noise => embedded_hal_nb::serial::ErrorKind::Noise,
-            Error::Framing => embedded_hal_nb::serial::ErrorKind::FrameFormat,
-            Error::Parity => embedded_hal_nb::serial::ErrorKind::Parity,
+impl UsartConfig9 {
+    pub fn baud(mut self, baud: u32) -> Self {
+        self.baud = baud;
+        self
+    }
+    pub fn oversampling(mut self, oversampling: Oversampling) -> Self {
+        self.oversampling = oversampling;
+        self
+    }
+}
+
+impl Default for UsartConfig9 {
+    fn default() -> Self {
+        Self {
+            baud: baud::B115200,
+            oversampling: Oversampling::X16,
         }
     }
 }
 
-pub struct Usart<USARTX, TX, RX> {
+fn configure<USARTX>(rcu: &mut Rcu, usart: &USARTX, clocks: &Clocks, baud: u32, oversampling: Oversampling)
+where
+    USARTX: Deref<Target = gd32e230::usart0::RegisterBlock> + Enable + Reset + BusClocks,
+{
+    USARTX::enable(rcu);
+    USARTX::reset(rcu);
+    let pclk = USARTX::clock(clocks).0;
+    let usartdiv = (pclk + baud / 2) / baud;
+    usart.baud().write(|w| unsafe {
+        match oversampling {
+            Oversampling::X16 => w.bits(usartdiv),
+            Oversampling::X8 => {
+                let intdiv = usartdiv / 8;
+                let fradiv_8 = usartdiv % 8;
+                w.bits((intdiv << 4) | (fradiv_8 & 0x7))
+            }
+        }
+    });
+
+    usart.ctl0().modify(|_, w| {
+        let w = w.uen().enabled().ten().enabled().ren().enabled();
+        match oversampling {
+            Oversampling::X16 => w.ovsmod().oversampling16(),
+            Oversampling::X8 => w.ovsmod().oversampling8(),
+        }
+    });
+}
+
+/// Word-width marker: 8-bit words (`write_byte`/`read_byte`), optionally with parity.
+pub struct Byte;
+/// Word-width marker: raw 9-bit words (`write_word`/`read_word`), no parity possible.
+pub struct Word;
+
+pub struct Usart<USARTX, TX, RX, WORD = Byte> {
     usart: USARTX,
     tx_pin: TX,
     rx_pin: RX,
+    frame_format: FrameFormat,
+    _word: PhantomData<WORD>,
 }
 
-impl<USARTX, TX, RX> Usart<USARTX, TX, RX>
+impl<USARTX, TX, RX, WORD> Usart<USARTX, TX, RX, WORD>
 where
     USARTX: Deref<Target = gd32e230::usart0::RegisterBlock>,
 {
-    fn take_error(&self) -> Option<Error> {
+    fn take_error(&self) -> Option<ErrorKind> {
         let stat = self.usart.stat().read();
         let error = if stat.orerr().bit() {
             self.usart.intc().write(|w| w.orec().clear());
-            Option::Some(Error::Overrun)
+            Option::Some(ErrorKind::Overrun)
         } else if stat.nerr().bit() {
             self.usart.intc().write(|w| w.nec().clear());
-            Option::Some(Error::Noise)
+            Option::Some(ErrorKind::Noise)
         } else if stat.ferr().bit() {
             self.usart.intc().write(|w| w.fec().clear());
-            Option::Some(Error::Framing)
+            Option::Some(ErrorKind::FrameFormat)
         } else if stat.perr().bit() {
             self.usart.intc().write(|w| w.pec().clear());
-            Option::Some(Error::Parity)
+            Option::Some(ErrorKind::Parity)
         } else {
             Option::None
         };
@@ -158,9 +208,27 @@ where
 
         error
     }
+
+    pub fn release(self) -> (USARTX, TX, RX) {
+        self.usart.ctl0().modify(|_, w| w.uen().disabled());
+        (self.usart, self.tx_pin, self.rx_pin)
+    }
 }
 
-impl<USARTX, TX, RX> Usart<USARTX, TX, RX>
+impl<USARTX, TX, RX> Usart<USARTX, TX, RX, Byte>
+where
+    USARTX: Deref<Target = gd32e230::usart0::RegisterBlock>,
+{
+    fn received_byte(&self) -> u8 {
+        let raw = self.usart.rdata().read().bits() as u8;
+        match self.frame_format {
+            FrameFormat::E7 | FrameFormat::O7 => raw & 0x7F,
+            FrameFormat::N8 | FrameFormat::E8 | FrameFormat::O8 => raw,
+        }
+    }
+}
+
+impl<USARTX, TX, RX> Usart<USARTX, TX, RX, Byte>
 where
     USARTX: Deref<Target = gd32e230::usart0::RegisterBlock> + Enable + Reset + BusClocks,
     TX: TxPin<USARTX>,
@@ -174,37 +242,21 @@ where
         clocks: Clocks,
         config: UsartConfig,
     ) -> Self {
-        USARTX::enable(rcu);
-        USARTX::reset(rcu);
-        let pclk = USARTX::clock(&clocks).0;
-        let usartdiv = (pclk + config.baud / 2) / config.baud;
-        usart.baud().write(|w| unsafe {
-            match config.oversampling {
-                Oversampling::X16 => w.bits(usartdiv),
-                Oversampling::X8 => {
-                    let intdiv = usartdiv / 8;
-                    let fradiv_8 = usartdiv % 8;
-                    w.bits((intdiv << 4) | (fradiv_8 & 0x7))
-                }
-            }
-        });
+        configure(rcu, &usart, &clocks, config.baud, config.oversampling);
 
-        usart.ctl0().modify(|_, w| {
-            let w = w.uen().enabled().ten().enabled().ren().enabled();
-            let w = match config.oversampling {
-                Oversampling::X16 => w.ovsmod().oversampling16(),
-                Oversampling::X8 => w.ovsmod().oversampling8(),
-            };
-            match config.parity {
-                Parity::None => w.pcen().disabled().wl().bit8(),
-                Parity::Even => w.pcen().enabled().pm().even().wl().bit9(),
-                Parity::Odd => w.pcen().enabled().pm().odd().wl().bit9(),
-            }
+        usart.ctl0().modify(|_, w| match config.frame_format {
+            FrameFormat::N8 => w.pcen().disabled().wl().bit8(),
+            FrameFormat::E8 => w.pcen().enabled().pm().even().wl().bit9(),
+            FrameFormat::O8 => w.pcen().enabled().pm().odd().wl().bit9(),
+            FrameFormat::E7 => w.pcen().enabled().pm().even().wl().bit8(),
+            FrameFormat::O7 => w.pcen().enabled().pm().odd().wl().bit8(),
         });
         Self {
             usart,
             tx_pin,
             rx_pin,
+            frame_format: config.frame_format,
+            _word: PhantomData,
         }
     }
 
@@ -212,25 +264,66 @@ where
         while !self.usart.stat().read().tbe().bit() {}
         self.usart.tdata().write(|w| unsafe { w.bits(byte as u32) });
     }
-    pub fn read_byte(&self) -> Result<u8, Error> {
+    pub fn read_byte(&self) -> Result<u8, ErrorKind> {
         while !self.usart.stat().read().rbne().bit() {}
         if let Some(e) = self.take_error() {
             Err(e)
         } else {
-            Ok(self.usart.rdata().read().bits() as u8)
+            Ok(self.received_byte())
         }
     }
-    pub fn release(self) -> (USARTX, TX, RX) {
-        self.usart.ctl0().modify(|_, w| w.uen().disabled());
-        (self.usart, self.tx_pin, self.rx_pin)
+}
+
+impl<USARTX, TX, RX> Usart<USARTX, TX, RX, Word>
+where
+    USARTX: Deref<Target = gd32e230::usart0::RegisterBlock> + Enable + Reset + BusClocks,
+    TX: TxPin<USARTX>,
+    RX: RxPin<USARTX>,
+{
+    pub fn new_word(
+        rcu: &mut Rcu,
+        usart: USARTX,
+        tx_pin: TX,
+        rx_pin: RX,
+        clocks: Clocks,
+        config: UsartConfig9,
+    ) -> Self {
+        configure(rcu, &usart, &clocks, config.baud, config.oversampling);
+
+        // WL=1 (9-bit frame), PCEN disabled: no parity possible in this mode, all 9
+        // bits are real data.
+        usart.ctl0().modify(|_, w| w.pcen().disabled().wl().bit9());
+        Self {
+            usart,
+            tx_pin,
+            rx_pin,
+            // Never read: only `Byte`'s `received_byte` looks at `frame_format`.
+            frame_format: FrameFormat::N8,
+            _word: PhantomData,
+        }
+    }
+
+    pub fn write_word(&self, word: u16) {
+        while !self.usart.stat().read().tbe().bit() {}
+        self.usart
+            .tdata()
+            .write(|w| unsafe { w.bits((word & 0x1FF) as u32) });
+    }
+    pub fn read_word(&self) -> Result<u16, ErrorKind> {
+        while !self.usart.stat().read().rbne().bit() {}
+        if let Some(e) = self.take_error() {
+            Err(e)
+        } else {
+            Ok((self.usart.rdata().read().bits() & 0x1FF) as u16)
+        }
     }
 }
 
-impl<USARTX, TX, RX> ErrorType for Usart<USARTX, TX, RX> {
-    type Error = Error;
+impl<USARTX, TX, RX, WORD> ErrorType for Usart<USARTX, TX, RX, WORD> {
+    type Error = ErrorKind;
 }
 
-impl<USARTX, TX, RX> Read<u8> for Usart<USARTX, TX, RX>
+impl<USARTX, TX, RX> Read<u8> for Usart<USARTX, TX, RX, Byte>
 where
     USARTX: Deref<Target = gd32e230::usart0::RegisterBlock>,
 {
@@ -241,12 +334,12 @@ where
         if let Some(e) = self.take_error() {
             nb::Result::Err(nb::Error::Other(e))
         } else {
-            nb::Result::Ok(self.usart.rdata().read().bits() as u8)
+            nb::Result::Ok(self.received_byte())
         }
     }
 }
 
-impl<USARTX, TX, RX> Write<u8> for Usart<USARTX, TX, RX>
+impl<USARTX, TX, RX> Write<u8> for Usart<USARTX, TX, RX, Byte>
 where
     USARTX: Deref<Target = gd32e230::usart0::RegisterBlock>,
 {

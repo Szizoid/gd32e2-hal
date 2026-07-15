@@ -124,57 +124,81 @@ layer is built on top. Principles:
 - `BusClocks` — another type-level binding: `Usart0` runs off `pclk2` (APB2), `Usart1`
   off `pclk1` (APB1); `USARTX::clock(&clocks)` returns the right one, so the baud-rate
   calculation can't accidentally use the wrong bus frequency.
-- `Usart<USARTX, TX, RX>` owns the peripheral and both pins (kept, not dropped — see
-  `.release()` below). `Usart::new(&mut rcu, usart, tx_pin, rx_pin, clocks, config)`
-  enables the clock, resets the peripheral, computes `BAUD`, and turns on
-  `UEN`/`TEN`/`REN`.
+- `Usart<USARTX, TX, RX, WORD = Byte>` owns the peripheral and both pins (kept, not
+  dropped — see `.release()` below). The 4th parameter defaults to `Byte`, so every
+  existing 3-parameter `Usart<USARTX, TX, RX>` reference keeps compiling unchanged.
+  `Usart::new(&mut rcu, usart, tx_pin, rx_pin, clocks, config)` enables the clock,
+  resets the peripheral, computes `BAUD`, and turns on `UEN`/`TEN`/`REN` (shared logic
+  factored into a private `configure()`, reused by the 9-bit constructor below).
   - **`Oversampling::{X16, X8}`** — at ×16 the whole 16-bit `BAUD` register turns out to
     equal `round(pclk / baud)` directly (`intdiv`/`fradiv` are just its upper 12 / lower
     4 bits). At ×8 the register format changes (only 3 fraction bits are usable,
     `BRR[3]` must stay `0`), so the value is split (`intdiv = w >> 3`, `fradiv8 = w &
     0x7`) and reassembled; `OVSMOD` in `CTL0` has to flip too, or the peripheral keeps
     sampling at ×16 regardless of what `BAUD` says.
-  - **`Parity::{None, Even, Odd}`** — `Even`/`Odd` set `WL=1` (9-bit frame) internally so
-    the parity bit lands in bit 8, outside the `u8` range; `write_byte`/`read_byte`
-    didn't need to change at all, since truncating to `u8` already discards it. A pure
-    9-bit word without parity (where the 9th bit actually carries data) is out of scope —
-    `u8` can't hold it.
-  - **`UsartConfig`** bundles `baud`/`oversampling`/`parity` behind fluent setters and
-    `impl Default` (`115_200`/`X16`/`None`), matching the reference HALs' `Config`
+  - **`FrameFormat::{N8, E8, O8, E7, O7}`** — the single source of truth for `WL`/
+    `PCEN`/`PM` together (not a separate `Parity` enum alongside it: two independent
+    knobs over the same three register fields would risk contradicting each other, the
+    same trap already avoided with `BusClocks`). `E8`/`O8` set `WL=1` (9-bit frame) so
+    the parity bit lands in bit 8, outside the `u8` range — `write_byte`/`read_byte`
+    don't need to change at all, truncating to `u8` already discards it. `E7`/`O7` use
+    `WL=0`: parity replaces bit 7 *inside* the `u8`, so only 7 real data bits remain and
+    `received_byte()` has to mask `& 0x7F` on read (not on write — the peripheral
+    overwrites the MSB with the computed parity regardless of what was written there).
+    There's no separate "`N7`" — without parity, `WL=0` always yields the full 8 bits,
+    i.e. `N8`; a 7th-bit ceiling only appears once parity eats into the word.
+  - **`UsartConfig`** bundles `baud`/`oversampling`/`frame_format` behind fluent setters
+    and `impl Default` (`115_200`/`X16`/`N8`), matching the reference HALs' `Config`
     pattern — Rust has no default function arguments. Unlike `CFGR`'s `Option<T>` fields
     (`None` = "leave the register alone"), `UsartConfig`'s fields are bare values: every
-    `new()` writes `baud`/`oversampling`/`parity` regardless, so "don't touch" isn't
-    meaningful here.
+    `new()` writes all three regardless, so "don't touch" isn't meaningful here.
   - **`usart::baud`** — 15 named `u32` constants (`B110`..`B921600`, the standard POSIX
     set), purely for readability. `baud` stays a plain `u32`, not an enum: unlike
     `PllFreq`, the achievable range isn't a small hardware-fixed set, so an enum would
     only block legitimate non-standard rates without preventing anything actually
     impossible.
-- `write_byte(&self, byte: u8)` / `read_byte(&self) -> Result<u8, Error>` — busy-wait
+- **Pure 9-bit words, no parity** (`WL=1, PCEN=0`) — `Usart<USARTX, TX, RX, Word>` via
+  `Usart::new_word(&mut rcu, usart, tx_pin, rx_pin, clocks, UsartConfig9::default())`
+  (a config type with no `frame_format` field — nothing meaningful to put there for this
+  path), with `write_word(&self, word: u16)` / `read_word(&self) -> Result<u16,
+  ErrorKind>` (masked `& 0x1FF`, the 9 significant bits). `Byte`/`Word` are zero-sized
+  marker types: `write_word`/`read_word` simply don't exist on `Usart<..., Byte>`, and
+  `write_byte`/`read_byte` don't exist on `Usart<..., Word>` — verified by temporarily
+  compiling a wrong-width call (`E0599: no method named write_word found`), not just
+  reasoned about. Chosen over an unguarded pair of `u16` methods on the plain 3-parameter
+  `Usart` specifically because the set of frame formats is small and known up front
+  (like `PllFreq`), unlike `baud`/`pclk`, which are runtime-continuum values a marker
+  type couldn't meaningfully gate.
+- `write_byte(&self, byte: u8)` / `read_byte(&self) -> Result<u8, ErrorKind>` — busy-wait
   on `TBE`/`RBNE` then hit `TDATA`/`RDATA`, checking for RX errors (see below) before
   trusting the byte.
 - `embedded_hal_nb::serial::{ErrorType, Read<u8>, Write<u8>}` — non-blocking
-  counterparts: the same flag check, but `if !flag { return Err(nb::Error::WouldBlock) }`
-  instead of a busy-wait loop. `Write::flush()` waits on a separate flag, `TC`
-  (transmission complete — the shift register has physically emptied, not the same as
-  `TBE`, which just means "buffer free for the next byte"). No inherent `flush(&self)`
-  was added alongside it — same inherent-vs-trait method-resolution trap already hit in
-  GPIO, so the trait `flush()` is the only entry point.
-- **RX error handling**: `Error` (`Overrun` / `Noise` / `Framing` / `Parity` — a fourth
-  flag, `NERR`, turned up in the manual alongside the three expected ones, so it got
-  included too) implements `embedded_hal_nb::serial::Error` for portable-driver
-  compatibility. Cleared via a **separate** `USART_INTC` register (write `1` to
-  `OREC`/`NEC`/`FEC`/`PEC`), not the "read STAT then read DATA" pattern common on
-  STM32. Clearing the error flag alone does **not** clear `RBNE` (different bits in
-  different registers) — the private `take_error()` helper additionally does a dummy
-  read of `RDATA` on error, purely to reset `RBNE`, or the next receive would spin
-  forever on a stale flag.
+  counterparts, scoped to `Usart<..., Byte>` only (they'd be meaningless on `Word`): the
+  same flag check, but `if !flag { return Err(nb::Error::WouldBlock) }` instead of a
+  busy-wait loop. `Write::flush()` waits on a separate flag, `TC` (transmission complete
+  — the shift register has physically emptied, not the same as `TBE`, which just means
+  "buffer free for the next byte"). No inherent `flush(&self)` was added alongside it —
+  same inherent-vs-trait method-resolution trap already hit in GPIO, so the trait
+  `flush()` is the only entry point.
+- **RX error handling**: uses `embedded_hal_nb::serial::ErrorKind` directly as
+  `ErrorType::Error` — no HAL-specific error enum. `ErrorKind` already covers
+  `Overrun`/`FrameFormat`/`Parity`/`Noise` (plus `Other`) and implements
+  `serial::Error` itself (`kind()` is the identity), so wrapping it in a local type
+  would only have duplicated it. Cleared via a **separate** `USART_INTC` register
+  (write `1` to `OREC`/`NEC`/`FEC`/`PEC`), not the "read STAT then read DATA" pattern
+  common on STM32. Clearing the error flag alone does **not** clear `RBNE` (different
+  bits in different registers) — the private `take_error()` helper additionally does a
+  dummy read of `RDATA` on error, purely to reset `RBNE`, or the next receive would spin
+  forever on a stale flag. (`ErrorKind::FrameFormat`, the error variant, and this
+  module's `FrameFormat`, the config type, share a name by coincidence only — different
+  namespaces, no actual collision.)
 - `release(self) -> (USARTX, TX, RX)` — disables `UEN` then hands back ownership of the
   peripheral and both pins as a plain tuple (no attempt to "return" them into `GpioExt`'s
   `Parts` struct — that's not how the typestate model works; once split out, a pin is
   just a value you hold wherever makes sense in your own code, same as any other HAL in
-  this ecosystem). A fresh `Usart::new()` already does a full `enable`+`reset`, so
-  `release()` doesn't duplicate that.
+  this ecosystem). Generic over `WORD` — works the same for `Byte` and `Word`. A fresh
+  `Usart::new()`/`new_word()` already does a full `enable`+`reset`, so `release()`
+  doesn't duplicate that.
 
 ```rust
 use embedded_hal::digital::OutputPin;
@@ -240,10 +264,13 @@ Flash to `0x08000000`, read the log in a terminal @ 115200 8N1.
       `RxPin`, `BusClocks`), RX error handling (`Overrun`/`Noise`/`Framing`/`Parity`),
       `.release()` — verified on hardware via an echo loop.
 - [x] USART: ×8-oversampling, `USART0SEL` (alternate clock source via `CFGR`/`Clocks`),
-      parity (`Parity::{Even, Odd}` over a 9-bit frame), `UsartConfig` (fluent +
-      `Default`) and named `usart::baud` constants — build-verified, not yet reflashed.
-- [ ] USART: pure 9-bit words without parity (needs a wider type than `u8`), hardware
-      flow control (`CTS`/`RTS`) — both deferred, low priority.
+      `FrameFormat::{N8, E8, O8, E7, O7}` parity/word-length config, `UsartConfig`
+      (fluent + `Default`) and named `usart::baud` constants — build-verified.
+- [x] USART: pure 9-bit words, no parity — `Usart<USARTX, TX, RX, Word>` typestate
+      (`Byte`/`Word` marker, defaulted 4th type parameter), `new_word`/`write_word`/
+      `read_word`; own `Error` enum dropped in favor of
+      `embedded_hal_nb::serial::ErrorKind` directly — build-verified, not yet reflashed.
+- [ ] USART: hardware flow control (`CTS`/`RTS`) — deferred, low priority.
 - [ ] RCU: `HXTAL` clock source (needs an external crystal on the board).
 - [ ] Peripherals: timers / PWM, ADC, SPI, I²C.
 - [ ] Extract the HAL into a standalone library crate.
@@ -377,9 +404,12 @@ PAC (`gd32e2` — прямой доступ к регистрам), а пове�
 - `BusClocks` — ещё один биндинг на уровне типов: `Usart0` тактуется от `pclk2` (APB2),
   `Usart1` — от `pclk1` (APB1); `USARTX::clock(&clocks)` возвращает нужный, так что
   расчёт `baud` не может случайно взять не ту шину.
-- `Usart<USARTX, TX, RX>` владеет периферией и обоими пинами (хранит, не роняет — см.
-  `.release()` ниже). `Usart::new(&mut rcu, usart, tx_pin, rx_pin, clocks, config)`
-  включает такт, сбрасывает периферию, считает `BAUD` и включает `UEN`/`TEN`/`REN`.
+- `Usart<USARTX, TX, RX, WORD = Byte>` владеет периферией и обоими пинами (хранит, не
+  роняет — см. `.release()` ниже). 4-й параметр по умолчанию `Byte`, так что весь код
+  с 3-параметровым `Usart<USARTX, TX, RX>` продолжает компилироваться без правок.
+  `Usart::new(&mut rcu, usart, tx_pin, rx_pin, clocks, config)` включает такт,
+  сбрасывает периферию, считает `BAUD` и включает `UEN`/`TEN`/`REN` (общая логика
+  вынесена в приватную `configure()`, переиспользуется 9-битным конструктором ниже).
   - **`Oversampling::{X16, X8}`** — при ×16 весь 16-битный регистр `BAUD` оказывается
     равен `round(pclk / baud)` напрямую (`intdiv`/`fradiv` — просто его верхние 12 /
     нижние 4 бита). При ×8 формат регистра другой (реально используются только 3 бита
@@ -387,46 +417,70 @@ PAC (`gd32e2` — прямой доступ к регистрам), а пове�
     (`intdiv = w >> 3`, `fradiv8 = w & 0x7`) и собирается заново; `OVSMOD` в `CTL0`
     тоже нужно переключить — иначе периферия продолжит сэмплить по ×16 независимо от
     того, что записано в `BAUD`.
-  - **`Parity::{None, Even, Odd}`** — `Even`/`Odd` сами выставляют `WL=1` (9-битный
-    фрейм), так что бит чётности попадает в 9-й бит, за пределы `u8`; `write_byte`/
-    `read_byte` вообще не пришлось менять — обрезание до `u8` и так его отбрасывает.
-    Чистый 9-битный режим без чётности (где 9-й бит реально несёт данные) — вне
-    скоупа, `u8` для него не хватает.
-  - **`UsartConfig`** объединяет `baud`/`oversampling`/`parity` за fluent-сеттерами и
-    `impl Default` (`115_200`/`X16`/`None`) — по образцу `Config` из референсных HAL,
+  - **`FrameFormat::{N8, E8, O8, E7, O7}`** — единственный источник правды сразу для
+    `WL`/`PCEN`/`PM` (не отдельный `Parity` рядом: два независимых поля за одними и
+    теми же тремя битами регистра рисковали бы разойтись — та же ловушка, что уже
+    обходили с `BusClocks`). `E8`/`O8` выставляют `WL=1` (9-битный фрейм), так что бит
+    чётности попадает в 9-й бит, за пределы `u8` — `write_byte`/`read_byte` вообще не
+    пришлось менять, обрезание до `u8` и так его отбрасывает. `E7`/`O7` используют
+    `WL=0`: чётность замещает бит 7 *внутри* `u8`, реальных данных остаётся только 7,
+    поэтому `received_byte()` маскирует `& 0x7F` на приёме (не на передаче — периферия
+    сама затирает старший бит вычисленной чётностью, что бы там ни было записано).
+    Отдельного «`N7`» не существует — без чётности `WL=0` всегда даёт полные 8 бит,
+    то есть `N8`; потолок в 7 бит появляется только когда чётность откусывает место у
+    данных.
+  - **`UsartConfig`** объединяет `baud`/`oversampling`/`frame_format` за fluent-сеттерами
+    и `impl Default` (`115_200`/`X16`/`N8`) — по образцу `Config` из референсных HAL,
     раз в Rust нет дефолтных аргументов функций. В отличие от полей `CFGR` (`Option<T>`,
     `None` = «не трогать регистр»), поля `UsartConfig` — голые значения: каждый `new()`
-    в любом случае пишет `baud`/`oversampling`/`parity`, «не трогать» тут смысла не имеет.
+    в любом случае пишет все три, «не трогать» тут смысла не имеет.
   - **`usart::baud`** — 15 именованных констант `u32` (`B110`..`B921600`, стандартный
     POSIX-набор), чисто для читаемости. `baud` остался голым `u32`, не `enum`: в
     отличие от `PllFreq`, достижимый диапазон не является маленьким фиксированным
     железом множеством, так что `enum` только запретил бы легитимные нестандартные
     скорости, не защитив ни от чего реально невозможного.
-- `write_byte(&self, byte: u8)`/`read_byte(&self) -> Result<u8, Error>` — busy-wait на
-  `TBE`/`RBNE`, потом запись/чтение `TDATA`/`RDATA`, с проверкой ошибок приёма (см.
+- **Чистый 9-битный режим, без чётности** (`WL=1, PCEN=0`) — `Usart<USARTX, TX, RX,
+  Word>` через `Usart::new_word(&mut rcu, usart, tx_pin, rx_pin, clocks,
+  UsartConfig9::default())` (конфиг без поля `frame_format` — для этого пути там
+  нечего указывать осмысленного), с `write_word(&self, word: u16)`/`read_word(&self)
+  -> Result<u16, ErrorKind>` (маска `& 0x1FF`, 9 значащих бит). `Byte`/`Word` —
+  ZST-маркеры: `write_word`/`read_word` просто не существуют на `Usart<..., Byte>`, а
+  `write_byte`/`read_byte` — на `Usart<..., Word>`; проверено не рассуждением, а
+  живой компиляцией заведомо неверного вызова (`E0599: no method named write_word
+  found`). Выбрано вместо незащищённой пары `u16`-методов на обычном 3-параметровом
+  `Usart` именно потому, что множество форматов слова конечно и известно заранее (как
+  у `PllFreq`), в отличие от `baud`/`pclk` — те рантайм-континуум, маркерным типом их
+  осмысленно не огородить.
+- `write_byte(&self, byte: u8)`/`read_byte(&self) -> Result<u8, ErrorKind>` — busy-wait
+  на `TBE`/`RBNE`, потом запись/чтение `TDATA`/`RDATA`, с проверкой ошибок приёма (см.
   ниже) перед тем как доверять байту.
-- `embedded_hal_nb::serial::{ErrorType, Read<u8>, Write<u8>}` — неблокирующие аналоги:
-  та же проверка флага, но `if !flag { return Err(nb::Error::WouldBlock) }` вместо
-  busy-wait. `Write::flush()` ждёт отдельный флаг `TC` (transmission complete —
-  сдвиговый регистр физически опустел, не то же самое, что `TBE`, который лишь
-  говорит «буфер освободился под следующий байт»). Инхерентный `flush(&self)` рядом
-  НЕ заводили — та же ловушка разрешения инхерентных/трейтовых методов, что уже была
-  в GPIO, так что трейтовый `flush()` остался единственной точкой входа.
-- **Обработка ошибок приёма**: `Error` (`Overrun`/`Noise`/`Framing`/`Parity` — четвёртый
-  флаг, `NERR`, нашёлся в мануале рядом с тремя ожидаемыми, взяли и его) реализует
-  `embedded_hal_nb::serial::Error` для совместимости с портируемыми драйверами.
-  Сбрасывается через **отдельный** регистр `USART_INTC` (запись `1` в `OREC`/`NEC`/
-  `FEC`/`PEC`), не через паттерн «прочитать STAT, потом DATA», как часто бывает на
-  STM32. Сброс флага ошибки сам по себе `RBNE` **не** снимает (разные биты в разных
-  регистрах) — приватный хелпер `take_error()` при ошибке дополнительно делает пустое
-  чтение `RDATA`, чисто ради сброса `RBNE`, иначе следующий приём завис бы на стухшем
-  флаге.
+- `embedded_hal_nb::serial::{ErrorType, Read<u8>, Write<u8>}` — неблокирующие аналоги,
+  сужены до `Usart<..., Byte>` (на `Word` были бы бессмысленны): та же проверка флага,
+  но `if !flag { return Err(nb::Error::WouldBlock) }` вместо busy-wait. `Write::flush()`
+  ждёт отдельный флаг `TC` (transmission complete — сдвиговый регистр физически
+  опустел, не то же самое, что `TBE`, который лишь говорит «буфер освободился под
+  следующий байт»). Инхерентный `flush(&self)` рядом НЕ заводили — та же ловушка
+  разрешения инхерентных/трейтовых методов, что уже была в GPIO, так что трейтовый
+  `flush()` остался единственной точкой входа.
+- **Обработка ошибок приёма**: напрямую `embedded_hal_nb::serial::ErrorKind` как
+  `ErrorType::Error` — без собственного enum ошибок. `ErrorKind` уже покрывает
+  `Overrun`/`FrameFormat`/`Parity`/`Noise` (плюс `Other`) и сам реализует
+  `serial::Error` (`kind()` — тождество), так что обёртка своим типом только бы его
+  задублировала. Сбрасывается через **отдельный** регистр `USART_INTC` (запись `1` в
+  `OREC`/`NEC`/`FEC`/`PEC`), не через паттерн «прочитать STAT, потом DATA», как часто
+  бывает на STM32. Сброс флага ошибки сам по себе `RBNE` **не** снимает (разные биты в
+  разных регистрах) — приватный хелпер `take_error()` при ошибке дополнительно делает
+  пустое чтение `RDATA`, чисто ради сброса `RBNE`, иначе следующий приём завис бы на
+  стухшем флаге. (`ErrorKind::FrameFormat` — вариант чужого enum'а «ошибка кадра» — и
+  наш тип `FrameFormat` — конфигурация формата слова — совпадают по имени чисто
+  случайно, разные namespace'ы, реального пересечения нет.)
 - `release(self) -> (USARTX, TX, RX)` — выключает `UEN` и отдаёт периферию и оба пина
   обратно простым кортежем (без попытки «вернуть» их в `Parts` из `GpioExt` — так
   typestate-модель не работает: once пин вынесен из `Parts`, это просто значение,
   которое ты держишь там, где удобно, как и в любом другом HAL этой экосистемы).
-  Свежий `Usart::new()` и так делает полный `enable`+`reset`, так что `release()` это
-  не дублирует.
+  Generic по `WORD` — одна реализация на `Byte` и `Word`. Свежий
+  `Usart::new()`/`new_word()` и так делает полный `enable`+`reset`, так что `release()`
+  это не дублирует.
 
 ```rust
 use embedded_hal::digital::OutputPin;
@@ -492,11 +546,15 @@ cargo bin            # -> firmware.bin (нужны cargo-binutils + llvm-tools)
       `TxPin`/`RxPin`, `BusClocks`), обработка ошибок приёма (`Overrun`/`Noise`/
       `Framing`/`Parity`), `.release()` — проверено на железе echo-лупом.
 - [x] USART: ×8-oversampling, `USART0SEL` (альтернативный источник такта через
-      `CFGR`/`Clocks`), чётность (`Parity::{Even, Odd}` через 9-битный фрейм),
-      `UsartConfig` (fluent + `Default`) и именованные константы `usart::baud` —
-      проверено сборкой, на железе ещё не перепрошито.
-- [ ] USART: чистый 9-битный режим без чётности (нужен тип шире `u8`), аппаратное
-      управление потоком (`CTS`/`RTS`) — оба отложены, низкий приоритет.
+      `CFGR`/`Clocks`), конфигурация формата слова `FrameFormat::{N8, E8, O8, E7,
+      O7}`, `UsartConfig` (fluent + `Default`) и именованные константы `usart::baud` —
+      проверено сборкой.
+- [x] USART: чистый 9-битный режим без чётности — typestate `Usart<USARTX, TX, RX,
+      Word>` (маркеры `Byte`/`Word`, 4-й параметр типа с дефолтом), `new_word`/
+      `write_word`/`read_word`; собственный `Error` заменён на
+      `embedded_hal_nb::serial::ErrorKind` напрямую — проверено сборкой, на железе
+      ещё не перепрошито.
+- [ ] USART: аппаратное управление потоком (`CTS`/`RTS`) — отложено, низкий приоритет.
 - [ ] RCU: источник `HXTAL` (нужен внешний кварц на плате).
 - [ ] Периферия: таймеры / PWM, ADC, SPI, I²C.
 - [ ] Вынос HAL в отдельный крейт-библиотеку.
