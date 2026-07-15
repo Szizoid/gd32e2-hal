@@ -3,6 +3,8 @@ use gd32e2::gd32e230;
 use crate::time::Hertz;
 
 const IRC8M: u32 = 8_000_000;
+const IRC28M: u32 = 28_000_000;
+const LXTAL: u32 = 32_768;
 const PLL_SRC: u32 = IRC8M / 2;
 
 #[derive(Clone, Copy)]
@@ -60,8 +62,15 @@ pub enum AdcPsc {
     AhbDiv9,
 }
 
+#[derive(Clone, Copy)]
+pub enum Irc28mDiv {
+    Div1,
+    Div2,
+}
+
+#[derive(Clone, Copy)]
 pub enum AdcSel {
-    Irc28m,
+    Irc28m(Irc28mDiv),
     Prescaled(AdcPsc),
 }
 
@@ -72,6 +81,7 @@ pub struct Clocks {
     pclk2: Hertz,
     sysclk: Hertz,
     usart0: Hertz,
+    ck_adc: Hertz,
 }
 
 impl Clocks {
@@ -90,6 +100,9 @@ impl Clocks {
     pub fn usart0(&self) -> Hertz {
         self.usart0
     }
+    pub fn ck_adc(&self) -> Hertz {
+        self.ck_adc
+    }
 }
 
 #[derive(Default)]
@@ -99,6 +112,7 @@ pub struct CFGR {
     pclk2: Option<ApbPsc>,
     sysclk: Option<PllFreq>,
     usart0_sel: Option<Usart0Sel>,
+    adc_sel: Option<AdcSel>,
 }
 
 impl CFGR {
@@ -124,6 +138,10 @@ impl CFGR {
     }
     pub fn usart0_sel(mut self, src: Usart0Sel) -> Self {
         self.usart0_sel = Some(src);
+        self
+    }
+    pub fn adc_sel(mut self, sel: AdcSel) -> Self {
+        self.adc_sel = Some(sel);
         self
     }
 
@@ -172,7 +190,7 @@ impl CFGR {
         let usart0 = match usart0_sel {
             Usart0Sel::Apb2 => pclk2,
             Usart0Sel::Sysclk => sysclk,
-            Usart0Sel::Lxtal => 32_768,
+            Usart0Sel::Lxtal => LXTAL,
             Usart0Sel::Irc8m => IRC8M,
         };
         rcu.rcu.cfg2().modify(|_, w| match usart0_sel {
@@ -181,6 +199,64 @@ impl CFGR {
             Usart0Sel::Lxtal => w.usart0sel().lxtal(),
             Usart0Sel::Irc8m => w.usart0sel().irc8m(),
         });
+
+        // None => ADC clock stays at reset (IRC28M selected but off), 0 Hz.
+        let ck_adc = match self.adc_sel {
+            None => 0,
+            Some(sel) => {
+                match sel {
+                    AdcSel::Irc28m(div) => {
+                        rcu.rcu.ctl1().modify(|_, w| w.irc28men().on());
+                        while rcu.rcu.ctl1().read().irc28mstb().is_not_ready() {}
+                        rcu.rcu.cfg2().modify(|_, w| {
+                            // IRC28MDIV: 1 = direct, 0 = /2
+                            let w = match div {
+                                Irc28mDiv::Div1 => w.irc28mdiv().bit(true),
+                                Irc28mDiv::Div2 => w.irc28mdiv().bit(false),
+                            };
+                            // ADCSEL: 0 = IRC28M, 1 = prescaled
+                            w.adcsel().bit(false)
+                        });
+                    }
+                    AdcSel::Prescaled(psc) => {
+                        // ADCPSC = 3-bit code split CFG0[15:14] + CFG2[31] (like PLLMF+MSB)
+                        rcu.rcu.cfg0().modify(|_, w| match psc {
+                            AdcPsc::Apb2Div2 | AdcPsc::AhbDiv3 => w.adcpsc().div2(),
+                            AdcPsc::Apb2Div4 | AdcPsc::AhbDiv5 => w.adcpsc().div4(),
+                            AdcPsc::Apb2Div6 | AdcPsc::AhbDiv7 => w.adcpsc().div6(),
+                            AdcPsc::Apb2Div8 | AdcPsc::AhbDiv9 => w.adcpsc().div8(),
+                        });
+                        rcu.rcu.cfg2().modify(|_, w| {
+                            let w = match psc {
+                                AdcPsc::Apb2Div2
+                                | AdcPsc::Apb2Div4
+                                | AdcPsc::Apb2Div6
+                                | AdcPsc::Apb2Div8 => w.adcpsc().bit(false),
+                                AdcPsc::AhbDiv3
+                                | AdcPsc::AhbDiv5
+                                | AdcPsc::AhbDiv7
+                                | AdcPsc::AhbDiv9 => w.adcpsc().bit(true),
+                            };
+                            // ADCSEL: 0 = IRC28M, 1 = prescaled
+                            w.adcsel().bit(true)
+                        });
+                    }
+                }
+
+                match sel {
+                    AdcSel::Irc28m(Irc28mDiv::Div1) => IRC28M,
+                    AdcSel::Irc28m(Irc28mDiv::Div2) => IRC28M / 2,
+                    AdcSel::Prescaled(AdcPsc::Apb2Div2) => pclk2 / 2,
+                    AdcSel::Prescaled(AdcPsc::Apb2Div4) => pclk2 / 4,
+                    AdcSel::Prescaled(AdcPsc::Apb2Div6) => pclk2 / 6,
+                    AdcSel::Prescaled(AdcPsc::Apb2Div8) => pclk2 / 8,
+                    AdcSel::Prescaled(AdcPsc::AhbDiv3) => hclk / 3,
+                    AdcSel::Prescaled(AdcPsc::AhbDiv5) => hclk / 5,
+                    AdcSel::Prescaled(AdcPsc::AhbDiv7) => hclk / 7,
+                    AdcSel::Prescaled(AdcPsc::AhbDiv9) => hclk / 9,
+                }
+            }
+        };
 
         fmc.ws().modify(|_, w| match hclk {
             0..=24_000_000 => w.wscnt().ws0(),
@@ -227,6 +303,7 @@ impl CFGR {
             pclk2: Hertz(pclk2),
             sysclk: Hertz(sysclk),
             usart0: Hertz(usart0),
+            ck_adc: Hertz(ck_adc),
         }
     }
 }
@@ -350,4 +427,5 @@ bus! {
     gd32e230::Gpiof => ahben, pfen, ahbrst, pfrst,
     gd32e230::Usart0 => apb2en, usart0en, apb2rst, usart0rst,
     gd32e230::Usart1 => apb1en, usart1en, apb1rst, usart1rst,
+    gd32e230::Adc => apb2en, adcen, apb2rst, adcrst,
 }

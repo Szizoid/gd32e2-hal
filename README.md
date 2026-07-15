@@ -12,8 +12,8 @@ A hardware abstraction layer (HAL) for the **GD32E230K8U6** microcontroller
 
 > ⚠️ **Work in progress.** The HAL is written incrementally and by hand — to
 > genuinely understand both the hardware and Rust's type system. The API is
-> unstable. The package is a library crate (`src/lib.rs` → `gpio`, `rcu`, `time`,
-> `usart` modules) plus a small on-hardware test bench binary (`src/main.rs`); the
+> unstable. The package is a library crate (`src/lib.rs` → `adc`, `gpio`, `rcu`,
+> `time`, `usart` modules) plus a small on-hardware test bench binary (`src/main.rs`); the
 > HAL will later be extracted into a standalone library. `main.rs` has been flashed
 > and verified on real hardware (RCU PLL, GPIO output, USART0 TX+RX echo).
 
@@ -200,6 +200,27 @@ layer is built on top. Principles:
   `Usart::new()`/`new_word()` already does a full `enable`+`reset`, so `release()`
   doesn't duplicate that.
 
+**ADC** (`src/adc.rs`) — 🚧 in progress, only clock setup + calibration so far:
+
+- The `CK_ADC` clock tree lives in `Rcu`/`CFGR`/`Clocks`, not a one-off `Rcu` method
+  like `ck_out` — `adc.rs`'s calibration delay needs the resolved frequency later, the
+  same reasoning that put `USART0SEL` there instead. `AdcSel::{Irc28m(Irc28mDiv),
+  Prescaled(AdcPsc)}` covers both mux branches (`ADCSEL`): the internal 28 MHz
+  oscillator (with its own `÷1`/`÷2`) or a prescaled `CK_APB2`/`CK_AHB` tap
+  (`AdcPsc`, an 8-way split field spread across two registers — the same trick
+  already used for the PLL multiplier). `.adc_sel(...)` is not called by default on
+  purpose: the reset state (`ADCSEL` picks IRC28M, but the oscillator is off) would
+  otherwise silently hang ADC calibration forever — a real gotcha, now fixed and
+  documented, not a hypothetical one.
+- `Adc::new(rcu, adc, clocks)` runs the manual's calibration sequence: `ADCON=1`,
+  a delay of 14 `CK_ADC` cycles (converted to CPU cycles via `clocks.hclk()` /
+  `clocks.ck_adc()` and fed to `cortex_m::asm::delay`, since the core runs on
+  `hclk`, not `CK_ADC`), then `RSTCLB` and `CLB=1` as **separate** register writes
+  (combining them risked a race between the calibration-register reset and the
+  calibration start), followed by a busy-wait on `CLB` clearing.
+- Single-channel blocking conversion (channel selection, sample time, trigger, and
+  reading `RDATA`) is not implemented yet — see the roadmap.
+
 ```rust
 use embedded_hal::digital::OutputPin;
 use gd32e230_hal::gpio::GpioExt;
@@ -271,8 +292,12 @@ Flash to `0x08000000`, read the log in a terminal @ 115200 8N1.
       `read_word`; own `Error` enum dropped in favor of
       `embedded_hal_nb::serial::ErrorKind` directly — build-verified, not yet reflashed.
 - [ ] USART: hardware flow control (`CTS`/`RTS`) — deferred, low priority.
+- [ ] 🚧 ADC: `CK_ADC` clock tree + calibration done (`AdcSel`/`AdcPsc`,
+      `Adc::new()`); single-channel blocking conversion (channel select, sample
+      time, trigger, `RDATA` read) and a `Channel` trait for pin-to-channel mapping
+      are not — in progress, see `CLAUDE.md` for where it was left off.
 - [ ] RCU: `HXTAL` clock source (needs an external crystal on the board).
-- [ ] Peripherals: timers / PWM, ADC, SPI, I²C.
+- [ ] Peripherals: timers / PWM, SPI, I²C.
 - [ ] Extract the HAL into a standalone library crate.
 - [ ] Support for other GD32E230x package/pin-count variants (future, low priority).
 
@@ -292,7 +317,7 @@ Cortex-M23), написанный на Rust с нуля поверх PAC-кре�
 
 > ⚠️ **Работа в процессе.** HAL пишется постепенно и вручную — ради глубокого
 > понимания и железа, и системы типов Rust. API нестабилен. Пакет — это
-> библиотечный крейт (`src/lib.rs` → модули `gpio`, `rcu`, `time`, `usart`) плюс
+> библиотечный крейт (`src/lib.rs` → модули `adc`, `gpio`, `rcu`, `time`, `usart`) плюс
 > небольшой бинарь-стенд для проверки на железе (`src/main.rs`); позже HAL будет
 > вынесен в отдельную библиотеку. `main.rs` уже прошит и проверен на реальном железе
 > (RCU PLL, GPIO output, USART0 TX+RX echo).
@@ -482,6 +507,27 @@ PAC (`gd32e2` — прямой доступ к регистрам), а пове�
   `Usart::new()`/`new_word()` и так делает полный `enable`+`reset`, так что `release()`
   это не дублирует.
 
+**ADC** (`src/adc.rs`) — 🚧 в работе, пока только такт + калибровка:
+
+- Дерево такта `CK_ADC` живёт в `Rcu`/`CFGR`/`Clocks`, а не в разовом методе `Rcu`,
+  как `ck_out` — задержке в `adc.rs` частота нужна позже, та же логика, что раньше
+  завела туда `USART0SEL`. `AdcSel::{Irc28m(Irc28mDiv), Prescaled(AdcPsc)}` покрывает
+  обе ветки мультиплексора (`ADCSEL`): внутренний генератор `28МГц` (со своим `÷1`/
+  `÷2`) или prescaled-отвод от `CK_APB2`/`CK_AHB` (`AdcPsc` — 8-вариантное
+  split-поле на двух регистрах, тот же приём, что уже был у множителя PLL).
+  `.adc_sel(...)` намеренно не вызывается по умолчанию: дефолт после сброса
+  (`ADCSEL` смотрит на `IRC28M`, но сам генератор выключен) иначе тихо подвесил бы
+  калибровку АЦП навсегда — реальная, не выдуманная грабля, теперь исправлена и
+  задокументирована.
+- `Adc::new(rcu, adc, clocks)` выполняет процедуру калибровки из мануала: `ADCON=1`,
+  задержка 14 тактов `CK_ADC` (пересчитана в такты ядра через `clocks.hclk()` /
+  `clocks.ck_adc()` и передана в `cortex_m::asm::delay` — ядро тактуется от `hclk`,
+  не от `CK_ADC`), затем `RSTCLB` и `CLB=1` **отдельными** записями (совмещение в
+  одну рисковало гонкой между сбросом калибровочных регистров и стартом
+  калибровки), и busy-wait на сброс `CLB`.
+- Одиночное блокирующее преобразование (выбор канала, время сэмплирования,
+  триггер, чтение `RDATA`) ещё не реализовано — см. roadmap.
+
 ```rust
 use embedded_hal::digital::OutputPin;
 use gd32e230_hal::gpio::GpioExt;
@@ -555,8 +601,12 @@ cargo bin            # -> firmware.bin (нужны cargo-binutils + llvm-tools)
       `embedded_hal_nb::serial::ErrorKind` напрямую — проверено сборкой, на железе
       ещё не перепрошито.
 - [ ] USART: аппаратное управление потоком (`CTS`/`RTS`) — отложено, низкий приоритет.
+- [ ] 🚧 ADC: дерево такта `CK_ADC` + калибровка готовы (`AdcSel`/`AdcPsc`,
+      `Adc::new()`); одиночное блокирующее преобразование (выбор канала, время
+      сэмплирования, триггер, чтение `RDATA`) и трейт `Channel` под карту
+      пин↔канал — ещё нет, в работе, где остановились — см. `CLAUDE.md`.
 - [ ] RCU: источник `HXTAL` (нужен внешний кварц на плате).
-- [ ] Периферия: таймеры / PWM, ADC, SPI, I²C.
+- [ ] Периферия: таймеры / PWM, SPI, I²C.
 - [ ] Вынос HAL в отдельный крейт-библиотеку.
 - [ ] Поддержка других вариантов корпуса/пинаута GD32E230x (будущее, низкий приоритет).
 
