@@ -54,6 +54,7 @@ pub struct Clocks {
     pclk1: Hertz,
     pclk2: Hertz,
     sysclk: Hertz,
+    usart0: Hertz,
 }
 
 impl Clocks {
@@ -69,6 +70,9 @@ impl Clocks {
     pub fn sysclk(&self) -> Hertz {
         self.sysclk
     }
+    pub fn usart0(&self) -> Hertz {
+        self.usart0
+    }
 }
 
 #[derive(Default)]
@@ -77,6 +81,7 @@ pub struct CFGR {
     pclk1: Option<ApbPrescaler>,
     pclk2: Option<ApbPrescaler>,
     sysclk: Option<PllFreq>,
+    usart0_sel: Option<Usart0Sel>,
 }
 
 impl CFGR {
@@ -98,6 +103,10 @@ impl CFGR {
     }
     pub fn sysclk(mut self, freq: PllFreq) -> Self {
         self.sysclk = Some(freq);
+        self
+    }
+    pub fn usart0_sel(mut self, src: Usart0Sel) -> Self {
+        self.usart0_sel = Some(src);
         self
     }
 
@@ -141,6 +150,20 @@ impl CFGR {
         let pclk1 = hclk / (apb1_presc as u32);
         let apb2_presc = self.pclk2.unwrap_or(ApbPrescaler::Div1);
         let pclk2 = hclk / (apb2_presc as u32);
+
+        let usart0_sel = self.usart0_sel.unwrap_or(Usart0Sel::Apb2);
+        let usart0 = match usart0_sel {
+            Usart0Sel::Apb2 => pclk2,
+            Usart0Sel::Sysclk => sysclk,
+            Usart0Sel::Lxtal => 32_768,
+            Usart0Sel::Irc8m => IRC8M,
+        };
+        rcu.rcu.cfg2().modify(|_, w| match usart0_sel {
+            Usart0Sel::Apb2 => w.usart0sel().apb2(),
+            Usart0Sel::Sysclk => w.usart0sel().sys(),
+            Usart0Sel::Lxtal => w.usart0sel().lxtal(),
+            Usart0Sel::Irc8m => w.usart0sel().irc8m(),
+        });
 
         fmc.ws().modify(|_, w| match hclk {
             0..=24_000_000 => w.wscnt().ws0(),
@@ -186,6 +209,7 @@ impl CFGR {
             pclk1: Hertz(pclk1),
             pclk2: Hertz(pclk2),
             sysclk: Hertz(sysclk),
+            usart0: Hertz(usart0),
         }
     }
 }
@@ -215,6 +239,14 @@ pub enum CkOutDiv {
     Div32,
     Div64,
     Div128,
+}
+
+#[derive(Clone, Copy)]
+pub enum Usart0Sel {
+    Apb2,
+    Sysclk,
+    Lxtal,
+    Irc8m,
 }
 
 pub struct Rcu {

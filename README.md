@@ -101,6 +101,14 @@ layer is built on top. Principles:
   `Lsi40k` / `Lxtal` / `Sysclk` / `Irc8m` / `Hxtal` / `Pll(PllDiv)` — the PLL branch's own
   pre-mux divider is carried inside the enum variant, so it can't be set for any other
   source); `CkOutDiv` is the post-mux `1..128` divider that applies to every source.
+- `Usart0Sel` (`CFGR.usart0_sel`, part of the same `CFGR`/`freeze()`/`Clocks` flow, not a
+  one-off `Rcu` method like `ck_out` — the choice has to be *remembered* for `usart.rs`'s
+  baud-rate math, not just fired once) lets `USART0` run off `CK_SYS`/`CK_LXTAL`/`CK_IRC8M`
+  instead of `pclk2`; the resolved frequency lands in `Clocks::usart0()`, which
+  `usart.rs`'s `BusClocks` impl reads instead of hardcoding `pclk2`. `Lxtal` is exposed
+  even though this board has no 32.768 kHz crystal — selecting it without starting
+  `LXTAL` elsewhere hangs USART0's TX/RX forever; the HAL can't know what's soldered on a
+  given board, so that footgun is left to the caller on purpose.
 
 **USART** (`src/usart.rs`) — blocking + non-blocking TX/RX, minimal scope done:
 
@@ -117,14 +125,31 @@ layer is built on top. Principles:
   off `pclk1` (APB1); `USARTX::clock(&clocks)` returns the right one, so the baud-rate
   calculation can't accidentally use the wrong bus frequency.
 - `Usart<USARTX, TX, RX>` owns the peripheral and both pins (kept, not dropped — see
-  `.release()` below). `Usart::new(&mut rcu, usart, tx_pin, rx_pin, baud, clocks)`
-  enables the clock, resets the peripheral, computes the `BAUD` register — the whole
-  16-bit register turns out to equal `round(pclk / baud)` directly (`intdiv`/`fradiv`
-  are just its upper 12 / lower 4 bits), so no separate mantissa/fraction math is
-  needed — and turns on `UEN`/`TEN`/`REN`. Oversampling×16 only for now (the reset
-  default); ×8 and `USART0SEL` (alternate clock source) are deliberately out of scope
-  (both would need real register-format verification against the manual, not a quick
-  add — see the roadmap).
+  `.release()` below). `Usart::new(&mut rcu, usart, tx_pin, rx_pin, clocks, config)`
+  enables the clock, resets the peripheral, computes `BAUD`, and turns on
+  `UEN`/`TEN`/`REN`.
+  - **`Oversampling::{X16, X8}`** — at ×16 the whole 16-bit `BAUD` register turns out to
+    equal `round(pclk / baud)` directly (`intdiv`/`fradiv` are just its upper 12 / lower
+    4 bits). At ×8 the register format changes (only 3 fraction bits are usable,
+    `BRR[3]` must stay `0`), so the value is split (`intdiv = w >> 3`, `fradiv8 = w &
+    0x7`) and reassembled; `OVSMOD` in `CTL0` has to flip too, or the peripheral keeps
+    sampling at ×16 regardless of what `BAUD` says.
+  - **`Parity::{None, Even, Odd}`** — `Even`/`Odd` set `WL=1` (9-bit frame) internally so
+    the parity bit lands in bit 8, outside the `u8` range; `write_byte`/`read_byte`
+    didn't need to change at all, since truncating to `u8` already discards it. A pure
+    9-bit word without parity (where the 9th bit actually carries data) is out of scope —
+    `u8` can't hold it.
+  - **`UsartConfig`** bundles `baud`/`oversampling`/`parity` behind fluent setters and
+    `impl Default` (`115_200`/`X16`/`None`), matching the reference HALs' `Config`
+    pattern — Rust has no default function arguments. Unlike `CFGR`'s `Option<T>` fields
+    (`None` = "leave the register alone"), `UsartConfig`'s fields are bare values: every
+    `new()` writes `baud`/`oversampling`/`parity` regardless, so "don't touch" isn't
+    meaningful here.
+  - **`usart::baud`** — 15 named `u32` constants (`B110`..`B921600`, the standard POSIX
+    set), purely for readability. `baud` stays a plain `u32`, not an enum: unlike
+    `PllFreq`, the achievable range isn't a small hardware-fixed set, so an enum would
+    only block legitimate non-standard rates without preventing anything actually
+    impossible.
 - `write_byte(&self, byte: u8)` / `read_byte(&self) -> Result<u8, Error>` — busy-wait
   on `TBE`/`RBNE` then hit `TDATA`/`RDATA`, checking for RX errors (see below) before
   trusting the byte.
@@ -155,7 +180,7 @@ layer is built on top. Principles:
 use embedded_hal::digital::OutputPin;
 use gd32e230_hal::gpio::GpioExt;
 use gd32e230_hal::rcu::{RcuExt, CFGR, PllFreq};
-use gd32e230_hal::usart::Usart;
+use gd32e230_hal::usart::{Usart, UsartConfig};
 
 let mut dp = gd32e230::Peripherals::take().unwrap();
 let mut rcu = dp.rcu.constrain();
@@ -168,7 +193,7 @@ led.set_high().unwrap();
 
 let tx_pin = parts.pa9.into_alternate::<1>();    // USART0_TX; ::<3>() would not compile
 let rx_pin = parts.pa10.into_alternate::<1>();   // USART0_RX
-let usart0 = Usart::new(&mut rcu, dp.usart0, tx_pin, rx_pin, 115_200, clocks);
+let usart0 = Usart::new(&mut rcu, dp.usart0, tx_pin, rx_pin, clocks, UsartConfig::default());
 if let Ok(byte) = usart0.read_byte() {
     usart0.write_byte(byte);                      // verified on hardware: echoes back
 }
@@ -214,8 +239,11 @@ Flash to `0x08000000`, read the log in a terminal @ 115200 8N1.
 - [x] USART: blocking + `embedded-hal-nb` TX/RX (`Usart<USARTX, TX, RX>`, `TxPin`/
       `RxPin`, `BusClocks`), RX error handling (`Overrun`/`Noise`/`Framing`/`Parity`),
       `.release()` — verified on hardware via an echo loop.
-- [ ] USART: ×8-oversampling, `USART0SEL` (alternate clock source) — both need real
-      register-format verification, deliberately deferred (low priority).
+- [x] USART: ×8-oversampling, `USART0SEL` (alternate clock source via `CFGR`/`Clocks`),
+      parity (`Parity::{Even, Odd}` over a 9-bit frame), `UsartConfig` (fluent +
+      `Default`) and named `usart::baud` constants — build-verified, not yet reflashed.
+- [ ] USART: pure 9-bit words without parity (needs a wider type than `u8`), hardware
+      flow control (`CTS`/`RTS`) — both deferred, low priority.
 - [ ] RCU: `HXTAL` clock source (needs an external crystal on the board).
 - [ ] Peripherals: timers / PWM, ADC, SPI, I²C.
 - [ ] Extract the HAL into a standalone library crate.
@@ -326,6 +354,14 @@ PAC (`gd32e2` — прямой доступ к регистрам), а пове�
   `Pll(PllDiv)` — собственный делитель ветки PLL до мультиплексора приклеен внутрь варианта
   enum'а, так что его нельзя выставить для любого другого источника); `CkOutDiv` — общий
   делитель `1..128` после мультиплексора, действует на любой источник.
+- `Usart0Sel` (`CFGR.usart0_sel`, часть того же потока `CFGR`/`freeze()`/`Clocks`, а не
+  разовый метод на `Rcu`, как `ck_out` — выбор нужно *запомнить* для расчёта `baud` в
+  `usart.rs`, а не просто применить один раз) позволяет тактовать `USART0` от `CK_SYS`/
+  `CK_LXTAL`/`CK_IRC8M` вместо `pclk2`; получившаяся частота оседает в `Clocks::usart0()`,
+  который читает `BusClocks`-реализация в `usart.rs` вместо жёсткого `pclk2`. `Lxtal`
+  доступен в API, хотя на этой плате нет кварца `32.768 кГц` — выбор `Lxtal` без запуска
+  `LXTAL` где-то ещё навсегда подвесит TX/RX USART0; HAL не может знать, что разведено на
+  конкретной плате, поэтому эта опасность сознательно оставлена на совести вызывающего.
 
 **USART** (`src/usart.rs`) — блокирующий + неблокирующий TX/RX, минимальный скоуп готов:
 
@@ -342,13 +378,30 @@ PAC (`gd32e2` — прямой доступ к регистрам), а пове�
   `Usart1` — от `pclk1` (APB1); `USARTX::clock(&clocks)` возвращает нужный, так что
   расчёт `baud` не может случайно взять не ту шину.
 - `Usart<USARTX, TX, RX>` владеет периферией и обоими пинами (хранит, не роняет — см.
-  `.release()` ниже). `Usart::new(&mut rcu, usart, tx_pin, rx_pin, baud, clocks)`
-  включает такт, сбрасывает периферию, считает регистр `BAUD` — весь 16-битный регистр
-  оказывается равен `round(pclk / baud)` напрямую (`intdiv`/`fradiv` — это просто его
-  верхние 12 / нижние 4 бита), отдельная арифметика мантиссы/дроби не нужна — и
-  включает `UEN`/`TEN`/`REN`. Пока только oversampling×16 (дефолт после сброса); ×8 и
-  `USART0SEL` (альтернативный источник такта) осознанно вне скоупа — оба требуют
-  отдельной сверки формата регистров по мануалу, не быстрая добавка (см. roadmap).
+  `.release()` ниже). `Usart::new(&mut rcu, usart, tx_pin, rx_pin, clocks, config)`
+  включает такт, сбрасывает периферию, считает `BAUD` и включает `UEN`/`TEN`/`REN`.
+  - **`Oversampling::{X16, X8}`** — при ×16 весь 16-битный регистр `BAUD` оказывается
+    равен `round(pclk / baud)` напрямую (`intdiv`/`fradiv` — просто его верхние 12 /
+    нижние 4 бита). При ×8 формат регистра другой (реально используются только 3 бита
+    дробной части, `BRR[3]` обязан быть `0`), поэтому значение раскладывается
+    (`intdiv = w >> 3`, `fradiv8 = w & 0x7`) и собирается заново; `OVSMOD` в `CTL0`
+    тоже нужно переключить — иначе периферия продолжит сэмплить по ×16 независимо от
+    того, что записано в `BAUD`.
+  - **`Parity::{None, Even, Odd}`** — `Even`/`Odd` сами выставляют `WL=1` (9-битный
+    фрейм), так что бит чётности попадает в 9-й бит, за пределы `u8`; `write_byte`/
+    `read_byte` вообще не пришлось менять — обрезание до `u8` и так его отбрасывает.
+    Чистый 9-битный режим без чётности (где 9-й бит реально несёт данные) — вне
+    скоупа, `u8` для него не хватает.
+  - **`UsartConfig`** объединяет `baud`/`oversampling`/`parity` за fluent-сеттерами и
+    `impl Default` (`115_200`/`X16`/`None`) — по образцу `Config` из референсных HAL,
+    раз в Rust нет дефолтных аргументов функций. В отличие от полей `CFGR` (`Option<T>`,
+    `None` = «не трогать регистр»), поля `UsartConfig` — голые значения: каждый `new()`
+    в любом случае пишет `baud`/`oversampling`/`parity`, «не трогать» тут смысла не имеет.
+  - **`usart::baud`** — 15 именованных констант `u32` (`B110`..`B921600`, стандартный
+    POSIX-набор), чисто для читаемости. `baud` остался голым `u32`, не `enum`: в
+    отличие от `PllFreq`, достижимый диапазон не является маленьким фиксированным
+    железом множеством, так что `enum` только запретил бы легитимные нестандартные
+    скорости, не защитив ни от чего реально невозможного.
 - `write_byte(&self, byte: u8)`/`read_byte(&self) -> Result<u8, Error>` — busy-wait на
   `TBE`/`RBNE`, потом запись/чтение `TDATA`/`RDATA`, с проверкой ошибок приёма (см.
   ниже) перед тем как доверять байту.
@@ -379,7 +432,7 @@ PAC (`gd32e2` — прямой доступ к регистрам), а пове�
 use embedded_hal::digital::OutputPin;
 use gd32e230_hal::gpio::GpioExt;
 use gd32e230_hal::rcu::{RcuExt, CFGR, PllFreq};
-use gd32e230_hal::usart::Usart;
+use gd32e230_hal::usart::{Usart, UsartConfig};
 
 let mut dp = gd32e230::Peripherals::take().unwrap();
 let mut rcu = dp.rcu.constrain();
@@ -392,7 +445,7 @@ led.set_high().unwrap();
 
 let tx_pin = parts.pa9.into_alternate::<1>();    // USART0_TX; ::<3>() не скомпилируется
 let rx_pin = parts.pa10.into_alternate::<1>();   // USART0_RX
-let usart0 = Usart::new(&mut rcu, dp.usart0, tx_pin, rx_pin, 115_200, clocks);
+let usart0 = Usart::new(&mut rcu, dp.usart0, tx_pin, rx_pin, clocks, UsartConfig::default());
 if let Ok(byte) = usart0.read_byte() {
     usart0.write_byte(byte);                      // проверено на железе: приходит эхом
 }
@@ -438,8 +491,12 @@ cargo bin            # -> firmware.bin (нужны cargo-binutils + llvm-tools)
 - [x] USART: блокирующий + `embedded-hal-nb` TX/RX (`Usart<USARTX, TX, RX>`,
       `TxPin`/`RxPin`, `BusClocks`), обработка ошибок приёма (`Overrun`/`Noise`/
       `Framing`/`Parity`), `.release()` — проверено на железе echo-лупом.
-- [ ] USART: ×8-oversampling, `USART0SEL` (альтернативный источник такта) — оба
-      требуют отдельной сверки формата регистров, осознанно отложены (низкий приоритет).
+- [x] USART: ×8-oversampling, `USART0SEL` (альтернативный источник такта через
+      `CFGR`/`Clocks`), чётность (`Parity::{Even, Odd}` через 9-битный фрейм),
+      `UsartConfig` (fluent + `Default`) и именованные константы `usart::baud` —
+      проверено сборкой, на железе ещё не перепрошито.
+- [ ] USART: чистый 9-битный режим без чётности (нужен тип шире `u8`), аппаратное
+      управление потоком (`CTS`/`RTS`) — оба отложены, низкий приоритет.
 - [ ] RCU: источник `HXTAL` (нужен внешний кварц на плате).
 - [ ] Периферия: таймеры / PWM, ADC, SPI, I²C.
 - [ ] Вынос HAL в отдельный крейт-библиотеку.

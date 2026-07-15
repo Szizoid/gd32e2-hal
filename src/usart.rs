@@ -35,13 +35,73 @@ pub trait BusClocks {
 
 impl BusClocks for gd32e230::Usart0 {
     fn clock(clocks: &Clocks) -> Hertz {
-        clocks.pclk2()
+        clocks.usart0()
     }
 }
 
 impl BusClocks for gd32e230::Usart1 {
     fn clock(clocks: &Clocks) -> Hertz {
         clocks.pclk1()
+    }
+}
+
+pub mod baud {
+    pub const B110: u32 = 110;
+    pub const B300: u32 = 300;
+    pub const B600: u32 = 600;
+    pub const B1200: u32 = 1_200;
+    pub const B2400: u32 = 2_400;
+    pub const B4800: u32 = 4_800;
+    pub const B9600: u32 = 9_600;
+    pub const B14400: u32 = 14_400;
+    pub const B19200: u32 = 19_200;
+    pub const B38400: u32 = 38_400;
+    pub const B57600: u32 = 57_600;
+    pub const B115200: u32 = 115_200;
+    pub const B230400: u32 = 230_400;
+    pub const B460800: u32 = 460_800;
+    pub const B921600: u32 = 921_600;
+}
+
+pub enum Oversampling {
+    X8,
+    X16,
+}
+
+pub enum Parity {
+    None,
+    Even,
+    Odd,
+}
+
+pub struct UsartConfig {
+    baud: u32,
+    oversampling: Oversampling,
+    parity: Parity,
+}
+
+impl UsartConfig {
+    pub fn baud(mut self, baud: u32) -> Self {
+        self.baud = baud;
+        self
+    }
+    pub fn oversampling(mut self, oversampling: Oversampling) -> Self {
+        self.oversampling = oversampling;
+        self
+    }
+    pub fn parity(mut self, parity: Parity) -> Self {
+        self.parity = parity;
+        self
+    }
+}
+
+impl Default for UsartConfig {
+    fn default() -> Self {
+        Self {
+            baud: baud::B115200,
+            oversampling: Oversampling::X16,
+            parity: Parity::None,
+        }
     }
 }
 
@@ -111,17 +171,36 @@ where
         usart: USARTX,
         tx_pin: TX,
         rx_pin: RX,
-        baud: u32,
         clocks: Clocks,
+        config: UsartConfig,
     ) -> Self {
         USARTX::enable(rcu);
         USARTX::reset(rcu);
-        usart
-            .baud()
-            .write(|w| unsafe { w.bits((USARTX::clock(&clocks).0 + baud / 2) / baud) });
-        usart
-            .ctl0()
-            .modify(|_, w| w.uen().enabled().ten().enabled().ren().enabled());
+        let pclk = USARTX::clock(&clocks).0;
+        let usartdiv = (pclk + config.baud / 2) / config.baud;
+        usart.baud().write(|w| unsafe {
+            match config.oversampling {
+                Oversampling::X16 => w.bits(usartdiv),
+                Oversampling::X8 => {
+                    let intdiv = usartdiv / 8;
+                    let fradiv_8 = usartdiv % 8;
+                    w.bits((intdiv << 4) | (fradiv_8 & 0x7))
+                }
+            }
+        });
+
+        usart.ctl0().modify(|_, w| {
+            let w = w.uen().enabled().ten().enabled().ren().enabled();
+            let w = match config.oversampling {
+                Oversampling::X16 => w.ovsmod().oversampling16(),
+                Oversampling::X8 => w.ovsmod().oversampling8(),
+            };
+            match config.parity {
+                Parity::None => w.pcen().disabled().wl().bit8(),
+                Parity::Even => w.pcen().enabled().pm().even().wl().bit9(),
+                Parity::Odd => w.pcen().enabled().pm().odd().wl().bit9(),
+            }
+        });
         Self {
             usart,
             tx_pin,
