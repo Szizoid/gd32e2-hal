@@ -179,7 +179,7 @@ if let Ok(byte) = usart0.read_byte() {
 - **PAC-only base, no third-party HAL.**
 - **No debug probe** — flashing only via the UART bootloader (GD32 All-In-One
   Programmer); all output over USART0 (115200 8N1). No RTT / `defmt` / semihosting.
-- Target `thumbv8m.base-none-eabi`, flash 48K / RAM 8K.
+- Target `thumbv8m.base-none-eabi`, flash 64K / RAM 8K.
 
 ### Building
 
@@ -403,7 +403,7 @@ if let Ok(byte) = usart0.read_byte() {
 - **PAC-only база, без сторонних HAL.**
 - **Нет отладочного зонда** — прошивка только через UART-бутлоадер (GD32 All-In-One
   Programmer), вывод через USART0 (115200 8N1). Никаких RTT / `defmt` / semihosting.
-- Target `thumbv8m.base-none-eabi`, флеш 48K / ОЗУ 8K.
+- Target `thumbv8m.base-none-eabi`, флеш 64K / ОЗУ 8K.
 
 ### Сборка
 
