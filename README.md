@@ -83,7 +83,7 @@ layer is built on top. Principles:
 - System clock tree: a `CFGR` builder (`CFGR::default()`) configures `sysclk` / `hclk` /
   `pclk1` / `pclk2`, and `.freeze(&mut rcu, &mut dp.fmc)` writes the registers and returns a
   frozen `Clocks` (the actual resulting frequencies). PLL from IRC8M is supported
-  (`PllFreq`, 8–72 MHz in 4 MHz steps); bus prescalers use `AhbPrescaler` / `ApbPrescaler`.
+  (`PllFreq`, 8–72 MHz in 4 MHz steps); bus prescalers use `AhbPsc` / `ApbPsc`.
   All three are **enums, not raw `u32`** — an unreachable frequency or divider simply can't
   be requested, it's a compile error rather than a silently-rounded value. Flash wait states
   (`FMC.ws().wscnt`) are set from the resulting `hclk` *before* switching the system clock
@@ -255,7 +255,7 @@ Flash to `0x08000000`, read the log in a terminal @ 115200 8N1.
 - [x] Port F (`PF0`/`PF1`); port C skipped (not bonded on this package).
 - [x] `Debugger` typestate for `PA13`/`PA14` (SWD pins), gated by a marker trait.
 - [x] RCU: clock tree — PLL from IRC8M, AHB/APB prescalers, flash wait states, typed
-      `CFGR` API (`PllFreq` / `AhbPrescaler` / `ApbPrescaler` enums, not raw `u32`).
+      `CFGR` API (`PllFreq` / `AhbPsc` / `ApbPsc` enums, not raw `u32`).
 - [x] RCU: `Reset` trait for peripherals (`AHBRST`/`APB1RST`/`APB2RST`).
 - [x] Typed frequencies (`src/time.rs`, `Hertz` and friends) integrated into `Clocks`.
 - [x] RCU: `CK_OUT` (internal clock signal on `PA8`/`PA9`).
@@ -363,7 +363,7 @@ PAC (`gd32e2` — прямой доступ к регистрам), а пове�
 - Дерево тактов: билдер `CFGR` (`CFGR::default()`) настраивает `sysclk`/`hclk`/`pclk1`/
   `pclk2`, а `.freeze(&mut rcu, &mut dp.fmc)` пишет регистры и возвращает замороженный
   `Clocks` (реальные получившиеся частоты). PLL от IRC8M поддержан (`PllFreq`, `8–72 МГц`
-  с шагом `4 МГц`); прескейлеры шин — через `AhbPrescaler`/`ApbPrescaler`. Все три —
+  с шагом `4 МГц`); прескейлеры шин — через `AhbPsc`/`ApbPsc`. Все три —
   **энумы, а не голый `u32`** — недостижимую частоту/делитель просто нельзя запросить, это
   ошибка компиляции, а не тихое округление. Wait state'ы flash (`FMC.ws().wscnt`)
   выставляются от получившегося `hclk` ДО переключения источника системного такта. `HXTAL`
@@ -537,7 +537,7 @@ cargo bin            # -> firmware.bin (нужны cargo-binutils + llvm-tools)
 - [x] Порт F (`PF0`/`PF1`); порт C пропущен (не разведён на этом корпусе).
 - [x] Typestate `Debugger` для `PA13`/`PA14` (ноги SWD), гейт через трейт-маркер.
 - [x] RCU: дерево тактов — PLL от IRC8M, прескейлеры AHB/APB, flash wait states,
-      типизированный API `CFGR` (энумы `PllFreq`/`AhbPrescaler`/`ApbPrescaler`, не голый `u32`).
+      типизированный API `CFGR` (энумы `PllFreq`/`AhbPsc`/`ApbPsc`, не голый `u32`).
 - [x] RCU: трейт `Reset` для периферии (`AHBRST`/`APB1RST`/`APB2RST`).
 - [x] Типизированные частоты (`src/time.rs`, `Hertz` и семейство) интегрированы в `Clocks`.
 - [x] RCU: `CK_OUT` (вывод внутреннего тактового сигнала на `PA8`/`PA9`).

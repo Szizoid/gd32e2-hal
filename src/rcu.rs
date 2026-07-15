@@ -27,7 +27,7 @@ pub enum PllFreq {
 }
 
 #[derive(Clone, Copy)]
-pub enum AhbPrescaler {
+pub enum AhbPsc {
     Div1 = 1,
     Div2 = 2,
     Div4 = 4,
@@ -40,12 +40,29 @@ pub enum AhbPrescaler {
 }
 
 #[derive(Clone, Copy)]
-pub enum ApbPrescaler {
+pub enum ApbPsc {
     Div1 = 1,
     Div2 = 2,
     Div4 = 4,
     Div8 = 8,
     Div16 = 16,
+}
+
+#[derive(Clone, Copy)]
+pub enum AdcPsc {
+    Apb2Div2,
+    Apb2Div4,
+    Apb2Div6,
+    Apb2Div8,
+    AhbDiv3,
+    AhbDiv5,
+    AhbDiv7,
+    AhbDiv9,
+}
+
+pub enum AdcSel {
+    Irc28m,
+    Prescaled(AdcPsc),
 }
 
 #[derive(Clone, Copy)]
@@ -77,28 +94,28 @@ impl Clocks {
 
 #[derive(Default)]
 pub struct CFGR {
-    hclk: Option<AhbPrescaler>,
-    pclk1: Option<ApbPrescaler>,
-    pclk2: Option<ApbPrescaler>,
+    hclk: Option<AhbPsc>,
+    pclk1: Option<ApbPsc>,
+    pclk2: Option<ApbPsc>,
     sysclk: Option<PllFreq>,
     usart0_sel: Option<Usart0Sel>,
 }
 
 impl CFGR {
-    fn pll_multiplier(desired: PllFreq) -> u32 {
+    fn pll_mul(desired: PllFreq) -> u32 {
         (desired as u32) / PLL_SRC
     }
 
-    pub fn hclk(mut self, prescaler: AhbPrescaler) -> Self {
-        self.hclk = Some(prescaler);
+    pub fn hclk(mut self, psc: AhbPsc) -> Self {
+        self.hclk = Some(psc);
         self
     }
-    pub fn pclk1(mut self, prescaler: ApbPrescaler) -> Self {
-        self.pclk1 = Some(prescaler);
+    pub fn pclk1(mut self, psc: ApbPsc) -> Self {
+        self.pclk1 = Some(psc);
         self
     }
-    pub fn pclk2(mut self, prescaler: ApbPrescaler) -> Self {
-        self.pclk2 = Some(prescaler);
+    pub fn pclk2(mut self, psc: ApbPsc) -> Self {
+        self.pclk2 = Some(psc);
         self
     }
     pub fn sysclk(mut self, freq: PllFreq) -> Self {
@@ -114,10 +131,10 @@ impl CFGR {
         let sysclk = match self.sysclk {
             None => IRC8M,
             Some(desired) => {
-                let mult = Self::pll_multiplier(desired);
+                let mul = Self::pll_mul(desired);
                 rcu.rcu.cfg0().modify(|_, w| {
                     let w = w.pllsel().irc8m_2();
-                    match mult {
+                    match mul {
                         2 => w.pllmf().mul2().pllmf_msb().none(),
                         3 => w.pllmf().mul3().pllmf_msb().none(),
                         4 => w.pllmf().mul4().pllmf_msb().none(),
@@ -144,12 +161,12 @@ impl CFGR {
             }
         };
 
-        let ahb_presc = self.hclk.unwrap_or(AhbPrescaler::Div1);
-        let hclk = sysclk / (ahb_presc as u32);
-        let apb1_presc = self.pclk1.unwrap_or(ApbPrescaler::Div1);
-        let pclk1 = hclk / (apb1_presc as u32);
-        let apb2_presc = self.pclk2.unwrap_or(ApbPrescaler::Div1);
-        let pclk2 = hclk / (apb2_presc as u32);
+        let ahb_psc = self.hclk.unwrap_or(AhbPsc::Div1);
+        let hclk = sysclk / (ahb_psc as u32);
+        let apb1_psc = self.pclk1.unwrap_or(ApbPsc::Div1);
+        let pclk1 = hclk / (apb1_psc as u32);
+        let apb2_psc = self.pclk2.unwrap_or(ApbPsc::Div1);
+        let pclk2 = hclk / (apb2_psc as u32);
 
         let usart0_sel = self.usart0_sel.unwrap_or(Usart0Sel::Apb2);
         let usart0 = match usart0_sel {
@@ -173,30 +190,30 @@ impl CFGR {
         });
 
         rcu.rcu.cfg0().modify(|_, w| {
-            let w = match ahb_presc {
-                AhbPrescaler::Div1 => w.ahbpsc().div1(),
-                AhbPrescaler::Div2 => w.ahbpsc().div2(),
-                AhbPrescaler::Div4 => w.ahbpsc().div4(),
-                AhbPrescaler::Div8 => w.ahbpsc().div8(),
-                AhbPrescaler::Div16 => w.ahbpsc().div16(),
-                AhbPrescaler::Div64 => w.ahbpsc().div64(),
-                AhbPrescaler::Div128 => w.ahbpsc().div128(),
-                AhbPrescaler::Div256 => w.ahbpsc().div256(),
-                AhbPrescaler::Div512 => w.ahbpsc().div512(),
+            let w = match ahb_psc {
+                AhbPsc::Div1 => w.ahbpsc().div1(),
+                AhbPsc::Div2 => w.ahbpsc().div2(),
+                AhbPsc::Div4 => w.ahbpsc().div4(),
+                AhbPsc::Div8 => w.ahbpsc().div8(),
+                AhbPsc::Div16 => w.ahbpsc().div16(),
+                AhbPsc::Div64 => w.ahbpsc().div64(),
+                AhbPsc::Div128 => w.ahbpsc().div128(),
+                AhbPsc::Div256 => w.ahbpsc().div256(),
+                AhbPsc::Div512 => w.ahbpsc().div512(),
             };
-            let w = match apb1_presc {
-                ApbPrescaler::Div1 => w.apb1psc().div1(),
-                ApbPrescaler::Div2 => w.apb1psc().div2(),
-                ApbPrescaler::Div4 => w.apb1psc().div4(),
-                ApbPrescaler::Div8 => w.apb1psc().div8(),
-                ApbPrescaler::Div16 => w.apb1psc().div16(),
+            let w = match apb1_psc {
+                ApbPsc::Div1 => w.apb1psc().div1(),
+                ApbPsc::Div2 => w.apb1psc().div2(),
+                ApbPsc::Div4 => w.apb1psc().div4(),
+                ApbPsc::Div8 => w.apb1psc().div8(),
+                ApbPsc::Div16 => w.apb1psc().div16(),
             };
-            let w = match apb2_presc {
-                ApbPrescaler::Div1 => w.apb2psc().div1(),
-                ApbPrescaler::Div2 => w.apb2psc().div2(),
-                ApbPrescaler::Div4 => w.apb2psc().div4(),
-                ApbPrescaler::Div8 => w.apb2psc().div8(),
-                ApbPrescaler::Div16 => w.apb2psc().div16(),
+            let w = match apb2_psc {
+                ApbPsc::Div1 => w.apb2psc().div1(),
+                ApbPsc::Div2 => w.apb2psc().div2(),
+                ApbPsc::Div4 => w.apb2psc().div4(),
+                ApbPsc::Div8 => w.apb2psc().div8(),
+                ApbPsc::Div16 => w.apb2psc().div16(),
             };
             if self.sysclk.is_some() {
                 w.scs().pll()
