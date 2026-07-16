@@ -200,7 +200,8 @@ layer is built on top. Principles:
   `Usart::new()`/`new_word()` already does a full `enable`+`reset`, so `release()`
   doesn't duplicate that.
 
-**ADC** (`src/adc.rs`) — 🚧 in progress, only clock setup + calibration so far:
+**ADC** (`src/adc.rs`) — minimal scope done (single channel, blocking, no
+DMA/interrupts/scan):
 
 - The `CK_ADC` clock tree lives in `Rcu`/`CFGR`/`Clocks`, not a one-off `Rcu` method
   like `ck_out` — `adc.rs`'s calibration delay needs the resolved frequency later, the
@@ -218,8 +219,28 @@ layer is built on top. Principles:
   `hclk`, not `CK_ADC`), then `RSTCLB` and `CLB=1` as **separate** register writes
   (combining them risked a race between the calibration-register reset and the
   calibration start), followed by a busy-wait on `CLB` clearing.
-- Single-channel blocking conversion (channel selection, sample time, trigger, and
-  reading `RDATA`) is not implemented yet — see the roadmap.
+- `Adc::read<PIN: Channel>(&self, pin: &PIN, time: SampTime) -> u16` — a single
+  blocking conversion. Writes the regular-sequence length (`RL=0`, one conversion)
+  and the channel number into `RSQ2`'s position-0 field (`RSQ0/1/2` are one queue
+  feeding a single SAR converter — even a longer sequence would still be converted
+  one channel at a time, not in parallel), the per-channel sampling time
+  (`SampTime`, an 8-variant enum matching the manual's fixed cycle-count table,
+  `1.5..239.5` cycles — given explicit discriminants equal to the register's 3-bit
+  encoding, so `time as u8` writes it directly, no match needed) into `SAMPT1`,
+  then starts the conversion: `ETSRC` (trigger-source mux) has to be set to the
+  software-trigger code *and* `SWRCST` set — the manual is explicit that `SWRCST`
+  only takes effect when `ETSRC` already selects software as the source. Busy-waits
+  on `EOC`, then returns `RDATA` (12-bit result; reading it also clears `EOC`, the
+  same read-clears-flag pattern already used for `RBNE` in USART).
+- **`Channel` trait** ties a pin to its ADC input number at the type level, gating
+  `read()`'s `PIN` parameter. Deliberately *not* a blanket impl over any `MODE`
+  like `ValidAf` (which only checks the pin number — `into_alternate` can start
+  from any state): `Channel` is implemented only for `Pin<P, N, Analog>`
+  specifically, so a pin that hasn't gone through `into_analog()` doesn't compile
+  as an ADC input — this is the real per-pin analog validation the GPIO module's
+  `into_analog()` deliberately deferred to the ADC boundary. Filled in by a
+  `channel!` table macro from the datasheet's channel map (`PA0..PA7` →
+  `IN0..IN7`, `PB0`/`PB1` → `IN8`/`IN9`).
 
 ```rust
 use embedded_hal::digital::OutputPin;
@@ -292,10 +313,10 @@ Flash to `0x08000000`, read the log in a terminal @ 115200 8N1.
       `read_word`; own `Error` enum dropped in favor of
       `embedded_hal_nb::serial::ErrorKind` directly — build-verified, not yet reflashed.
 - [ ] USART: hardware flow control (`CTS`/`RTS`) — deferred, low priority.
-- [ ] 🚧 ADC: `CK_ADC` clock tree + calibration done (`AdcSel`/`AdcPsc`,
-      `Adc::new()`); single-channel blocking conversion (channel select, sample
-      time, trigger, `RDATA` read) and a `Channel` trait for pin-to-channel mapping
-      are not — in progress, see `CLAUDE.md` for where it was left off.
+- [x] ADC: `CK_ADC` clock tree + calibration (`AdcSel`/`AdcPsc`, `Adc::new()`),
+      single-channel blocking conversion (`SampTime`, `ETSRC`/`SWRCST` trigger,
+      `RDATA`), and a `Channel` trait binding `Pin<P, N, Analog>` to ADC input
+      numbers — build+clippy verified, not yet reflashed to hardware.
 - [ ] RCU: `HXTAL` clock source (needs an external crystal on the board).
 - [ ] Peripherals: timers / PWM, SPI, I²C.
 - [ ] Extract the HAL into a standalone library crate.
@@ -507,7 +528,8 @@ PAC (`gd32e2` — прямой доступ к регистрам), а пове�
   `Usart::new()`/`new_word()` и так делает полный `enable`+`reset`, так что `release()`
   это не дублирует.
 
-**ADC** (`src/adc.rs`) — 🚧 в работе, пока только такт + калибровка:
+**ADC** (`src/adc.rs`) — минимальный скоуп готов (один канал, блокирующе, без
+DMA/прерываний/сканирования):
 
 - Дерево такта `CK_ADC` живёт в `Rcu`/`CFGR`/`Clocks`, а не в разовом методе `Rcu`,
   как `ck_out` — задержке в `adc.rs` частота нужна позже, та же логика, что раньше
@@ -525,8 +547,28 @@ PAC (`gd32e2` — прямой доступ к регистрам), а пове�
   не от `CK_ADC`), затем `RSTCLB` и `CLB=1` **отдельными** записями (совмещение в
   одну рисковало гонкой между сбросом калибровочных регистров и стартом
   калибровки), и busy-wait на сброс `CLB`.
-- Одиночное блокирующее преобразование (выбор канала, время сэмплирования,
-  триггер, чтение `RDATA`) ещё не реализовано — см. roadmap.
+- `Adc::read<PIN: Channel>(&self, pin: &PIN, time: SampTime) -> u16` — одиночное
+  блокирующее преобразование. Пишет длину последовательности (`RL=0`, одно
+  преобразование) и номер канала в поле позиции 0 регистра `RSQ2` (`RSQ0/1/2` —
+  одна очередь на ОДИН SAR-преобразователь: даже более длинная
+  последовательность обходилась бы по очереди, не параллельно), время
+  сэмплирования по каналу (`SampTime` — 8-вариантный `enum` по таблице фиксированных
+  значений из мануала, `1.5..239.5` тактов — с явными дискриминантами, равными
+  3-битной кодировке регистра, поэтому `time as u8` пишется напрямую, без матча)
+  в `SAMPT1`, затем запускает преобразование: `ETSRC` (мультиплексор источника
+  триггера) должен быть выставлен в код софт-триггера, И только тогда `SWRCST`
+  реально стартует — по мануалу `SWRCST` действует, только если `ETSRC` уже
+  выбрал софт. Busy-wait на `EOC`, затем возврат `RDATA` (12-битный результат;
+  чтение само снимает `EOC` — тот же паттерн «снятие флага чтением данных», что
+  уже был у `RBNE` в USART).
+- **Трейт `Channel`** привязывает пин к номеру ADC-канала на уровне типов, гейтит
+  параметр `PIN` у `read()`. Сознательно НЕ блангет по любому `MODE`, как
+  `ValidAf` (тот проверяет только номер пина — `into_alternate` может стартовать
+  из любого состояния): `Channel` реализован только для `Pin<P, N, Analog>`
+  конкретно, так что пин, не прошедший `into_analog()`, не скомпилируется как
+  вход АЦП — это и есть настоящая per-pin аналоговая валидация, сознательно
+  отложенная модулем GPIO на границу ADC. Заполнено макросом `channel!` по карте
+  каналов из datasheet (`PA0..PA7` → `IN0..IN7`, `PB0`/`PB1` → `IN8`/`IN9`).
 
 ```rust
 use embedded_hal::digital::OutputPin;
@@ -601,10 +643,10 @@ cargo bin            # -> firmware.bin (нужны cargo-binutils + llvm-tools)
       `embedded_hal_nb::serial::ErrorKind` напрямую — проверено сборкой, на железе
       ещё не перепрошито.
 - [ ] USART: аппаратное управление потоком (`CTS`/`RTS`) — отложено, низкий приоритет.
-- [ ] 🚧 ADC: дерево такта `CK_ADC` + калибровка готовы (`AdcSel`/`AdcPsc`,
-      `Adc::new()`); одиночное блокирующее преобразование (выбор канала, время
-      сэмплирования, триггер, чтение `RDATA`) и трейт `Channel` под карту
-      пин↔канал — ещё нет, в работе, где остановились — см. `CLAUDE.md`.
+- [x] ADC: дерево такта `CK_ADC` + калибровка (`AdcSel`/`AdcPsc`, `Adc::new()`),
+      одиночное блокирующее преобразование (`SampTime`, триггер `ETSRC`/`SWRCST`,
+      `RDATA`) и трейт `Channel`, привязывающий `Pin<P, N, Analog>` к номеру
+      ADC-канала — проверено сборкой+clippy, на железе ещё не перепрошито.
 - [ ] RCU: источник `HXTAL` (нужен внешний кварц на плате).
 - [ ] Периферия: таймеры / PWM, SPI, I²C.
 - [ ] Вынос HAL в отдельный крейт-библиотеку.
