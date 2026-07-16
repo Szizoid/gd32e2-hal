@@ -23,6 +23,29 @@ pub trait SckPin<SPI> {}
 pub trait MisoPin<SPI> {}
 pub trait MosiPin<SPI> {}
 
+macro_rules! spi_pins {
+    ( $( $SPI:ty:
+        SCK:  [ $($sck_p:literal  $sck_n:literal  : $sck_af:literal),* $(,)? ]
+        MISO: [ $($miso_p:literal $miso_n:literal : $miso_af:literal),* $(,)? ]
+        MOSI: [ $($mosi_p:literal $mosi_n:literal : $mosi_af:literal),* $(,)? ]
+    ),* $(,)? ) => {
+        $(
+            $( impl SckPin<$SPI>  for Pin<$sck_p,  $sck_n,  Alternate<$sck_af>>  {} )*
+            $( impl MisoPin<$SPI> for Pin<$miso_p, $miso_n, Alternate<$miso_af>> {} )*
+            $( impl MosiPin<$SPI> for Pin<$mosi_p, $mosi_n, Alternate<$mosi_af>> {} )*
+        )*
+    };
+}
+
+// SPI1 deliberately omitted — its registers diverge from SPI0 at the bit level
+// (FF16 vs CRCL, BYTEN, ...); It will get its own type later.
+spi_pins!(
+    gd32e230::Spi0:
+        SCK: ['A' 5 : 0, 'B' 3 : 0, 'B' 13 : 0]
+        MISO: ['A' 6 : 0, 'B' 4 : 0, 'B' 14 : 0]
+        MOSI: ['A' 7 : 0, 'B' 5 : 0, 'B' 15 : 0]
+);
+
 #[derive(Debug)]
 pub struct Spi<SPIX, SCK, MISO, MOSI> {
     spi: SPIX,
@@ -118,20 +141,6 @@ where
     }
 }
 
-macro_rules! spi_pins {
-    ( $( $SPI:ty:
-        SCK:  [ $($sck_p:literal  $sck_n:literal  : $sck_af:literal),* $(,)? ]
-        MISO: [ $($miso_p:literal $miso_n:literal : $miso_af:literal),* $(,)? ]
-        MOSI: [ $($mosi_p:literal $mosi_n:literal : $mosi_af:literal),* $(,)? ]
-    ),* $(,)? ) => {
-        $(
-            $( impl SckPin<$SPI>  for Pin<$sck_p,  $sck_n,  Alternate<$sck_af>>  {} )*
-            $( impl MisoPin<$SPI> for Pin<$miso_p, $miso_n, Alternate<$miso_af>> {} )*
-            $( impl MosiPin<$SPI> for Pin<$mosi_p, $mosi_n, Alternate<$mosi_af>> {} )*
-        )*
-    };
-}
-
 impl<SPIX, SCK, MISO, MOSI> ErrorType for Spi<SPIX, SCK, MISO, MOSI>
 where
     SPIX: Deref<Target = gd32e230::spi0::RegisterBlock>,
@@ -180,12 +189,3 @@ where
         Ok(())
     }
 }
-
-// SPI1 deliberately omitted — its registers diverge from SPI0 at the bit level
-// (FF16 vs CRCL, BYTEN, ...); It will get its own type later.
-spi_pins!(
-    gd32e230::Spi0:
-        SCK: ['A' 5 : 0, 'B' 3 : 0, 'B' 13 : 0]
-        MISO: ['A' 6 : 0, 'B' 4 : 0, 'B' 14 : 0]
-        MOSI: ['A' 7 : 0, 'B' 5 : 0, 'B' 15 : 0]
-);
