@@ -444,4 +444,5 @@ bus! {
     gd32e230::Usart0 => apb2en, usart0en, apb2rst, usart0rst,
     gd32e230::Usart1 => apb1en, usart1en, apb1rst, usart1rst,
     gd32e230::Adc => apb2en, adcen, apb2rst, adcrst,
+    gd32e230::Spi0 => apb2en, spi0en, apb2rst, spi0rst,
 }

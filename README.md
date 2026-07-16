@@ -13,7 +13,7 @@ A hardware abstraction layer (HAL) for the **GD32E230K8U6** microcontroller
 > ⚠️ **Work in progress.** The HAL is written incrementally and by hand — to
 > genuinely understand both the hardware and Rust's type system. The API is
 > unstable. The package is a library crate (`src/lib.rs` → `adc`, `gpio`, `rcu`,
-> `time`, `usart` modules) plus a small on-hardware test bench binary (`src/main.rs`); the
+> `spi`, `time`, `usart` modules) plus a small on-hardware test bench binary (`src/main.rs`); the
 > HAL will later be extracted into a standalone library. `main.rs` has been flashed
 > and verified on real hardware (RCU PLL, GPIO output, USART0 TX+RX echo).
 
@@ -265,6 +265,45 @@ DMA/interrupts/scan):
   the fully blocking path internally and never actually returns
   `WouldBlock`, so there was no real pattern to copy).
 
+**SPI** (`src/spi.rs`) — minimal scope done (**SPI0 only**, master, full-duplex,
+blocking, 8-bit, software NSS):
+
+- `Spi::new(rcu, spi, sck, miso, mosi, psc, mode)` — takes `SpiPsc` (an
+  8-variant prescaler enum `Div2..Div256`, discriminants = the `PSC` register
+  code) and `embedded_hal::spi::Mode` (reused, not a custom type — same reason
+  as USART's `ErrorKind`). Unlike USART, SPI config needs **no clock**: `PSC` is
+  a direct divisor, nothing to compute from `pclk`. Configures `CTL0` in one
+  write: master, software NSS (`SWNSSEN`+`SWNSS`, both required or a *mode fault*
+  resets the peripheral), MSB-first, 8-bit, CPOL/CPHA from `mode`. CPOL/CPHA use
+  the reference HAL's `.ckpl().bit(mode.polarity == Polarity::IdleHigh)` trick
+  rather than a `match` — shorter and immune to the field-mixup bug (writing
+  `ckph` where `ckpl` was meant) that a two-arm match invites.
+- `SckPin`/`MisoPin`/`MosiPin` marker traits (generic over the peripheral),
+  filled by a `spi_pins!` table macro. NSS isn't a peripheral pin here — it's
+  software (a plain GPIO the caller toggles).
+- `transfer_byte(&self, byte) -> Result<u8, ErrorKind>` — the core primitive:
+  every SPI operation is a simultaneous *exchange* (a byte goes out on MOSI as
+  one comes in on MISO), so there's no separate read/write at the hardware
+  level. Writing `DATA` in master mode starts the clock; waits `TBE`, writes,
+  waits `RBNE`, reads, then checks errors.
+- `embedded_hal::spi::SpiBus<u8>` — all five methods over `transfer_byte`:
+  `write` (exchange, discard input), `read` (send `0x00`, keep input),
+  `transfer_in_place`, `transfer` (runs `max(read, write)` bytes, padding MOSI
+  with `0x00` and discarding surplus MISO), and `flush` (a deliberate no-op:
+  `transfer_byte` blocks until `RBNE`, so nothing is ever pending when a method
+  returns). Errors map `RXORERR`→`Overrun`, `CONFERR`→`ModeFault`,
+  `CRCERR`→`Other`, `FERR`→`FrameFormat`, each cleared per the manual's
+  register-specific sequence; `ErrorType::Error = ErrorKind` (reused, no custom
+  enum). `release()` disables `SPIEN` and hands back the peripheral + pins.
+- **SPI1 is deliberately excluded** and will get its own type later, not the
+  same generic. SPI0 and SPI1 are distinct PAC types whose registers diverge at
+  the *bit* level: `CTL0` bit 11 is `FF16` (frame size) on SPI0 but `CRCL` (CRC
+  length) on SPI1; `CTL1` bit 12 is `BYTEN` (SPI1-only, and its reset default of
+  half-word access would hang byte-by-byte transfers). Bridging them through a
+  single canonical register block (the pointer-cast trick used for GPIO ports)
+  would silently write the wrong fields, so the whole `Instance`/cast machinery
+  was removed and the module uses the plain USART-style `Deref` bound for SPI0.
+
 ```rust
 use embedded_hal::digital::OutputPin;
 use gd32e230_hal::gpio::GpioExt;
@@ -342,8 +381,13 @@ Flash to `0x08000000`, read the log in a terminal @ 115200 8N1.
       numbers, and internal channels (`read_vref`/`read_temperature` via
       `TSVREN` + `VREFINT_CAL`) — build+clippy verified, not yet reflashed.
       Scan mode and a non-blocking API deliberately skipped (see `CLAUDE.md`).
+- [x] SPI: SPI0 master, full-duplex, blocking, 8-bit, software NSS —
+      `Spi::new` (`SpiPsc`, `spi::Mode`), `embedded_hal::spi::SpiBus<u8>`,
+      RX error handling (`ErrorKind`), `release()`. Build+clippy verified, not
+      yet reflashed. SPI1 excluded (bit-level register divergence → own type
+      later); 16-bit / hardware NSS / CRC / DMA out of scope.
 - [ ] RCU: `HXTAL` clock source (needs an external crystal on the board).
-- [ ] Peripherals: timers / PWM, SPI, I²C.
+- [ ] Peripherals: timers / PWM, I²C.
 - [ ] Extract the HAL into a standalone library crate.
 - [ ] Support for other GD32E230x package/pin-count variants (future, low priority).
 
@@ -363,7 +407,7 @@ Cortex-M23), написанный на Rust с нуля поверх PAC-кре�
 
 > ⚠️ **Работа в процессе.** HAL пишется постепенно и вручную — ради глубокого
 > понимания и железа, и системы типов Rust. API нестабилен. Пакет — это
-> библиотечный крейт (`src/lib.rs` → модули `adc`, `gpio`, `rcu`, `time`, `usart`) плюс
+> библиотечный крейт (`src/lib.rs` → модули `adc`, `gpio`, `rcu`, `spi`, `time`, `usart`) плюс
 > небольшой бинарь-стенд для проверки на железе (`src/main.rs`); позже HAL будет
 > вынесен в отдельную библиотеку. `main.rs` уже прошит и проверен на реальном железе
 > (RCU PLL, GPIO output, USART0 TX+RX echo).
@@ -620,6 +664,46 @@ DMA/прерываний/сканирования):
   вызывает полностью блокирующий путь и `WouldBlock` не возвращает
   никогда, копировать было нечего).
 
+**SPI** (`src/spi.rs`) — минимальный скоуп готов (**только SPI0**, master,
+full-duplex, блокирующий, 8 бит, программный NSS):
+
+- `Spi::new(rcu, spi, sck, miso, mosi, psc, mode)` — принимает `SpiPsc`
+  (8-вариантный enum прескейлера `Div2..Div256`, дискриминанты = код регистра
+  `PSC`) и `embedded_hal::spi::Mode` (взят готовым, не свой тип — та же логика,
+  что `ErrorKind` в USART). В отличие от USART, SPI-конфигу **не нужен такт**:
+  `PSC` — прямой делитель, вычислять из `pclk` нечего. Настраивает `CTL0` одной
+  записью: master, программный NSS (`SWNSSEN`+`SWNSS`, оба обязательны, иначе
+  *mode fault* сбросит периферию), MSB-first, 8 бит, CPOL/CPHA из `mode`.
+  CPOL/CPHA — приём из референсного HAL `.ckpl().bit(mode.polarity ==
+  Polarity::IdleHigh)` вместо `match`: короче и защищает от бага «перепутать
+  поле» (написать `ckph` вместо `ckpl`), к которому располагает match из двух
+  веток.
+- `SckPin`/`MisoPin`/`MosiPin` — trait-marker'ы (генерик по типу периферии),
+  заполнены макросом `spi_pins!`. NSS сюда не входит — он программный (обычный
+  GPIO, дёргается вызывающим).
+- `transfer_byte(&self, byte) -> Result<u8, ErrorKind>` — базовый примитив:
+  любая операция SPI — одновременный *обмен* (байт уходит по MOSI, ровно тогда
+  же приходит по MISO), отдельных read/write на уровне железа нет. Запись в
+  `DATA` в master-режиме запускает такт; ждёт `TBE`, пишет, ждёт `RBNE`,
+  читает, проверяет ошибки.
+- `embedded_hal::spi::SpiBus<u8>` — все пять методов поверх `transfer_byte`:
+  `write` (обмен, приём выбросить), `read` (послать `0x00`, приём сохранить),
+  `transfer_in_place`, `transfer` (обмен на `max(read, write)` байт, лишний
+  MOSI добивается `0x00`, лишний MISO выбрасывается) и `flush` (осознанный
+  no-op: `transfer_byte` блокирует до `RBNE`, значит к моменту возврата на
+  шине ничего не «висит»). Ошибки: `RXORERR`→`Overrun`, `CONFERR`→`ModeFault`,
+  `CRCERR`→`Other`, `FERR`→`FrameFormat`, каждая сбрасывается по своей
+  последовательности из мануала; `ErrorType::Error = ErrorKind` (готовый, без
+  своего enum). `release()` выключает `SPIEN` и отдаёт периферию + пины.
+- **SPI1 сознательно исключён** и позже получит отдельный тип, не общий
+  дженерик. SPI0 и SPI1 — разные типы PAC, регистры которых расходятся на
+  уровне *битов*: `CTL0` бит 11 — это `FF16` (размер кадра) у SPI0, но `CRCL`
+  (длина CRC) у SPI1; `CTL1` бит 12 — `BYTEN` (только SPI1, и его дефолт
+  half-word подвесил бы побайтовый обмен). Мост через единый канонический
+  регистровый блок (каст указателя, как для портов GPIO) тихо писал бы не те
+  поля, поэтому весь механизм `Instance`/каста убран, и модуль использует
+  обычный USART-стиль с биндом `Deref` под SPI0.
+
 ```rust
 use embedded_hal::digital::OutputPin;
 use gd32e230_hal::gpio::GpioExt;
@@ -700,8 +784,14 @@ cargo bin            # -> firmware.bin (нужны cargo-binutils + llvm-tools)
       `TSVREN`+`VREFINT_CAL`) — проверено сборкой+clippy, на железе ещё не
       перепрошито. Scan-режим и неблокирующий API сознательно пропущены
       (обоснование — в `CLAUDE.md`).
+- [x] SPI: SPI0 master, full-duplex, блокирующий, 8 бит, программный NSS —
+      `Spi::new` (`SpiPsc`, `spi::Mode`), `embedded_hal::spi::SpiBus<u8>`,
+      обработка ошибок приёма (`ErrorKind`), `release()`. Проверено
+      сборкой+clippy, на железе ещё не перепрошито. SPI1 исключён (регистры
+      расходятся на уровне битов → отдельный тип позже); 16 бит / аппаратный
+      NSS / CRC / DMA — вне скоупа.
 - [ ] RCU: источник `HXTAL` (нужен внешний кварц на плате).
-- [ ] Периферия: таймеры / PWM, SPI, I²C.
+- [ ] Периферия: таймеры / PWM, I²C.
 - [ ] Вынос HAL в отдельный крейт-библиотеку.
 - [ ] Поддержка других вариантов корпуса/пинаута GD32E230x (будущее, низкий приоритет).
 

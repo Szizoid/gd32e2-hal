@@ -114,7 +114,7 @@ impl<const P: char, const N: u8> Pin<P, N, Debugger> {
 }
 
 impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
-    fn gpio_reg(&self) -> &gd32e230::gpioa::RegisterBlock {
+    fn reg(&self) -> &gd32e230::gpioa::RegisterBlock {
         let ptr = match P {
             'A' => gd32e230::Gpioa::ptr(),
             'B' => gd32e230::Gpiob::ptr() as *const _,
@@ -125,12 +125,12 @@ impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
     }
 
     fn read_pin(&self) -> bool {
-        let bits = self.gpio_reg().istat().read().bits();
+        let bits = self.reg().istat().read().bits();
         ((bits >> N) & 0b1) == 0b1
     }
 
     fn read_octl(&self) -> bool {
-        let bits = self.gpio_reg().octl().read().bits();
+        let bits = self.reg().octl().read().bits();
         ((bits >> N) & 0b1) == 0b1
     }
 }
@@ -141,7 +141,7 @@ where
 {
     fn set_mode(&self, mode: u32) {
         let offset = N * 2;
-        self.gpio_reg()
+        self.reg()
             .ctl()
             .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (mode << offset)) });
     }
@@ -149,35 +149,35 @@ where
         let is_afsel0 = N < 8;
         let offset = (N % 8) * 4;
         if is_afsel0 {
-            self.gpio_reg().afsel0().modify(|r, w| unsafe {
+            self.reg().afsel0().modify(|r, w| unsafe {
                 w.bits((r.bits() & !(0b1111 << offset)) | (af << offset))
             });
         } else {
-            self.gpio_reg().afsel1().modify(|r, w| unsafe {
+            self.reg().afsel1().modify(|r, w| unsafe {
                 w.bits((r.bits() & !(0b1111 << offset)) | (af << offset))
             });
         }
     }
     fn set_pud(&self, bits: u32) {
         let offset = N * 2;
-        self.gpio_reg()
+        self.reg()
             .pud()
             .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (bits << offset)) });
     }
     fn set_ospd(&self, bits: u32) {
         let offset = N * 2;
-        self.gpio_reg()
+        self.reg()
             .ospd()
             .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (bits << offset)) });
     }
     fn set_omode(&self, bits: u32) {
         let offset = N;
-        self.gpio_reg()
+        self.reg()
             .omode()
             .modify(|r, w| unsafe { w.bits((r.bits() & !(0b1 << offset)) | (bits << offset)) });
     }
     fn set_lk(&self, lkk: bool) {
-        self.gpio_reg().lock().modify(|_, w| {
+        self.reg().lock().modify(|_, w| {
             let w = match N {
                 0 => w.lk0().locked(),
                 1 => w.lk1().locked(),
@@ -243,7 +243,7 @@ where
         self.set_lk(false);
         self.set_lk(true);
         for _ in 0..2 {
-            self.gpio_reg().lock().read();
+            self.reg().lock().read();
         }
         Pin { _mode: PhantomData }
     }
@@ -261,11 +261,11 @@ impl<const P: char, const N: u8, OTYPE> ErrorType for Pin<P, N, Output<OTYPE>> {
 }
 impl<const P: char, const N: u8, OTYPE> OutputPin for Pin<P, N, Output<OTYPE>> {
     fn set_high(&mut self) -> Result<(), Self::Error> {
-        self.gpio_reg().bop().write(|w| unsafe { w.bits(1 << N) });
+        self.reg().bop().write(|w| unsafe { w.bits(1 << N) });
         Ok(())
     }
     fn set_low(&mut self) -> Result<(), Self::Error> {
-        self.gpio_reg().bc().write(|w| unsafe { w.bits(1 << N) });
+        self.reg().bc().write(|w| unsafe { w.bits(1 << N) });
         Ok(())
     }
 }
@@ -278,7 +278,7 @@ impl<const P: char, const N: u8, OTYPE> StatefulOutputPin for Pin<P, N, Output<O
         Ok(!self.read_octl())
     }
     fn toggle(&mut self) -> Result<(), Self::Error> {
-        self.gpio_reg().tg().write(|w| unsafe { w.bits(1 << N) });
+        self.reg().tg().write(|w| unsafe { w.bits(1 << N) });
         Ok(())
     }
 }
@@ -313,11 +313,11 @@ where
     Pin<P, N, MODE>: OutputPin,
 {
     fn set_high(&mut self) -> Result<(), Self::Error> {
-        self.gpio_reg().bop().write(|w| unsafe { w.bits(1 << N) });
+        self.reg().bop().write(|w| unsafe { w.bits(1 << N) });
         Ok(())
     }
     fn set_low(&mut self) -> Result<(), Self::Error> {
-        self.gpio_reg().bc().write(|w| unsafe { w.bits(1 << N) });
+        self.reg().bc().write(|w| unsafe { w.bits(1 << N) });
         Ok(())
     }
 }
@@ -333,7 +333,7 @@ where
         Ok(!self.read_octl())
     }
     fn toggle(&mut self) -> Result<(), Self::Error> {
-        self.gpio_reg().tg().write(|w| unsafe { w.bits(1 << N) });
+        self.reg().tg().write(|w| unsafe { w.bits(1 << N) });
         Ok(())
     }
 }
