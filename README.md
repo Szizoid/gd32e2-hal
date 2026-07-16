@@ -241,6 +241,29 @@ DMA/interrupts/scan):
   `into_analog()` deliberately deferred to the ADC boundary. Filled in by a
   `channel!` table macro from the datasheet's channel map (`PA0..PA7` →
   `IN0..IN7`, `PB0`/`PB1` → `IN8`/`IN9`).
+- **Internal channels**: `read_vref(&self) -> i32` and `read_temperature(&self)
+  -> Option<i32>` (`IN17`/`IN16`, both powered by a single `TSVREN` bit).
+  `read_vref` doesn't return the nominal ~1.2 V reference itself — it returns
+  the *actual* `VDDA` in mV, derived from how far the current raw code has
+  drifted from the factory `VREFINT_CAL` value baked into flash at a fixed
+  address (`0x1FFFF7C0`, read via `core::ptr::read_volatile`, the first
+  non-PAC register access in the crate). `read_temperature` uses that real
+  `VDDA` (not a naive fixed 3.3 V) to scale the raw code, then applies the
+  datasheet's linear formula in fixed-point tenths of a degree (`i32`, no
+  floats) — returning `Option` because the manual's minimum 17.1 µs sampling
+  time for the temperature sensor is a hardware requirement against the
+  *actual* `CK_ADC` frequency, and `SampTime`'s longest option (239.5 cycles)
+  only covers it up to ~14 MHz, while `CK_ADC` is spec'd up to 28 MHz. A
+  private `with_internal` helper (`fn with_internal<R>(&self, f: impl
+  FnOnce(&Self) -> R) -> R`) brackets `TSVREN` enable/restore around either
+  read. Multi-channel scan mode and a real non-blocking API were both
+  deliberately skipped: per the manual's timing diagrams, `EOC` in scan mode
+  fires once per whole sequence, not per channel, so every intermediate
+  result is silently overwritten without DMA (which doesn't exist in this
+  HAL yet) — and `embedded-hal` 1.0 dropped ADC support outright (checked
+  against a reference HAL: its `embedded-hal-0.2`-only `OneShot` impl calls
+  the fully blocking path internally and never actually returns
+  `WouldBlock`, so there was no real pattern to copy).
 
 ```rust
 use embedded_hal::digital::OutputPin;
@@ -315,8 +338,10 @@ Flash to `0x08000000`, read the log in a terminal @ 115200 8N1.
 - [ ] USART: hardware flow control (`CTS`/`RTS`) — deferred, low priority.
 - [x] ADC: `CK_ADC` clock tree + calibration (`AdcSel`/`AdcPsc`, `Adc::new()`),
       single-channel blocking conversion (`SampTime`, `ETSRC`/`SWRCST` trigger,
-      `RDATA`), and a `Channel` trait binding `Pin<P, N, Analog>` to ADC input
-      numbers — build+clippy verified, not yet reflashed to hardware.
+      `RDATA`), a `Channel` trait binding `Pin<P, N, Analog>` to ADC input
+      numbers, and internal channels (`read_vref`/`read_temperature` via
+      `TSVREN` + `VREFINT_CAL`) — build+clippy verified, not yet reflashed.
+      Scan mode and a non-blocking API deliberately skipped (see `CLAUDE.md`).
 - [ ] RCU: `HXTAL` clock source (needs an external crystal on the board).
 - [ ] Peripherals: timers / PWM, SPI, I²C.
 - [ ] Extract the HAL into a standalone library crate.
@@ -569,6 +594,31 @@ DMA/прерываний/сканирования):
   вход АЦП — это и есть настоящая per-pin аналоговая валидация, сознательно
   отложенная модулем GPIO на границу ADC. Заполнено макросом `channel!` по карте
   каналов из datasheet (`PA0..PA7` → `IN0..IN7`, `PB0`/`PB1` → `IN8`/`IN9`).
+- **Внутренние каналы**: `read_vref(&self) -> i32` и `read_temperature(&self)
+  -> Option<i32>` (`IN17`/`IN16`, включаются одним общим битом `TSVREN`).
+  `read_vref` возвращает не сам номинальный `VREFINT` (~1.2В), а РЕАЛЬНОЕ
+  `VDDA` в мВ — вычисленное по тому, насколько текущий сырой код отклонился
+  от заводского калибровочного значения `VREFINT_CAL`, зашитого в flash по
+  фиксированному адресу (`0x1FFFF7C0`, читается через
+  `core::ptr::read_volatile` — первое в крейте обращение не через
+  PAC-регистр). `read_temperature` использует это реальное `VDDA` (не
+  наивные фиксированные `3.3В`) для масштабирования сырого кода, затем
+  считает по линейной формуле из datasheet в десятых долях градуса (`i32`,
+  без float) — возвращает `Option`, потому что минимальное время
+  сэмплирования датчика температуры из мануала (`17.1мкс`) — требование к
+  РЕАЛЬНОЙ частоте `CK_ADC`, а самый длинный вариант `SampTime` (`239.5`
+  тактов) покрывает его только до `~14МГц`, тогда как `CK_ADC` по спеке
+  может доходить до `28МГц`. Приватный `with_internal` (`fn
+  with_internal<R>(&self, f: impl FnOnce(&Self) -> R) -> R`) оборачивает
+  включение/восстановление `TSVREN` вокруг любого из двух чтений.
+  Многоканальный scan и честный неблокирующий API сознательно пропущены:
+  по временным диаграммам мануала `EOC` в scan-режиме ставится один раз за
+  всю последовательность, не за канал, — то есть все промежуточные
+  результаты без DMA (которого в HAL пока нет) тихо теряются; а в
+  `embedded-hal` 1.0 поддержку ADC вообще выпилили (сверились с
+  референсным HAL — его `OneShot` под фичей `embedded-hal-0.2` внутри
+  вызывает полностью блокирующий путь и `WouldBlock` не возвращает
+  никогда, копировать было нечего).
 
 ```rust
 use embedded_hal::digital::OutputPin;
@@ -645,8 +695,11 @@ cargo bin            # -> firmware.bin (нужны cargo-binutils + llvm-tools)
 - [ ] USART: аппаратное управление потоком (`CTS`/`RTS`) — отложено, низкий приоритет.
 - [x] ADC: дерево такта `CK_ADC` + калибровка (`AdcSel`/`AdcPsc`, `Adc::new()`),
       одиночное блокирующее преобразование (`SampTime`, триггер `ETSRC`/`SWRCST`,
-      `RDATA`) и трейт `Channel`, привязывающий `Pin<P, N, Analog>` к номеру
-      ADC-канала — проверено сборкой+clippy, на железе ещё не перепрошито.
+      `RDATA`), трейт `Channel`, привязывающий `Pin<P, N, Analog>` к номеру
+      ADC-канала, и внутренние каналы (`read_vref`/`read_temperature` через
+      `TSVREN`+`VREFINT_CAL`) — проверено сборкой+clippy, на железе ещё не
+      перепрошито. Scan-режим и неблокирующий API сознательно пропущены
+      (обоснование — в `CLAUDE.md`).
 - [ ] RCU: источник `HXTAL` (нужен внешний кварц на плате).
 - [ ] Периферия: таймеры / PWM, SPI, I²C.
 - [ ] Вынос HAL в отдельный крейт-библиотеку.
