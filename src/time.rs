@@ -1,3 +1,5 @@
+use core::ops;
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Hertz(pub u32);
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -66,8 +68,6 @@ impl From<MicroSeconds> for Hertz {
         Self(1_000_000 / microseconds.0)
     }
 }
-
-use core::ops;
 
 macro_rules! impl_arithmetic {
     ($wrapper:ty, $wrapped:ty) => {

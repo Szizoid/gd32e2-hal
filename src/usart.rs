@@ -9,6 +9,11 @@ use crate::{
     time::Hertz,
 };
 
+/// 7 data bits: parity occupies bit 7 inside the u8 (`E7`/`O7`).
+const DATA_7BIT_MASK: u8 = 0x7F;
+/// 9 data bits: the full 9-bit word in `WL=1, PCEN=0` mode.
+const DATA_9BIT_MASK: u32 = 0x1FF;
+
 pub trait TxPin<USART> {}
 pub trait RxPin<USART> {}
 
@@ -139,13 +144,19 @@ impl Default for UsartConfig9 {
     }
 }
 
-fn configure<USARTX>(rcu: &mut Rcu, usart: &USARTX, clocks: &Clocks, baud: u32, oversampling: Oversampling)
-where
+fn configure<USARTX>(
+    rcu: &mut Rcu,
+    usart: &USARTX,
+    clocks: &Clocks,
+    baud: u32,
+    oversampling: Oversampling,
+) where
     USARTX: Deref<Target = gd32e230::usart0::RegisterBlock> + Enable + Reset + BusClocks,
 {
     USARTX::enable(rcu);
     USARTX::reset(rcu);
     let pclk = USARTX::clock(clocks).0;
+    // round(pclk / baud) in integers: adding half the divisor before truncating rounds.
     let usartdiv = (pclk + baud / 2) / baud;
     usart.baud().write(|w| unsafe {
         match oversampling {
@@ -188,18 +199,18 @@ where
         let stat = self.usart.stat().read();
         let error = if stat.orerr().bit() {
             self.usart.intc().write(|w| w.orec().clear());
-            Option::Some(ErrorKind::Overrun)
+            Some(ErrorKind::Overrun)
         } else if stat.nerr().bit() {
             self.usart.intc().write(|w| w.nec().clear());
-            Option::Some(ErrorKind::Noise)
+            Some(ErrorKind::Noise)
         } else if stat.ferr().bit() {
             self.usart.intc().write(|w| w.fec().clear());
-            Option::Some(ErrorKind::FrameFormat)
+            Some(ErrorKind::FrameFormat)
         } else if stat.perr().bit() {
             self.usart.intc().write(|w| w.pec().clear());
-            Option::Some(ErrorKind::Parity)
+            Some(ErrorKind::Parity)
         } else {
-            Option::None
+            None
         };
 
         if error.is_some() {
@@ -222,7 +233,7 @@ where
     fn received_byte(&self) -> u8 {
         let raw = self.usart.rdata().read().bits() as u8;
         match self.frame_format {
-            FrameFormat::E7 | FrameFormat::O7 => raw & 0x7F,
+            FrameFormat::E7 | FrameFormat::O7 => raw & DATA_7BIT_MASK,
             FrameFormat::N8 | FrameFormat::E8 | FrameFormat::O8 => raw,
         }
     }
@@ -307,14 +318,14 @@ where
         while !self.usart.stat().read().tbe().bit() {}
         self.usart
             .tdata()
-            .write(|w| unsafe { w.bits((word & 0x1FF) as u32) });
+            .write(|w| unsafe { w.bits(word as u32 & DATA_9BIT_MASK) });
     }
     pub fn read_word(&self) -> Result<u16, ErrorKind> {
         while !self.usart.stat().read().rbne().bit() {}
         if let Some(e) = self.take_error() {
             Err(e)
         } else {
-            Ok((self.usart.rdata().read().bits() & 0x1FF) as u16)
+            Ok((self.usart.rdata().read().bits() & DATA_9BIT_MASK) as u16)
         }
     }
 }
@@ -329,12 +340,12 @@ where
 {
     fn read(&mut self) -> nb::Result<u8, Self::Error> {
         if !self.usart.stat().read().rbne().bit() {
-            return nb::Result::Err(nb::Error::WouldBlock);
+            return Err(nb::Error::WouldBlock);
         }
         if let Some(e) = self.take_error() {
-            nb::Result::Err(nb::Error::Other(e))
+            Err(nb::Error::Other(e))
         } else {
-            nb::Result::Ok(self.received_byte())
+            Ok(self.received_byte())
         }
     }
 }
@@ -345,17 +356,17 @@ where
 {
     fn write(&mut self, byte: u8) -> nb::Result<(), Self::Error> {
         if !self.usart.stat().read().tbe().bit() {
-            nb::Result::Err(nb::Error::WouldBlock)
+            Err(nb::Error::WouldBlock)
         } else {
             self.usart.tdata().write(|w| unsafe { w.bits(byte as u32) });
-            nb::Result::Ok(())
+            Ok(())
         }
     }
     fn flush(&mut self) -> nb::Result<(), Self::Error> {
         if !self.usart.stat().read().tc().bit() {
-            nb::Result::Err(nb::Error::WouldBlock)
+            Err(nb::Error::WouldBlock)
         } else {
-            nb::Result::Ok(())
+            Ok(())
         }
     }
 }

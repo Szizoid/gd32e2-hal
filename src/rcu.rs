@@ -7,6 +7,17 @@ const IRC28M: u32 = 28_000_000;
 const LXTAL: u32 = 32_768;
 const PLL_SRC: u32 = IRC8M / 2;
 
+const IRC28MDIV_DIV1: bool = true;
+const IRC28MDIV_DIV2: bool = false;
+const ADCSEL_IRC28M: bool = false;
+const ADCSEL_PRESCALED: bool = true;
+const ADCPSC_MSB_APB2: bool = false;
+const ADCPSC_MSB_AHB: bool = true;
+
+const WS0_MAX_HCLK: u32 = 24_000_000;
+const WS1_MAX_HCLK: u32 = 48_000_000;
+const WS2_MAX_HCLK: u32 = 72_000_000;
+
 #[derive(Clone, Copy)]
 pub enum PllFreq {
     Mhz8 = 8_000_000,
@@ -72,6 +83,14 @@ pub enum Irc28mDiv {
 pub enum AdcSel {
     Irc28m(Irc28mDiv),
     Prescaled(AdcPsc),
+}
+
+#[derive(Clone, Copy)]
+pub enum Usart0Sel {
+    Apb2,
+    Sysclk,
+    Lxtal,
+    Irc8m,
 }
 
 #[derive(Clone, Copy)]
@@ -209,13 +228,11 @@ impl CFGR {
                         rcu.rcu.ctl1().modify(|_, w| w.irc28men().on());
                         while rcu.rcu.ctl1().read().irc28mstb().is_not_ready() {}
                         rcu.rcu.cfg2().modify(|_, w| {
-                            // IRC28MDIV: 1 = direct, 0 = /2
                             let w = match div {
-                                Irc28mDiv::Div1 => w.irc28mdiv().bit(true),
-                                Irc28mDiv::Div2 => w.irc28mdiv().bit(false),
+                                Irc28mDiv::Div1 => w.irc28mdiv().bit(IRC28MDIV_DIV1),
+                                Irc28mDiv::Div2 => w.irc28mdiv().bit(IRC28MDIV_DIV2),
                             };
-                            // ADCSEL: 0 = IRC28M, 1 = prescaled
-                            w.adcsel().bit(false)
+                            w.adcsel().bit(ADCSEL_IRC28M)
                         });
                     }
                     AdcSel::Prescaled(psc) => {
@@ -231,14 +248,13 @@ impl CFGR {
                                 AdcPsc::Apb2Div2
                                 | AdcPsc::Apb2Div4
                                 | AdcPsc::Apb2Div6
-                                | AdcPsc::Apb2Div8 => w.adcpsc().bit(false),
+                                | AdcPsc::Apb2Div8 => w.adcpsc().bit(ADCPSC_MSB_APB2),
                                 AdcPsc::AhbDiv3
                                 | AdcPsc::AhbDiv5
                                 | AdcPsc::AhbDiv7
-                                | AdcPsc::AhbDiv9 => w.adcpsc().bit(true),
+                                | AdcPsc::AhbDiv9 => w.adcpsc().bit(ADCPSC_MSB_AHB),
                             };
-                            // ADCSEL: 0 = IRC28M, 1 = prescaled
-                            w.adcsel().bit(true)
+                            w.adcsel().bit(ADCSEL_PRESCALED)
                         });
                     }
                 }
@@ -258,11 +274,16 @@ impl CFGR {
             }
         };
 
-        fmc.ws().modify(|_, w| match hclk {
-            0..=24_000_000 => w.wscnt().ws0(),
-            24_000_001..=48_000_000 => w.wscnt().ws1(),
-            48_000_001..=72_000_000 => w.wscnt().ws2(),
-            _ => unreachable!(),
+        fmc.ws().modify(|_, w| {
+            if hclk <= WS0_MAX_HCLK {
+                w.wscnt().ws0()
+            } else if hclk <= WS1_MAX_HCLK {
+                w.wscnt().ws1()
+            } else if hclk <= WS2_MAX_HCLK {
+                w.wscnt().ws2()
+            } else {
+                unreachable!()
+            }
         });
 
         rcu.rcu.cfg0().modify(|_, w| {
@@ -308,11 +329,13 @@ impl CFGR {
     }
 }
 
+#[derive(Clone, Copy)]
 pub enum PllDiv {
     Div1,
     Div2,
 }
 
+#[derive(Clone, Copy)]
 pub enum CkOutSrc {
     None,
     Irc14m,
@@ -324,6 +347,7 @@ pub enum CkOutSrc {
     Pll(PllDiv),
 }
 
+#[derive(Clone, Copy)]
 pub enum CkOutDiv {
     Div1,
     Div2,
@@ -333,14 +357,6 @@ pub enum CkOutDiv {
     Div32,
     Div64,
     Div128,
-}
-
-#[derive(Clone, Copy)]
-pub enum Usart0Sel {
-    Apb2,
-    Sysclk,
-    Lxtal,
-    Irc8m,
 }
 
 pub struct Rcu {

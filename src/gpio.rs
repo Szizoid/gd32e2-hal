@@ -5,6 +5,14 @@ use gd32e2::gd32e230;
 
 use crate::rcu::Rcu;
 
+const CTL_INPUT: u32 = 0b00;
+const CTL_OUTPUT: u32 = 0b01;
+const CTL_AF: u32 = 0b10;
+const CTL_ANALOG: u32 = 0b11;
+
+const OMODE_PUSH_PULL: u32 = 0b0;
+const OMODE_OPEN_DRAIN: u32 = 0b1;
+
 pub struct Input;
 pub struct PushPull;
 pub struct OpenDrain;
@@ -22,16 +30,18 @@ pub struct Pin<const P: char, const N: u8, MODE> {
     _mode: PhantomData<MODE>,
 }
 
+#[derive(Clone, Copy)]
 pub enum Pull {
-    Floating,
-    Up,
-    Down,
+    Floating = 0b00,
+    Up = 0b01,
+    Down = 0b10,
 }
 
+#[derive(Clone, Copy)]
 pub enum Speed {
-    Mhz2,
-    Mhz10,
-    Mhz50,
+    Mhz2 = 0b00,
+    Mhz10 = 0b01,
+    Mhz50 = 0b11,
 }
 
 pub trait ValidAf<const AF: u8> {}
@@ -90,6 +100,161 @@ impl<OTYPE> Active for Output<OTYPE> {}
 pub trait HasLock {}
 impl<const N: u8, MODE> HasLock for Pin<'A', N, MODE> {}
 impl<const N: u8, MODE> HasLock for Pin<'B', N, MODE> {}
+
+impl<const P: char, const N: u8> Pin<P, N, Debugger> {
+    /// # Safety
+    ///
+    /// This only relabels the type from `Debugger` to `Input` — it performs no
+    /// register write. The pin remains physically in SWD mode until a
+    /// subsequent `into_*()` call reconfigures `CTL`. The caller must follow up
+    /// with one, or the type will no longer match the hardware state.
+    pub unsafe fn activate(self) -> Pin<P, N, Input> {
+        Pin { _mode: PhantomData }
+    }
+}
+
+impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
+    fn gpio_reg(&self) -> &gd32e230::gpioa::RegisterBlock {
+        let ptr = match P {
+            'A' => gd32e230::Gpioa::ptr(),
+            'B' => gd32e230::Gpiob::ptr() as *const _,
+            'F' => gd32e230::Gpiof::ptr() as *const _, // AFSEL0/1 and LOCK registers are unavailable
+            _ => unreachable!(),
+        };
+        unsafe { &*ptr }
+    }
+
+    fn read_pin(&self) -> bool {
+        let bits = self.gpio_reg().istat().read().bits();
+        ((bits >> N) & 0b1) == 0b1
+    }
+
+    fn read_octl(&self) -> bool {
+        let bits = self.gpio_reg().octl().read().bits();
+        ((bits >> N) & 0b1) == 0b1
+    }
+}
+
+impl<const P: char, const N: u8, MODE> Pin<P, N, MODE>
+where
+    MODE: Active,
+{
+    fn set_mode(&self, mode: u32) {
+        let offset = N * 2;
+        self.gpio_reg()
+            .ctl()
+            .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (mode << offset)) });
+    }
+    fn set_af(&self, af: u32) {
+        let is_afsel0 = N < 8;
+        let offset = (N % 8) * 4;
+        if is_afsel0 {
+            self.gpio_reg().afsel0().modify(|r, w| unsafe {
+                w.bits((r.bits() & !(0b1111 << offset)) | (af << offset))
+            });
+        } else {
+            self.gpio_reg().afsel1().modify(|r, w| unsafe {
+                w.bits((r.bits() & !(0b1111 << offset)) | (af << offset))
+            });
+        }
+    }
+    fn set_pud(&self, bits: u32) {
+        let offset = N * 2;
+        self.gpio_reg()
+            .pud()
+            .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (bits << offset)) });
+    }
+    fn set_ospd(&self, bits: u32) {
+        let offset = N * 2;
+        self.gpio_reg()
+            .ospd()
+            .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (bits << offset)) });
+    }
+    fn set_omode(&self, bits: u32) {
+        let offset = N;
+        self.gpio_reg()
+            .omode()
+            .modify(|r, w| unsafe { w.bits((r.bits() & !(0b1 << offset)) | (bits << offset)) });
+    }
+    fn set_lk(&self, lkk: bool) {
+        self.gpio_reg().lock().modify(|_, w| {
+            let w = match N {
+                0 => w.lk0().locked(),
+                1 => w.lk1().locked(),
+                2 => w.lk2().locked(),
+                3 => w.lk3().locked(),
+                4 => w.lk4().locked(),
+                5 => w.lk5().locked(),
+                6 => w.lk6().locked(),
+                7 => w.lk7().locked(),
+                8 => w.lk8().locked(),
+                9 => w.lk9().locked(),
+                10 => w.lk10().locked(),
+                11 => w.lk11().locked(),
+                12 => w.lk12().locked(),
+                13 => w.lk13().locked(),
+                14 => w.lk14().locked(),
+                15 => w.lk15().locked(),
+                _ => unreachable!(),
+            };
+            if lkk {
+                w.lkk().active()
+            } else {
+                w.lkk().not_active()
+            }
+        });
+    }
+
+    pub fn into_input(self) -> Pin<P, N, Input> {
+        self.set_mode(CTL_INPUT);
+        Pin { _mode: PhantomData }
+    }
+    pub fn into_push_pull_output(self) -> Pin<P, N, Output<PushPull>> {
+        self.set_mode(CTL_OUTPUT);
+        self.set_omode(OMODE_PUSH_PULL);
+        Pin { _mode: PhantomData }
+    }
+    pub fn into_open_drain_output(self) -> Pin<P, N, Output<OpenDrain>> {
+        self.set_mode(CTL_OUTPUT);
+        self.set_omode(OMODE_OPEN_DRAIN);
+        Pin { _mode: PhantomData }
+    }
+    pub fn into_output(self) -> Pin<P, N, Output<PushPull>> {
+        self.into_push_pull_output()
+    }
+    pub fn into_analog(self) -> Pin<P, N, Analog> {
+        self.set_mode(CTL_ANALOG);
+        Pin { _mode: PhantomData }
+    }
+    pub fn into_alternate<const AF: u8>(self) -> Pin<P, N, Alternate<AF>>
+    where
+        Self: ValidAf<AF>,
+    {
+        self.set_mode(CTL_AF);
+        self.set_af(AF as u32);
+        Pin { _mode: PhantomData }
+    }
+    pub fn lock(self) -> Pin<P, N, Locked<MODE>>
+    where
+        Self: HasLock,
+    {
+        // LKK write sequence from the manual: 1 -> 0 -> 1.
+        self.set_lk(true);
+        self.set_lk(false);
+        self.set_lk(true);
+        for _ in 0..2 {
+            self.gpio_reg().lock().read();
+        }
+        Pin { _mode: PhantomData }
+    }
+
+    pub fn set_pull(&self, p: Pull) {
+        self.set_pud(p as u32);
+    }
+    pub fn set_speed(&self, s: Speed) {
+        self.set_ospd(s as u32);
+    }
+}
 
 impl<const P: char, const N: u8, OTYPE> ErrorType for Pin<P, N, Output<OTYPE>> {
     type Error = Infallible;
@@ -182,168 +347,6 @@ where
     }
     fn is_low(&mut self) -> Result<bool, Self::Error> {
         Ok(!self.read_pin())
-    }
-}
-
-impl<const P: char, const N: u8> Pin<P, N, Debugger> {
-    /// # Safety
-    ///
-    /// This only relabels the type from `Debugger` to `Input` — it performs no
-    /// register write. The pin remains physically in SWD mode until a
-    /// subsequent `into_*()` call reconfigures `CTL`. The caller must follow up
-    /// with one, or the type will no longer match the hardware state.
-    pub unsafe fn activate(self) -> Pin<P, N, Input> {
-        Pin { _mode: PhantomData }
-    }
-}
-
-impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
-    fn gpio_reg(&self) -> &gd32e230::gpioa::RegisterBlock {
-        let ptr = match P {
-            'A' => gd32e230::Gpioa::ptr(),
-            'B' => gd32e230::Gpiob::ptr() as *const _,
-            'F' => gd32e230::Gpiof::ptr() as *const _, // AFSEL0/1 and LOCK Registers is unvailable
-            _ => unreachable!(),
-        };
-        unsafe { &*ptr }
-    }
-
-    fn read_pin(&self) -> bool {
-        let bits = self.gpio_reg().istat().read().bits();
-        ((bits >> N) & 0b1) == 0b1
-    }
-
-    fn read_octl(&self) -> bool {
-        let bits = self.gpio_reg().octl().read().bits();
-        ((bits >> N) & 0b1) == 0b1
-    }
-}
-
-impl<const P: char, const N: u8, MODE> Pin<P, N, MODE>
-where
-    MODE: Active,
-{
-    fn set_mode(&self, mode: u32) {
-        let offset = N * 2;
-        self.gpio_reg()
-            .ctl()
-            .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (mode << offset)) });
-    }
-    fn set_af(&self, af: u32) {
-        let is_afsel0 = N < 8;
-        let offset = (N % 8) * 4;
-        if is_afsel0 {
-            self.gpio_reg().afsel0().modify(|r, w| unsafe {
-                w.bits((r.bits() & !(0b1111 << offset)) | (af << offset))
-            });
-        } else {
-            self.gpio_reg().afsel1().modify(|r, w| unsafe {
-                w.bits((r.bits() & !(0b1111 << offset)) | (af << offset))
-            });
-        }
-    }
-    fn set_pud(&self, bits: u32) {
-        let offset = N * 2;
-        self.gpio_reg()
-            .pud()
-            .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (bits << offset)) });
-    }
-    fn set_ospd(&self, bits: u32) {
-        let offset = N * 2;
-        self.gpio_reg()
-            .ospd()
-            .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (bits << offset)) });
-    }
-    fn set_omode(&self, bits: u32) {
-        let offset = N;
-        self.gpio_reg()
-            .omode()
-            .modify(|r, w| unsafe { w.bits((r.bits() & !(0b1 << offset)) | (bits << offset)) });
-    }
-    fn set_lk(&self, lkk: bool) {
-        self.gpio_reg().lock().modify(|_, w| {
-            let w = match N {
-                0 => w.lk0().locked(),
-                1 => w.lk1().locked(),
-                2 => w.lk2().locked(),
-                3 => w.lk3().locked(),
-                4 => w.lk4().locked(),
-                5 => w.lk5().locked(),
-                6 => w.lk6().locked(),
-                7 => w.lk7().locked(),
-                8 => w.lk8().locked(),
-                9 => w.lk9().locked(),
-                10 => w.lk10().locked(),
-                11 => w.lk11().locked(),
-                12 => w.lk12().locked(),
-                13 => w.lk13().locked(),
-                14 => w.lk14().locked(),
-                15 => w.lk15().locked(),
-                _ => unreachable!(),
-            };
-            if lkk {
-                w.lkk().active()
-            } else {
-                w.lkk().not_active()
-            }
-        });
-    }
-
-    pub fn into_input(self) -> Pin<P, N, Input> {
-        self.set_mode(0b00);
-        Pin { _mode: PhantomData }
-    }
-    pub fn into_push_pull_output(self) -> Pin<P, N, Output<PushPull>> {
-        self.set_mode(0b01);
-        self.set_omode(0b0);
-        Pin { _mode: PhantomData }
-    }
-    pub fn into_open_drain_output(self) -> Pin<P, N, Output<OpenDrain>> {
-        self.set_mode(0b01);
-        self.set_omode(0b1);
-        Pin { _mode: PhantomData }
-    }
-    pub fn into_output(self) -> Pin<P, N, Output<PushPull>> {
-        self.into_push_pull_output()
-    }
-    pub fn into_analog(self) -> Pin<P, N, Analog> {
-        self.set_mode(0b11);
-        Pin { _mode: PhantomData }
-    }
-    pub fn into_alternate<const AF: u8>(self) -> Pin<P, N, Alternate<AF>>
-    where
-        Self: ValidAf<AF>,
-    {
-        self.set_mode(0b10);
-        self.set_af(AF as u32);
-        Pin { _mode: PhantomData }
-    }
-    pub fn lock(self) -> Pin<P, N, Locked<MODE>>
-    where
-        Self: HasLock,
-    {
-        for i in 0..3 {
-            Self::set_lk(&self, i % 2 == 0);
-        }
-        for _ in 0..2 {
-            self.gpio_reg().lock().read();
-        }
-        Pin { _mode: PhantomData }
-    }
-
-    pub fn set_pull(&self, p: Pull) {
-        match p {
-            Pull::Floating => self.set_pud(0b00),
-            Pull::Up => self.set_pud(0b01),
-            Pull::Down => self.set_pud(0b10),
-        }
-    }
-    pub fn set_speed(&self, s: Speed) {
-        match s {
-            Speed::Mhz2 => self.set_ospd(0b00),
-            Speed::Mhz10 => self.set_ospd(0b01),
-            Speed::Mhz50 => self.set_ospd(0b11),
-        }
     }
 }
 
