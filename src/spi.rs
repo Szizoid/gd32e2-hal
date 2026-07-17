@@ -1,5 +1,5 @@
 use core::{marker::PhantomData, ops::Deref};
-use embedded_hal::spi::{ErrorKind, ErrorType, Mode, Phase, Polarity, SpiBus};
+use embedded_hal::spi::{ErrorKind, ErrorType, MODE_0, Mode, Phase, Polarity, SpiBus};
 use gd32e2::gd32e230;
 
 use crate::{
@@ -17,6 +17,40 @@ pub enum SpiPsc {
     Div64 = 0b101,
     Div128 = 0b110,
     Div256 = 0b111,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum BitOrder {
+    MsbFirst,
+    LsbFirst,
+}
+
+pub struct SpiConfig {
+    psc: SpiPsc,
+    mode: Mode,
+    bit_order: BitOrder,
+}
+
+impl SpiConfig {
+    /// `psc` is required: there is no universal default SCK divider (it depends
+    /// on `pclk` and the slave's max clock), so it must be chosen explicitly.
+    /// `mode`/`bit_order` default to Mode 0 / MSB-first and can be overridden
+    /// fluently. (No `Default` impl — a config can't be built without `psc`.)
+    pub fn new(psc: SpiPsc) -> Self {
+        Self {
+            psc,
+            mode: MODE_0,
+            bit_order: BitOrder::MsbFirst,
+        }
+    }
+    pub fn mode(mut self, mode: Mode) -> Self {
+        self.mode = mode;
+        self
+    }
+    pub fn bit_order(mut self, bit_order: BitOrder) -> Self {
+        self.bit_order = bit_order;
+        self
+    }
 }
 
 pub trait SckPin<SPI> {}
@@ -51,7 +85,7 @@ pub struct Byte;
 /// Word-width marker: 16-bit frames (`transfer_word`, `SpiBus<u16>`).
 pub struct Word;
 
-fn configure<SPIX>(rcu: &mut Rcu, spi: &SPIX, psc: SpiPsc, mode: Mode, ff16: bool)
+fn configure<SPIX>(rcu: &mut Rcu, spi: &SPIX, config: SpiConfig, ff16: bool)
 where
     SPIX: Deref<Target = gd32e230::spi0::RegisterBlock> + Enable + Reset,
 {
@@ -66,16 +100,16 @@ where
             .swnss()
             .set_bit()
             .lf()
-            .clear_bit()
+            .bit(config.bit_order == BitOrder::LsbFirst)
             .ff16()
             .bit(ff16)
             .spien()
             .set_bit()
             .ckpl()
-            .bit(mode.polarity == Polarity::IdleHigh)
+            .bit(config.mode.polarity == Polarity::IdleHigh)
             .ckph()
-            .bit(mode.phase == Phase::CaptureOnSecondTransition);
-        unsafe { w.psc().bits(psc as u8) }
+            .bit(config.mode.phase == Phase::CaptureOnSecondTransition);
+        unsafe { w.psc().bits(config.psc as u8) }
     });
 }
 
@@ -101,10 +135,9 @@ where
         sck_pin: SCK,
         miso_pin: MISO,
         mosi_pin: MOSI,
-        psc: SpiPsc,
-        mode: Mode,
+        config: SpiConfig,
     ) -> Self {
-        configure(rcu, &spi, psc, mode, false);
+        configure(rcu, &spi, config, false);
         Self {
             spi,
             sck_pin,
@@ -128,10 +161,9 @@ where
         sck_pin: SCK,
         miso_pin: MISO,
         mosi_pin: MOSI,
-        psc: SpiPsc,
-        mode: Mode,
+        config: SpiConfig,
     ) -> Self {
-        configure(rcu, &spi, psc, mode, true);
+        configure(rcu, &spi, config, true);
         Self {
             spi,
             sck_pin,
