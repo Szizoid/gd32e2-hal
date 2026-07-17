@@ -1,4 +1,4 @@
-use core::ops::Deref;
+use core::{marker::PhantomData, ops::Deref};
 use embedded_hal::spi::{ErrorKind, ErrorType, Mode, Phase, Polarity, SpiBus};
 use gd32e2::gd32e230;
 
@@ -46,15 +46,49 @@ spi_pins!(
         MOSI: ['A' 7 : 0, 'B' 5 : 0, 'B' 15 : 0]
 );
 
+/// Word-width marker: 8-bit frames (`transfer_byte`, `SpiBus<u8>`).
+pub struct Byte;
+/// Word-width marker: 16-bit frames (`transfer_word`, `SpiBus<u16>`).
+pub struct Word;
+
+fn configure<SPIX>(rcu: &mut Rcu, spi: &SPIX, psc: SpiPsc, mode: Mode, ff16: bool)
+where
+    SPIX: Deref<Target = gd32e230::spi0::RegisterBlock> + Enable + Reset,
+{
+    SPIX::enable(rcu);
+    SPIX::reset(rcu);
+    spi.ctl0().modify(|_, w| {
+        let w = w
+            .mstmod()
+            .set_bit()
+            .swnssen()
+            .set_bit()
+            .swnss()
+            .set_bit()
+            .lf()
+            .clear_bit()
+            .ff16()
+            .bit(ff16)
+            .spien()
+            .set_bit()
+            .ckpl()
+            .bit(mode.polarity == Polarity::IdleHigh)
+            .ckph()
+            .bit(mode.phase == Phase::CaptureOnSecondTransition);
+        unsafe { w.psc().bits(psc as u8) }
+    });
+}
+
 #[derive(Debug)]
-pub struct Spi<SPIX, SCK, MISO, MOSI> {
+pub struct Spi<SPIX, SCK, MISO, MOSI, WORD = Byte> {
     spi: SPIX,
     sck_pin: SCK,
     miso_pin: MISO,
     mosi_pin: MOSI,
+    _word: PhantomData<WORD>,
 }
 
-impl<SPIX, SCK, MISO, MOSI> Spi<SPIX, SCK, MISO, MOSI>
+impl<SPIX, SCK, MISO, MOSI> Spi<SPIX, SCK, MISO, MOSI, Byte>
 where
     SPIX: Deref<Target = gd32e230::spi0::RegisterBlock> + Enable + Reset,
     SCK: SckPin<SPIX>,
@@ -70,36 +104,45 @@ where
         psc: SpiPsc,
         mode: Mode,
     ) -> Self {
-        SPIX::enable(rcu);
-        SPIX::reset(rcu);
-        spi.ctl0().modify(|_, w| {
-            let w = w
-                .mstmod()
-                .set_bit()
-                .swnssen()
-                .set_bit()
-                .swnss()
-                .set_bit()
-                .lf()
-                .clear_bit()
-                .spien()
-                .set_bit()
-                .ckpl()
-                .bit(mode.polarity == Polarity::IdleHigh)
-                .ckph()
-                .bit(mode.phase == Phase::CaptureOnSecondTransition);
-            unsafe { w.psc().bits(psc as u8) }
-        });
+        configure(rcu, &spi, psc, mode, false);
         Self {
             spi,
             sck_pin,
             miso_pin,
             mosi_pin,
+            _word: PhantomData,
         }
     }
 }
 
-impl<SPIX, SCK, MISO, MOSI> Spi<SPIX, SCK, MISO, MOSI>
+impl<SPIX, SCK, MISO, MOSI> Spi<SPIX, SCK, MISO, MOSI, Word>
+where
+    SPIX: Deref<Target = gd32e230::spi0::RegisterBlock> + Enable + Reset,
+    SCK: SckPin<SPIX>,
+    MISO: MisoPin<SPIX>,
+    MOSI: MosiPin<SPIX>,
+{
+    pub fn new_word(
+        rcu: &mut Rcu,
+        spi: SPIX,
+        sck_pin: SCK,
+        miso_pin: MISO,
+        mosi_pin: MOSI,
+        psc: SpiPsc,
+        mode: Mode,
+    ) -> Self {
+        configure(rcu, &spi, psc, mode, true);
+        Self {
+            spi,
+            sck_pin,
+            miso_pin,
+            mosi_pin,
+            _word: PhantomData,
+        }
+    }
+}
+
+impl<SPIX, SCK, MISO, MOSI, WORD> Spi<SPIX, SCK, MISO, MOSI, WORD>
 where
     SPIX: Deref<Target = gd32e230::spi0::RegisterBlock>,
 {
@@ -123,6 +166,16 @@ where
         }
     }
 
+    pub fn release(self) -> (SPIX, SCK, MISO, MOSI) {
+        self.spi.ctl0().modify(|_, w| w.spien().clear_bit());
+        (self.spi, self.sck_pin, self.miso_pin, self.mosi_pin)
+    }
+}
+
+impl<SPIX, SCK, MISO, MOSI> Spi<SPIX, SCK, MISO, MOSI, Byte>
+where
+    SPIX: Deref<Target = gd32e230::spi0::RegisterBlock>,
+{
     pub fn transfer_byte(&self, byte: u8) -> Result<u8, ErrorKind> {
         while self.spi.stat().read().tbe().bit_is_clear() {}
         self.spi
@@ -135,20 +188,32 @@ where
             None => Ok(received),
         }
     }
-    pub fn release(self) -> (SPIX, SCK, MISO, MOSI) {
-        self.spi.ctl0().modify(|_, w| w.spien().clear_bit());
-        (self.spi, self.sck_pin, self.miso_pin, self.mosi_pin)
+}
+
+impl<SPIX, SCK, MISO, MOSI> Spi<SPIX, SCK, MISO, MOSI, Word>
+where
+    SPIX: Deref<Target = gd32e230::spi0::RegisterBlock>,
+{
+    pub fn transfer_word(&self, word: u16) -> Result<u16, ErrorKind> {
+        while self.spi.stat().read().tbe().bit_is_clear() {}
+        self.spi.data().write(|w| unsafe { w.data().bits(word) });
+        while self.spi.stat().read().rbne().bit_is_clear() {}
+        let received = self.spi.data().read().data().bits();
+        match self.take_error() {
+            Some(e) => Err(e),
+            None => Ok(received),
+        }
     }
 }
 
-impl<SPIX, SCK, MISO, MOSI> ErrorType for Spi<SPIX, SCK, MISO, MOSI>
+impl<SPIX, SCK, MISO, MOSI, WORD> ErrorType for Spi<SPIX, SCK, MISO, MOSI, WORD>
 where
     SPIX: Deref<Target = gd32e230::spi0::RegisterBlock>,
 {
     type Error = ErrorKind;
 }
 
-impl<SPIX, SCK, MISO, MOSI> SpiBus<u8> for Spi<SPIX, SCK, MISO, MOSI>
+impl<SPIX, SCK, MISO, MOSI> SpiBus<u8> for Spi<SPIX, SCK, MISO, MOSI, Byte>
 where
     SPIX: Deref<Target = gd32e230::spi0::RegisterBlock>,
 {
@@ -185,6 +250,48 @@ where
     fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
         for &b in words {
             self.transfer_byte(b)?;
+        }
+        Ok(())
+    }
+}
+
+impl<SPIX, SCK, MISO, MOSI> SpiBus<u16> for Spi<SPIX, SCK, MISO, MOSI, Word>
+where
+    SPIX: Deref<Target = gd32e230::spi0::RegisterBlock>,
+{
+    fn transfer(&mut self, read: &mut [u16], write: &[u16]) -> Result<(), Self::Error> {
+        let n = read.len().max(write.len());
+        for i in 0..n {
+            // MOSI: send write[i], or a dummy 0x00 once write is exhausted
+            let sent = write.get(i).copied().unwrap_or(0x0000);
+            let received = self.transfer_word(sent)?;
+            // MISO: store into read[i] if it still has room, else discard
+            if let Some(slot) = read.get_mut(i) {
+                *slot = received;
+            }
+        }
+        Ok(())
+    }
+    fn transfer_in_place(&mut self, words: &mut [u16]) -> Result<(), Self::Error> {
+        for word in words {
+            *word = self.transfer_word(*word)?;
+        }
+        Ok(())
+    }
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        // No-op: transfer_byte blocks until RBNE (the byte is fully exchanged),
+        // so nothing is ever pending on the bus when a method returns.
+        Ok(())
+    }
+    fn read(&mut self, words: &mut [u16]) -> Result<(), Self::Error> {
+        for slot in words {
+            *slot = self.transfer_word(0x00)?;
+        }
+        Ok(())
+    }
+    fn write(&mut self, words: &[u16]) -> Result<(), Self::Error> {
+        for &b in words {
+            self.transfer_word(b)?;
         }
         Ok(())
     }
