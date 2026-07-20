@@ -13,9 +13,9 @@
 //!     .freeze(&mut rcu, &mut dp.fmc);
 //! ```
 //!
-//! Peripheral clocks are gated through the [`Enable`] and [`Reset`] traits, which
-//! each peripheral implements; drivers call them from their constructors, so a
-//! peripheral cannot be used unclocked.
+//! Peripheral clocks are gated through the [`Enable`] trait, which drivers call
+//! from their constructors, so a peripheral cannot be used unclocked. [`Reset`]
+//! is separate because not every peripheral has a reset bit — DMA has none.
 //!
 //! `HXTAL` and `LXTAL` are not started — no crystal is fitted on the target board.
 
@@ -539,8 +539,8 @@ pub trait Reset {
     fn reset(rcu: &mut Rcu);
 }
 
-macro_rules! bus {
-    ($($Periph:ty => $en_reg:ident, $en_bit:ident, $rst_reg:ident, $rst_bit:ident,)+) => {
+macro_rules! bus_en {
+    ($($Periph:ty => $en_reg:ident, $en_bit:ident,)+) => {
         $(
             impl Enable for $Periph {
                 fn enable(rcu: &mut Rcu) {
@@ -550,7 +550,13 @@ macro_rules! bus {
                     rcu.rcu.$en_reg().modify(|_, w| w.$en_bit().disabled());
                 }
             }
+        )+
+    };
+}
 
+macro_rules! bus_rst {
+    ($($Periph:ty => $rst_reg:ident, $rst_bit:ident,)+) => {
+        $(
             impl Reset for $Periph {
                 fn reset(rcu: &mut Rcu) {
                     rcu.rcu.$rst_reg().modify(|_, w| w.$rst_bit().reset());
@@ -561,13 +567,25 @@ macro_rules! bus {
     };
 }
 
-bus! {
-    gd32e230::Gpioa => ahben, paen, ahbrst, parst,
-    gd32e230::Gpiob => ahben, pben, ahbrst, pbrst,
-    gd32e230::Gpiof => ahben, pfen, ahbrst, pfrst,
-    gd32e230::Usart0 => apb2en, usart0en, apb2rst, usart0rst,
-    gd32e230::Usart1 => apb1en, usart1en, apb1rst, usart1rst,
-    gd32e230::Adc => apb2en, adcen, apb2rst, adcrst,
-    gd32e230::Spi0 => apb2en, spi0en, apb2rst, spi0rst,
-    gd32e230::Spi1 => apb1en, spi1en, apb1rst, spi1rst,
+bus_en! {
+    gd32e230::Gpioa => ahben, paen,
+    gd32e230::Gpiob => ahben, pben,
+    gd32e230::Gpiof => ahben, pfen,
+    gd32e230::Dma => ahben, dmaen,
+    gd32e230::Usart1 => apb1en, usart1en,
+    gd32e230::Spi1 => apb1en, spi1en,
+    gd32e230::Usart0 => apb2en, usart0en,
+    gd32e230::Adc => apb2en, adcen,
+    gd32e230::Spi0 => apb2en, spi0en,
+}
+
+bus_rst! {
+    gd32e230::Gpioa => ahbrst, parst,
+    gd32e230::Gpiob => ahbrst, pbrst,
+    gd32e230::Gpiof => ahbrst, pfrst,
+    gd32e230::Usart1 => apb1rst, usart1rst,
+    gd32e230::Spi1 => apb1rst, spi1rst,
+    gd32e230::Usart0 => apb2rst, usart0rst,
+    gd32e230::Adc => apb2rst, adcrst,
+    gd32e230::Spi0 => apb2rst, spi0rst,
 }
