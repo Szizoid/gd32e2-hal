@@ -7,6 +7,11 @@ use crate::{
     rcu::{Enable, Rcu, Reset},
 };
 
+/// SPI1 `DZ` encodes the frame length as (bits - 1); values below 0b0011 are
+/// forced to 8-bit by hardware.
+const DZ_8BIT: u8 = 0b0111;
+const DZ_16BIT: u8 = 0b1111;
+
 #[derive(Clone, Copy)]
 pub enum SpiPsc {
     Div2 = 0b000,
@@ -130,6 +135,67 @@ impl Instance for gd32e230::Spi0 {
                 .bit(config.bit_order == BitOrder::LsbFirst)
                 .ff16()
                 .bit(wide)
+                .spien()
+                .set_bit()
+                .ckpl()
+                .bit(config.mode.polarity == Polarity::IdleHigh)
+                .ckph()
+                .bit(config.mode.phase == Phase::CaptureOnSecondTransition);
+            unsafe { w.psc().bits(config.psc as u8) }
+        });
+    }
+    fn tbe(&self) -> bool {
+        self.stat().read().tbe().bit_is_set()
+    }
+    fn rbne(&self) -> bool {
+        self.stat().read().rbne().bit_is_set()
+    }
+    fn write_data(&self, word: u16) {
+        self.data().write(|w| unsafe { w.data().bits(word) });
+    }
+    fn read_data(&self) -> u16 {
+        self.data().read().data().bits()
+    }
+    fn take_error(&self) -> Option<ErrorKind> {
+        let stat = self.stat().read();
+        if stat.rxorerr().bit_is_set() {
+            // clear: read DATA (done in transfer_byte) + read STAT (above)
+            Some(ErrorKind::Overrun)
+        } else if stat.conferr().bit_is_set() {
+            // clear: read STAT (above) + write CTL0
+            self.ctl0().modify(|_, w| w);
+            Some(ErrorKind::ModeFault)
+        } else if stat.crcerr().bit_is_set() {
+            self.stat().modify(|_, w| w.crcerr().clear_bit());
+            Some(ErrorKind::Other)
+        } else if stat.ferr().bit_is_set() {
+            self.stat().modify(|_, w| w.ferr().clear_bit());
+            Some(ErrorKind::FrameFormat)
+        } else {
+            None
+        }
+    }
+    fn set_enabled(&self, on: bool) {
+        self.ctl0().modify(|_, w| w.spien().bit(on));
+    }
+}
+
+impl Instance for gd32e230::Spi1 {
+    fn apply_config(&self, config: SpiConfig, wide: bool) {
+        self.ctl1().modify(|_, w| {
+            let w = w.byten().bit(!wide);
+            unsafe { w.dz().bits(if wide { DZ_16BIT } else { DZ_8BIT }) }
+        });
+        self.ctl0().modify(|_, w| {
+            let w = w
+                .mstmod()
+                .set_bit()
+                .swnssen()
+                .set_bit()
+                .swnss()
+                .set_bit()
+                .lf()
+                .bit(config.bit_order == BitOrder::LsbFirst)
                 .spien()
                 .set_bit()
                 .ckpl()
