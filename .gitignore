@@ -8,5 +8,8 @@
 *.hex
 CLAUDE.md
 
+# Populated manually from examples/ right before `cargo bin` — see .cargo/config.toml.
+/src/main.rs
+
 # Reference manuals — large binaries, kept local only (see docs/README.md)
 /docs/*.pdf

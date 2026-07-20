@@ -10,9 +10,9 @@ A hardware abstraction layer for the **GD32E230K8U6** (Cortex-M23), written in
 Rust from scratch on top of the [`gd32e2`](https://crates.io/crates/gd32e2) PAC.
 
 > ⚠️ **Work in progress.** Written by hand, incrementally; the API is unstable.
-> The package is a library (`src/lib.rs` → `adc`, `gpio`, `rcu`, `spi`, `time`,
-> `usart`) plus a small on-hardware test bench (`src/main.rs`), flashed and
-> verified for RCU PLL, GPIO output and USART0 echo.
+> The package is a library (`src/lib.rs` → `adc`, `dma`, `gpio`, `rcu`, `spi`,
+> `time`, `usart`) plus on-hardware test binaries in `examples/`; the board has
+> verified RCU PLL, GPIO output and USART0 echo (`examples/usart-echo.rs`) so far.
 
 ### Principles
 
@@ -146,8 +146,17 @@ if let Ok(byte) = usart0.read_byte() {
 ### Building
 
 ```sh
-cargo build --release
-cargo bin            # -> firmware.bin (needs cargo-binutils + llvm-tools)
+cargo build --release          # library only
+cargo example usart-echo       # compile-check one example, needs no probe
+```
+
+To flash: copy the example you want onto `src/main.rs` (not tracked in git —
+`.cargo/config.toml`'s `bin` alias builds that file, since a fixed cargo alias
+can't take an example name as an argument), then:
+
+```sh
+cp examples/usart-echo.rs src/main.rs
+cargo bin             # -> firmware.bin (needs cargo-binutils + llvm-tools)
 ```
 
 The default feature targets the `GD32E230K8U6` (x8); for another variant:
@@ -163,7 +172,15 @@ Flash to `0x08000000`, read the log in a terminal @ 115200 8N1.
 
 ### Roadmap
 
-- [ ] DMA (`src/dma.rs`) — next up; unblocks ADC scan mode and SPI/USART over DMA.
+- [ ] **Flash and verify on hardware** — SPI (both instances, 8/16-bit), ADC
+      (`read`, `read_vref`, `read_temperature`), USART 9-bit mode. Only USART0
+      echo (RCU PLL + GPIO + USART0 TX/RX) is verified on the board so far;
+      planned before continuing DMA below.
+- [ ] DMA (`src/dma.rs`) — in progress. Channel ownership (`Channel<N>`), the typed
+      `DmaSrc<N>`/`DmaDst<N>` request map, and the `Transfer` skeleton (`write_to` /
+      `read_from` / `wait`) are done; `CHxCTL` — direction, width, address increment,
+      circular mode, priority — isn't wired yet, so a transfer isn't correctly
+      configured in hardware. Unblocks ADC scan mode and SPI/USART over DMA once done.
 - [ ] Timers / PWM.
 - [ ] I²C.
 - [ ] Interrupt-driven operation (NVIC infrastructure — also affects USART/SPI).
@@ -175,7 +192,12 @@ Flash to `0x08000000`, read the log in a terminal @ 115200 8N1.
 - [ ] Package / pin-count variants — a second axis, independent of x4/x6/x8:
       which pins are bonded out at all (`PC13`–`PC15`, `PF6`/`PF7` exist on
       QFN48 but not on this QFN32).
-- [ ] Extract the HAL into a standalone library crate.
+- [x] ~~Test bench → `examples/`~~ — done; `src/main.rs` is gone, each on-hardware
+      test is its own file under `examples/`, copied onto `src/main.rs` (untracked)
+      only to flash it. `cargo example <name>` compile-checks one without a probe.
+- [ ] Extract the HAL into its own standalone crate/repo (not just `examples/` —
+      splitting the library out entirely). No rush to publish on crates.io; local
+      + GitHub is enough for now.
 
 ---
 
@@ -185,9 +207,9 @@ HAL для микроконтроллера **GD32E230K8U6** (Cortex-M23), на�
 нуля поверх PAC-крейта [`gd32e2`](https://crates.io/crates/gd32e2).
 
 > ⚠️ **Работа в процессе.** Пишется вручную и постепенно; API нестабилен. Пакет —
-> библиотека (`src/lib.rs` → `adc`, `gpio`, `rcu`, `spi`, `time`, `usart`) плюс
-> небольшой бинарь-стенд (`src/main.rs`), прошитый и проверенный на железе для
-> RCU PLL, GPIO output и echo по USART0.
+> библиотека (`src/lib.rs` → `adc`, `dma`, `gpio`, `rcu`, `spi`, `time`, `usart`)
+> плюс тестовые бинарники на железо в `examples/`; на плате проверены RCU PLL,
+> GPIO output и echo по USART0 (`examples/usart-echo.rs`).
 
 ### Принципы
 
@@ -321,8 +343,17 @@ if let Ok(byte) = usart0.read_byte() {
 ### Сборка
 
 ```sh
-cargo build --release
-cargo bin            # -> firmware.bin (нужны cargo-binutils + llvm-tools)
+cargo build --release          # только библиотека
+cargo example usart-echo       # проверить сборку одного примера, зонд не нужен
+```
+
+Чтобы прошить: скопировать нужный пример в `src/main.rs` (в git не входит —
+алиас `bin` из `.cargo/config.toml` собирает именно этот файл, поскольку
+фиксированный cargo-алиас не умеет принимать имя примера аргументом), затем:
+
+```sh
+cp examples/usart-echo.rs src/main.rs
+cargo bin             # -> firmware.bin (нужны cargo-binutils + llvm-tools)
 ```
 
 Дефолтная фича собирает под `GD32E230K8U6` (x8); для другого варианта:
@@ -338,8 +369,16 @@ cargo build --release --no-default-features --features gd32e230x4
 
 ### Roadmap
 
-- [ ] DMA (`src/dma.rs`) — следующий шаг; разблокирует scan-режим ADC и
-      SPI/USART через DMA.
+- [ ] **Прошить и проверить на железе** — SPI (оба инстанса, 8/16 бит), ADC
+      (`read`, `read_vref`, `read_temperature`), 9-битный режим USART. Пока на
+      плате проверено только echo по USART0 (RCU PLL + GPIO + USART0 TX/RX);
+      запланировано перед продолжением DMA ниже.
+- [ ] DMA (`src/dma.rs`) — в процессе. Готовы владение каналом (`Channel<N>`),
+      типизированная карта запросов `DmaSrc<N>`/`DmaDst<N>` и скелет `Transfer`
+      (`write_to` / `read_from` / `wait`); `CHxCTL` — направление, ширина, инкремент
+      адреса, циклический режим, приоритет — ещё не настраивается, поэтому передача
+      физически неправильно сконфигурирована. После доделки разблокирует scan-режим
+      ADC и SPI/USART через DMA.
 - [ ] Таймеры / PWM.
 - [ ] I²C.
 - [ ] Работа на прерываниях (инфраструктура NVIC — затронет и USART/SPI).
@@ -352,4 +391,10 @@ cargo build --release --no-default-features --features gd32e230x4
 - [ ] Варианты корпуса / числа ног — вторая ось, независимая от x4/x6/x8: какие
       ноги вообще разварены (`PC13`–`PC15`, `PF6`/`PF7` есть на QFN48, но не на
       нашем QFN32).
-- [ ] Вынос HAL в отдельный крейт-библиотеку.
+- [x] ~~Стенд → `examples/`~~ — сделано; `src/main.rs` больше нет, каждый тест на
+      железе — отдельный файл в `examples/`, копируется в `src/main.rs` (не
+      отслеживается git) только для прошивки. `cargo example <имя>` проверяет
+      сборку одного примера без зонда.
+- [ ] Вынос HAL в полностью отдельный крейт/репозиторий (не просто `examples/` —
+      разделение самой библиотеки). Публиковать на crates.io пока не спешим;
+      достаточно локально и на GitHub.
