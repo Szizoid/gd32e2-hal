@@ -52,28 +52,38 @@ macro_rules! pin_af {
     };
 }
 
-// map table AF из datasheet Table 2-13/2-14 (die-level)
+// AF map from datasheet Table 2-13/2-14 (die-level). The table carries three
+// footnotes marking functions that exist only on some variants of the series:
+//   (1) GD32E230x4 only          -> feature `gd32e230x4`
+//   (2) GD32E230x8/6             -> features `gd32e230x6` + `gd32e230x8`
+//   (3) GD32E230x8 only          -> feature `gd32e230x8`
+// Entries whose AF number exists on every variant live in the common block
+// below, even when the *function* behind it differs per variant (e.g. PA2 AF1
+// is USART0_TX on x4 but USART1_TX on x8) — `ValidAf` only gates the number.
+// The AF numbers that exist on some variants only are added by the gated
+// blocks that follow. Which peripheral a pin belongs to is decided separately,
+// by `usart_pins!` / `spi_pins!`, which are gated the same way.
 pin_af! {
     // ---- Port A ----
-    'A' 0  => [1, 4, 7],             // 1:USART0_CTS/USART1_CTS  4:I2C1_SCL  7:CMP_OUT
-    'A' 1  => [0, 1, 4, 5],          // 0:EVENTOUT 1:USART0_RTS/DE 4:I2C1_SDA 5:TIMER14_CH0_ON
-    'A' 2  => [0, 1],                // 0:TIMER14_CH0  1:USART0_TX/USART1_TX
-    'A' 3  => [0, 1],                // 0:TIMER14_CH1  1:USART0_RX/USART1_RX
-    'A' 4  => [0, 1, 4, 6],          // 0:SPI0_NSS/I2S0_WS 1:USART0_CK/USART1_CK 4:TIMER13_CH0 6:SPI1_NSS
+    'A' 0  => [1, 7],                // 1:USART0_CTS(1)/USART1_CTS(2) 7:CMP_OUT
+    'A' 1  => [0, 1],                // 0:EVENTOUT 1:USART0_RTS/DE(1) | USART1_RTS/DE(2)
+    'A' 2  => [1],                   // 1:USART0_TX(1) | USART1_TX(2)
+    'A' 3  => [1],                   // 1:USART0_RX(1) | USART1_RX(2)
+    'A' 4  => [0, 1, 4],             // 0:SPI0_NSS/I2S0_WS 1:USART0_CK(1)|USART1_CK(2) 4:TIMER13_CH0
     'A' 5  => [0],                   // 0:SPI0_SCK/I2S0_CK
     'A' 6  => [0, 1, 2, 5, 6, 7],    // 0:SPI0_MISO 1:TIMER2_CH0 2:TIMER0_BRKIN 5:TIMER15_CH0 6:EVENTOUT 7:CMP_OUT
     'A' 7  => [0, 1, 2, 4, 5, 6],    // 0:SPI0_MOSI 1:TIMER2_CH1 2:TIMER0_CH0_ON 4:TIMER13_CH0 5:TIMER16_CH0 6:EVENTOUT
-    'A' 8  => [0, 1, 2, 3, 4],       // 0:CK_OUT 1:USART0_CK 2:TIMER0_CH0 3:EVENTOUT 4:USART1_TX
-    'A' 9  => [0, 1, 2, 4, 5],       // 0:TIMER14_BRKIN 1:USART0_TX 2:TIMER0_CH1 4:I2C0_SCL 5:CK_OUT
+    'A' 8  => [0, 1, 2, 3],          // 0:CK_OUT 1:USART0_CK 2:TIMER0_CH0 3:EVENTOUT
+    'A' 9  => [1, 2, 4, 5],          // 1:USART0_TX 2:TIMER0_CH1 4:I2C0_SCL 5:CK_OUT
     'A' 10 => [0, 1, 2, 4],          // 0:TIMER16_BRKIN 1:USART0_RX 2:TIMER0_CH2 4:I2C0_SDA
-    'A' 11 => [0, 1, 2, 4, 5, 6, 7], // 0:EVENTOUT 1:USART0_CTS 2:TIMER0_CH3 4:I2C0_SMBA 5:I2C1_SCL 6:SPI1_IO2 7:CMP_OUT
-    'A' 12 => [0, 1, 2, 4, 5, 6],    // 0:EVENTOUT 1:USART0_RTS/DE 2:TIMER0_ETI 4:I2C0_TXFRAME 5:I2C1_SDA 6:SPI1_IO3
-    'A' 13 => [0, 1, 6],             // 0:SWDIO 1:IFRP_OUT 6:SPI1_MISO
-    'A' 14 => [0, 1, 6],             // 0:SWCLK 1:USART0_TX/USART1_TX 6:SPI1_MOSI
-    'A' 15 => [0, 1, 3, 6],          // 0:SPI0_NSS/I2S0_WS 1:USART0_RX/USART1_RX 3:EVENTOUT 6:SPI1_NSS
+    'A' 11 => [0, 1, 2, 4, 7],       // 0:EVENTOUT 1:USART0_CTS 2:TIMER0_CH3 4:I2C0_SMBA 7:CMP_OUT
+    'A' 12 => [0, 1, 2, 4],          // 0:EVENTOUT 1:USART0_RTS/DE 2:TIMER0_ETI 4:I2C0_TXFRAME
+    'A' 13 => [0, 1],                // 0:SWDIO 1:IFRP_OUT
+    'A' 14 => [0, 1],                // 0:SWCLK 1:USART0_TX(1) | USART1_TX(2)
+    'A' 15 => [0, 1, 3],             // 0:SPI0_NSS/I2S0_WS 1:USART0_RX(1)|USART1_RX(2) 3:EVENTOUT
     // ---- Port B ----
-    'B' 0  => [0, 1, 2, 4],          // 0:EVENTOUT 1:TIMER2_CH2 2:TIMER0_CH1_ON 4:USART1_RX
-    'B' 1  => [1, 2, 3, 6],          // 1:TIMER2_CH3 2:TIMER13_CH0 3:TIMER0_CH2_ON 6:SPI1_SCK
+    'B' 0  => [0, 1, 2],             // 0:EVENTOUT 1:TIMER2_CH2 2:TIMER0_CH1_ON
+    'B' 1  => [1, 2, 3],             // 1:TIMER2_CH3 2:TIMER13_CH0 3:TIMER0_CH2_ON
     'B' 2  => [1],                   // 1:TIMER2_ETI
     'B' 3  => [0, 1],                // 0:SPI0_SCK/I2S0_CK 1:EVENTOUT
     'B' 4  => [0, 1, 2, 4, 6],       // 0:SPI0_MISO 1:TIMER2_CH0 2:EVENTOUT 4:I2C0_TXFRAME 6:TIMER16_BRKIN
@@ -81,13 +91,56 @@ pin_af! {
     'B' 6  => [0, 1, 2],             // 0:USART0_TX 1:I2C0_SCL 2:TIMER15_CH0_ON
     'B' 7  => [0, 1, 2],             // 0:USART0_RX 1:I2C0_SDA 2:TIMER16_CH0_ON
     'B' 8  => [1, 2],                // 1:I2C0_SCL 2:TIMER15_CH0
-    'B' 9  => [0, 1, 2, 3, 5, 6],    // 0:IFRP_OUT 1:I2C0_SDA 2:TIMER16_CH0 3:EVENTOUT 5:I2S0_MCK 6:SPI1_NSS
-    'B' 10 => [1, 6, 7],             // 1:I2C0_SCL/I2C1_SCL 6:SPI1_IO2 7:SPI1_SCK
-    'B' 11 => [0, 1, 6],             // 0:EVENTOUT 1:I2C0_SDA/I2C1_SDA 6:SPI1_IO3
-    'B' 12 => [0, 1, 2, 4],          // 0:SPI0_NSS/SPI1_NSS 1:EVENTOUT 2:TIMER0_BRKIN 4:I2C1_SMBA
-    'B' 13 => [0, 1, 2, 5],          // 0:SPI0_SCK/SPI1_SCK 1:I2C1_TXFRAME 2:TIMER0_CH0_ON 5:I2C1_SCL
-    'B' 14 => [0, 1, 2, 5],          // 0:SPI0_MISO/SPI1_MISO 1:TIMER14_CH0 2:TIMER0_CH1_ON 5:I2C1_SDA
-    'B' 15 => [0, 1, 2, 3],          // 0:SPI0_MOSI/SPI1_MOSI 1:TIMER14_CH1 2:TIMER0_CH2_ON 3:TIMER14_CH0_ON
+    'B' 9  => [0, 1, 2, 3, 5],       // 0:IFRP_OUT 1:I2C0_SDA 2:TIMER16_CH0 3:EVENTOUT 5:I2S0_MCK
+    'B' 11 => [0],                   // 0:EVENTOUT
+    'B' 12 => [1, 2],                // 1:EVENTOUT 2:TIMER0_BRKIN
+    'B' 13 => [2],                   // 2:TIMER0_CH0_ON
+    'B' 14 => [2],                   // 2:TIMER0_CH1_ON
+    'B' 15 => [2],                   // 2:TIMER0_CH2_ON
+    // NB: 'B' 10 has no variant-independent AF — every one of its functions is
+    // footnoted, so it appears only in the gated blocks below.
+}
+
+// ---- (1) GD32E230x4 only ----
+#[cfg(feature = "gd32e230x4")]
+pin_af! {
+    'B' 10 => [1],                   // 1:I2C0_SCL
+    'B' 11 => [1],                   // 1:I2C0_SDA
+    'B' 12 => [0],                   // 0:SPI0_NSS
+    'B' 13 => [0],                   // 0:SPI0_SCK
+    'B' 14 => [0],                   // 0:SPI0_MISO
+    'B' 15 => [0],                   // 0:SPI0_MOSI
+}
+
+// ---- (2) GD32E230x8/6 ----
+#[cfg(any(feature = "gd32e230x6", feature = "gd32e230x8"))]
+pin_af! {
+    'A' 8  => [4],                   // 4:USART1_TX
+    'B' 0  => [4],                   // 4:USART1_RX
+}
+
+// ---- (3) GD32E230x8 only ----
+#[cfg(feature = "gd32e230x8")]
+pin_af! {
+    'A' 0  => [4],                   // 4:I2C1_SCL
+    'A' 1  => [4, 5],                // 4:I2C1_SDA 5:TIMER14_CH0_ON
+    'A' 2  => [0],                   // 0:TIMER14_CH0
+    'A' 3  => [0],                   // 0:TIMER14_CH1
+    'A' 4  => [6],                   // 6:SPI1_NSS
+    'A' 9  => [0],                   // 0:TIMER14_BRKIN
+    'A' 11 => [5, 6],                // 5:I2C1_SCL 6:SPI1_IO2
+    'A' 12 => [5, 6],                // 5:I2C1_SDA 6:SPI1_IO3
+    'A' 13 => [6],                   // 6:SPI1_MISO
+    'A' 14 => [6],                   // 6:SPI1_MOSI
+    'A' 15 => [6],                   // 6:SPI1_NSS
+    'B' 1  => [6],                   // 6:SPI1_SCK
+    'B' 9  => [7],                   // 7:SPI1_NSS
+    'B' 10 => [1, 6, 7],             // 1:I2C1_SCL 6:SPI1_IO2 7:SPI1_SCK
+    'B' 11 => [1, 6],                // 1:I2C1_SDA 6:SPI1_IO3
+    'B' 12 => [0, 4],                // 0:SPI1_NSS 4:I2C1_SMBA
+    'B' 13 => [0, 1, 5],             // 0:SPI1_SCK 1:I2C1_TXFRAME 5:I2C1_SCL
+    'B' 14 => [0, 1, 5],             // 0:SPI1_MISO 1:TIMER14_CH0 5:I2C1_SDA
+    'B' 15 => [0, 1, 3],             // 0:SPI1_MOSI 1:TIMER14_CH1 3:TIMER14_CH0_ON
 }
 
 pub trait Active {} // No Debugger, No Locked<MODE>

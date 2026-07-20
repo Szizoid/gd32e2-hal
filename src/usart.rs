@@ -26,10 +26,26 @@ macro_rules! usart_pins {
     };
 }
 
+// PA2/PA3/PA14/PA15 at AF1 belong to a *different* USART depending on the chip
+// variant (datasheet Table 2-13 footnotes): USART0 on GD32E230x4, USART1 on
+// GD32E230x8/6. They are therefore listed in the gated blocks, not here.
 usart_pins! {
     gd32e230::Usart0:
-        TX: [ 'A' 2:1, 'A' 9:1, 'A' 14:1, 'B' 6:0 ]
-        RX: [ 'A' 3:1, 'A' 10:1, 'A' 15:1, 'B' 7:0 ],
+        TX: [ 'A' 9:1, 'B' 6:0 ]
+        RX: [ 'A' 10:1, 'B' 7:0 ],
+}
+
+// ---- (1) GD32E230x4 only: PA2/PA3/PA14/PA15 AF1 are USART0 ----
+#[cfg(feature = "gd32e230x4")]
+usart_pins! {
+    gd32e230::Usart0:
+        TX: [ 'A' 2:1, 'A' 14:1 ]
+        RX: [ 'A' 3:1, 'A' 15:1 ],
+}
+
+// ---- (2) GD32E230x8/6: PA2/PA3/PA14/PA15 AF1 are USART1; USART1 exists ----
+#[cfg(any(feature = "gd32e230x6", feature = "gd32e230x8"))]
+usart_pins! {
     gd32e230::Usart1:
         TX: [ 'A' 2:1, 'A' 8:4, 'A' 14:1 ]
         RX: [ 'A' 3:1, 'A' 15:1, 'B' 0:4 ],

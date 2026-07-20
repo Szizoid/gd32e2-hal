@@ -5,6 +5,19 @@ edition = "2024"
 authors = ["Szizoid"]
 description = "HAL for GD32E230 (Cortex-M23)"
 
+# Chip variant within the GD32E230x series. These gate the alternate-function
+# map: the same pin+AF maps to different peripherals depending on the variant
+# (datasheet Table 2-13/2-14 notes 1/2/3). Mutually exclusive; exactly one must
+# be enabled (enforced by a compile_error! in lib.rs).
+#   gd32e230x4 -> note (1), GD32E230x4 only
+#   gd32e230x6 -> note (2), GD32E230x8/6
+#   gd32e230x8 -> notes (2) and (3), GD32E230x8 (our GD32E230K8U6)
+[features]
+default = ["gd32e230x8"]
+gd32e230x4 = []
+gd32e230x6 = []
+gd32e230x8 = []
+
 [dependencies]
 # critical-section-single-core: impl gd32e2's `critical-section` feature needs.
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
