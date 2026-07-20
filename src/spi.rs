@@ -1,4 +1,4 @@
-use core::{marker::PhantomData, ops::Deref};
+use core::marker::PhantomData;
 use embedded_hal::spi::{ErrorKind, ErrorType, MODE_0, Mode, Phase, Polarity, SpiBus};
 use gd32e2::gd32e230;
 
@@ -71,13 +71,34 @@ macro_rules! spi_pins {
     };
 }
 
-// SPI1 deliberately omitted — its registers diverge from SPI0 at the bit level
-// (FF16 vs CRCL, BYTEN, ...); It will get its own type later.
+// PB13/PB14/PB15 at AF0 belong to a *different* SPI depending on the chip
+// variant (datasheet Table 2-14 footnotes): SPI0 on GD32E230x4, SPI1 on
+// GD32E230x8. They are therefore listed in the gated blocks, not here.
 spi_pins!(
     gd32e230::Spi0:
-        SCK: ['A' 5 : 0, 'B' 3 : 0, 'B' 13 : 0]
-        MISO: ['A' 6 : 0, 'B' 4 : 0, 'B' 14 : 0]
-        MOSI: ['A' 7 : 0, 'B' 5 : 0, 'B' 15 : 0]
+        SCK: ['A' 5 : 0, 'B' 3 : 0]
+        MISO: ['A' 6 : 0, 'B' 4 : 0]
+        MOSI: ['A' 7 : 0, 'B' 5 : 0]
+);
+
+// ---- (1) GD32E230x4 only: PB13/14/15 AF0 are SPI0 ----
+#[cfg(feature = "gd32e230x4")]
+spi_pins!(
+    gd32e230::Spi0:
+        SCK: ['B' 13 : 0]
+        MISO: ['B' 14 : 0]
+        MOSI: ['B' 15 : 0]
+);
+
+// ---- (3) GD32E230x8 only: SPI1 exists, and PB13/14/15 AF0 belong to it ----
+// NB: PA13/PA14 are SWDIO/SWCLK — reaching them needs `unsafe activate()` on
+// the `Debugger` typestate first, and doing so gives up SWD debugging.
+#[cfg(feature = "gd32e230x8")]
+spi_pins!(
+    gd32e230::Spi1:
+        SCK: ['B' 1 : 6, 'B' 10 : 7, 'B' 13 : 0]
+        MISO: ['A' 13 : 6, 'B' 14 : 0]
+        MOSI: ['A' 14 : 6, 'B' 15 : 0]
 );
 
 /// Word-width marker: 8-bit frames (`transfer_byte`, `SpiBus<u8>`).
@@ -85,32 +106,73 @@ pub struct Byte;
 /// Word-width marker: 16-bit frames (`transfer_word`, `SpiBus<u16>`).
 pub struct Word;
 
-fn configure<SPIX>(rcu: &mut Rcu, spi: &SPIX, config: SpiConfig, ff16: bool)
-where
-    SPIX: Deref<Target = gd32e230::spi0::RegisterBlock> + Enable + Reset,
-{
-    SPIX::enable(rcu);
-    SPIX::reset(rcu);
-    spi.ctl0().modify(|_, w| {
-        let w = w
-            .mstmod()
-            .set_bit()
-            .swnssen()
-            .set_bit()
-            .swnss()
-            .set_bit()
-            .lf()
-            .bit(config.bit_order == BitOrder::LsbFirst)
-            .ff16()
-            .bit(ff16)
-            .spien()
-            .set_bit()
-            .ckpl()
-            .bit(config.mode.polarity == Polarity::IdleHigh)
-            .ckph()
-            .bit(config.mode.phase == Phase::CaptureOnSecondTransition);
-        unsafe { w.psc().bits(config.psc as u8) }
-    });
+pub trait Instance: Enable + Reset {
+    fn apply_config(&self, config: SpiConfig, wide: bool); // `wide`: false = 8-bit, true = 16-bit.
+    fn tbe(&self) -> bool;
+    fn rbne(&self) -> bool;
+    fn write_data(&self, word: u16);
+    fn read_data(&self) -> u16;
+    fn take_error(&self) -> Option<ErrorKind>;
+    fn set_enabled(&self, on: bool);
+}
+
+impl Instance for gd32e230::Spi0 {
+    fn apply_config(&self, config: SpiConfig, wide: bool) {
+        self.ctl0().modify(|_, w| {
+            let w = w
+                .mstmod()
+                .set_bit()
+                .swnssen()
+                .set_bit()
+                .swnss()
+                .set_bit()
+                .lf()
+                .bit(config.bit_order == BitOrder::LsbFirst)
+                .ff16()
+                .bit(wide)
+                .spien()
+                .set_bit()
+                .ckpl()
+                .bit(config.mode.polarity == Polarity::IdleHigh)
+                .ckph()
+                .bit(config.mode.phase == Phase::CaptureOnSecondTransition);
+            unsafe { w.psc().bits(config.psc as u8) }
+        });
+    }
+    fn tbe(&self) -> bool {
+        self.stat().read().tbe().bit_is_set()
+    }
+    fn rbne(&self) -> bool {
+        self.stat().read().rbne().bit_is_set()
+    }
+    fn write_data(&self, word: u16) {
+        self.data().write(|w| unsafe { w.data().bits(word) });
+    }
+    fn read_data(&self) -> u16 {
+        self.data().read().data().bits()
+    }
+    fn take_error(&self) -> Option<ErrorKind> {
+        let stat = self.stat().read();
+        if stat.rxorerr().bit_is_set() {
+            // clear: read DATA (done in transfer_byte) + read STAT (above)
+            Some(ErrorKind::Overrun)
+        } else if stat.conferr().bit_is_set() {
+            // clear: read STAT (above) + write CTL0
+            self.ctl0().modify(|_, w| w);
+            Some(ErrorKind::ModeFault)
+        } else if stat.crcerr().bit_is_set() {
+            self.stat().modify(|_, w| w.crcerr().clear_bit());
+            Some(ErrorKind::Other)
+        } else if stat.ferr().bit_is_set() {
+            self.stat().modify(|_, w| w.ferr().clear_bit());
+            Some(ErrorKind::FrameFormat)
+        } else {
+            None
+        }
+    }
+    fn set_enabled(&self, on: bool) {
+        self.ctl0().modify(|_, w| w.spien().bit(on));
+    }
 }
 
 #[derive(Debug)]
@@ -124,7 +186,7 @@ pub struct Spi<SPIX, SCK, MISO, MOSI, WORD = Byte> {
 
 impl<SPIX, SCK, MISO, MOSI> Spi<SPIX, SCK, MISO, MOSI, Byte>
 where
-    SPIX: Deref<Target = gd32e230::spi0::RegisterBlock> + Enable + Reset,
+    SPIX: Instance,
     SCK: SckPin<SPIX>,
     MISO: MisoPin<SPIX>,
     MOSI: MosiPin<SPIX>,
@@ -137,7 +199,9 @@ where
         mosi_pin: MOSI,
         config: SpiConfig,
     ) -> Self {
-        configure(rcu, &spi, config, false);
+        SPIX::enable(rcu);
+        SPIX::reset(rcu);
+        spi.apply_config(config, false);
         Self {
             spi,
             sck_pin,
@@ -150,7 +214,7 @@ where
 
 impl<SPIX, SCK, MISO, MOSI> Spi<SPIX, SCK, MISO, MOSI, Word>
 where
-    SPIX: Deref<Target = gd32e230::spi0::RegisterBlock> + Enable + Reset,
+    SPIX: Instance,
     SCK: SckPin<SPIX>,
     MISO: MisoPin<SPIX>,
     MOSI: MosiPin<SPIX>,
@@ -163,7 +227,9 @@ where
         mosi_pin: MOSI,
         config: SpiConfig,
     ) -> Self {
-        configure(rcu, &spi, config, true);
+        SPIX::enable(rcu);
+        SPIX::reset(rcu);
+        spi.apply_config(config, true);
         Self {
             spi,
             sck_pin,
@@ -176,46 +242,24 @@ where
 
 impl<SPIX, SCK, MISO, MOSI, WORD> Spi<SPIX, SCK, MISO, MOSI, WORD>
 where
-    SPIX: Deref<Target = gd32e230::spi0::RegisterBlock>,
+    SPIX: Instance,
 {
-    fn take_error(&self) -> Option<ErrorKind> {
-        let stat = self.spi.stat().read();
-        if stat.rxorerr().bit_is_set() {
-            // clear: read DATA (done in transfer_byte) + read STAT (above)
-            Some(ErrorKind::Overrun)
-        } else if stat.conferr().bit_is_set() {
-            // clear: read STAT (above) + write CTL0
-            self.spi.ctl0().modify(|_, w| w);
-            Some(ErrorKind::ModeFault)
-        } else if stat.crcerr().bit_is_set() {
-            self.spi.stat().modify(|_, w| w.crcerr().clear_bit());
-            Some(ErrorKind::Other)
-        } else if stat.ferr().bit_is_set() {
-            self.spi.stat().modify(|_, w| w.ferr().clear_bit());
-            Some(ErrorKind::FrameFormat)
-        } else {
-            None
-        }
-    }
-
     pub fn release(self) -> (SPIX, SCK, MISO, MOSI) {
-        self.spi.ctl0().modify(|_, w| w.spien().clear_bit());
+        self.spi.set_enabled(false);
         (self.spi, self.sck_pin, self.miso_pin, self.mosi_pin)
     }
 }
 
 impl<SPIX, SCK, MISO, MOSI> Spi<SPIX, SCK, MISO, MOSI, Byte>
 where
-    SPIX: Deref<Target = gd32e230::spi0::RegisterBlock>,
+    SPIX: Instance,
 {
     pub fn transfer_byte(&self, byte: u8) -> Result<u8, ErrorKind> {
-        while self.spi.stat().read().tbe().bit_is_clear() {}
-        self.spi
-            .data()
-            .write(|w| unsafe { w.data().bits(byte as u16) });
-        while self.spi.stat().read().rbne().bit_is_clear() {}
-        let received = self.spi.data().read().data().bits() as u8;
-        match self.take_error() {
+        while !self.spi.tbe() {}
+        self.spi.write_data(byte as u16);
+        while !self.spi.rbne() {}
+        let received = self.spi.read_data() as u8;
+        match self.spi.take_error() {
             Some(e) => Err(e),
             None => Ok(received),
         }
@@ -224,14 +268,14 @@ where
 
 impl<SPIX, SCK, MISO, MOSI> Spi<SPIX, SCK, MISO, MOSI, Word>
 where
-    SPIX: Deref<Target = gd32e230::spi0::RegisterBlock>,
+    SPIX: Instance,
 {
     pub fn transfer_word(&self, word: u16) -> Result<u16, ErrorKind> {
-        while self.spi.stat().read().tbe().bit_is_clear() {}
-        self.spi.data().write(|w| unsafe { w.data().bits(word) });
-        while self.spi.stat().read().rbne().bit_is_clear() {}
-        let received = self.spi.data().read().data().bits();
-        match self.take_error() {
+        while !self.spi.tbe() {}
+        self.spi.write_data(word);
+        while !self.spi.rbne() {}
+        let received = self.spi.read_data();
+        match self.spi.take_error() {
             Some(e) => Err(e),
             None => Ok(received),
         }
@@ -240,14 +284,14 @@ where
 
 impl<SPIX, SCK, MISO, MOSI, WORD> ErrorType for Spi<SPIX, SCK, MISO, MOSI, WORD>
 where
-    SPIX: Deref<Target = gd32e230::spi0::RegisterBlock>,
+    SPIX: Instance,
 {
     type Error = ErrorKind;
 }
 
 impl<SPIX, SCK, MISO, MOSI> SpiBus<u8> for Spi<SPIX, SCK, MISO, MOSI, Byte>
 where
-    SPIX: Deref<Target = gd32e230::spi0::RegisterBlock>,
+    SPIX: Instance,
 {
     fn transfer(&mut self, read: &mut [u8], write: &[u8]) -> Result<(), Self::Error> {
         let n = read.len().max(write.len());
@@ -289,7 +333,7 @@ where
 
 impl<SPIX, SCK, MISO, MOSI> SpiBus<u16> for Spi<SPIX, SCK, MISO, MOSI, Word>
 where
-    SPIX: Deref<Target = gd32e230::spi0::RegisterBlock>,
+    SPIX: Instance,
 {
     fn transfer(&mut self, read: &mut [u16], write: &[u16]) -> Result<(), Self::Error> {
         let n = read.len().max(write.len());
