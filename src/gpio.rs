@@ -1,3 +1,27 @@
+//! General-purpose I/O.
+//!
+//! A pin's port, number and mode all live in its type, so the compiler rejects
+//! whatever the current mode doesn't support: an [`Input`] pin has no
+//! `set_high`, and an alternate function the pin doesn't have won't compile.
+//!
+//! Pins are handed out by [`GpioExt::split`], which consumes the port and
+//! enables its clock, so a pin can neither be obtained twice nor used unclocked.
+//! Modes are changed with the `into_*` methods, each returning a new type.
+//!
+//! ```ignore
+//! let parts = dp.gpioa.split(&mut rcu);
+//! let mut led = parts.pa5.into_output();
+//! led.set_high().unwrap();
+//! let tx = parts.pa9.into_alternate::<1>();
+//! ```
+//!
+//! Two modes are special. `PA13`/`PA14` start as [`Debugger`] rather than as
+//! inputs, because after reset they really are wired to SWD; using them for
+//! anything else takes an `unsafe` step that acknowledges losing debug access.
+//! And [`Pin::lock`] freezes a pin's configuration until the next chip reset,
+//! which the type reflects as [`Locked`] — with no way back, since the hardware
+//! has none either.
+
 use core::convert::Infallible;
 use core::marker::PhantomData;
 use embedded_hal::digital::{ErrorType, InputPin, OutputPin, StatefulOutputPin};
@@ -13,37 +37,69 @@ const CTL_ANALOG: u32 = 0b11;
 const OMODE_PUSH_PULL: u32 = 0b0;
 const OMODE_OPEN_DRAIN: u32 = 0b1;
 
+/// Mode: digital input.
 pub struct Input;
+/// Output type: driven both high and low.
 pub struct PushPull;
+/// Output type: driven low, released high — needs a pull-up to reach a high level.
 pub struct OpenDrain;
+/// Mode: digital output, of type `OTYPE` ([`PushPull`] or [`OpenDrain`]).
 pub struct Output<OTYPE> {
     _otype: PhantomData<OTYPE>,
 }
+/// Mode: analog, the input mode the ADC requires.
 pub struct Analog;
+/// Mode: alternate function `AF`, routing the pin to a peripheral.
 pub struct Alternate<const AF: u8>;
+/// Mode: serial-wire debug, the reset state of `PA13`/`PA14`.
+///
+/// Deliberately not [`Input`]: those pins are genuinely driving SWD out of reset.
+/// Leaving this state requires [`Pin::activate`], which is `unsafe` because it
+/// gives up debug access.
 pub struct Debugger;
+/// Mode: configuration frozen until the next chip reset, wrapping the mode it
+/// was locked in.
+///
+/// Reading and writing the pin still work exactly as they did before locking;
+/// only reconfiguration is barred.
 pub struct Locked<MODE> {
     _mode: PhantomData<MODE>,
 }
 
+/// A single pin: `P` is the port (`'A'`, `'B'` or `'F'`), `N` the pin number.
+///
+/// Zero-sized — the identity lives entirely in the type, so passing a pin around
+/// costs nothing at runtime.
 pub struct Pin<const P: char, const N: u8, MODE> {
     _mode: PhantomData<MODE>,
 }
 
+/// Internal pull resistor.
 #[derive(Clone, Copy)]
 pub enum Pull {
+    /// No pull resistor.
     Floating = 0b00,
+    /// Pulled up to the supply.
     Up = 0b01,
+    /// Pulled down to ground.
     Down = 0b10,
 }
 
+/// Output slew rate. Slower edges radiate less; faster ones are needed for
+/// high-speed peripherals.
 #[derive(Clone, Copy)]
+#[allow(missing_docs)]
 pub enum Speed {
     Mhz2 = 0b00,
     Mhz10 = 0b01,
     Mhz50 = 0b11,
 }
 
+/// Marks `AF` as a valid alternate function number for this pin.
+///
+/// Populated from the datasheet's pin table, so [`Pin::into_alternate`] rejects
+/// a number the pin doesn't have. Which numbers are valid depends on the chip
+/// variant feature.
 pub trait ValidAf<const AF: u8> {}
 
 macro_rules! pin_af {
@@ -143,18 +199,27 @@ pin_af! {
     'B' 15 => [0, 1, 3],             // 0:SPI1_MOSI 1:TIMER14_CH1 3:TIMER14_CH0_ON
 }
 
-pub trait Active {} // No Debugger, No Locked<MODE>
+/// Marks a mode whose pin may be reconfigured.
+///
+/// [`Debugger`] and [`Locked`] deliberately don't implement it, which is what
+/// makes the `into_*` methods and the setters unavailable on them.
+pub trait Active {}
 
 impl Active for Input {}
 impl Active for Analog {}
 impl<const AF: u8> Active for Alternate<AF> {}
 impl<OTYPE> Active for Output<OTYPE> {}
 
+/// Marks a pin on a port that has a `LOCK` register, gating [`Pin::lock`].
+///
+/// Ports A and B have one; port F does not.
 pub trait HasLock {}
 impl<const N: u8, MODE> HasLock for Pin<'A', N, MODE> {}
 impl<const N: u8, MODE> HasLock for Pin<'B', N, MODE> {}
 
 impl<const P: char, const N: u8> Pin<P, N, Debugger> {
+    /// Releases an SWD pin for general-purpose use, giving up debug access.
+    ///
     /// # Safety
     ///
     /// This only relabels the type from `Debugger` to `Input` — it performs no
@@ -258,27 +323,40 @@ where
         });
     }
 
+    /// Reconfigures the pin as a digital input.
     pub fn into_input(self) -> Pin<P, N, Input> {
         self.set_mode(CTL_INPUT);
         Pin { _mode: PhantomData }
     }
+    /// Reconfigures the pin as a push-pull output.
     pub fn into_push_pull_output(self) -> Pin<P, N, Output<PushPull>> {
         self.set_mode(CTL_OUTPUT);
         self.set_omode(OMODE_PUSH_PULL);
         Pin { _mode: PhantomData }
     }
+    /// Reconfigures the pin as an open-drain output.
+    ///
+    /// The pin can also be read back in this mode, which shared buses such as
+    /// I²C rely on.
     pub fn into_open_drain_output(self) -> Pin<P, N, Output<OpenDrain>> {
         self.set_mode(CTL_OUTPUT);
         self.set_omode(OMODE_OPEN_DRAIN);
         Pin { _mode: PhantomData }
     }
+    /// Reconfigures the pin as an output; shorthand for the push-pull variant.
     pub fn into_output(self) -> Pin<P, N, Output<PushPull>> {
         self.into_push_pull_output()
     }
+    /// Reconfigures the pin as an analog input, as required by the ADC.
     pub fn into_analog(self) -> Pin<P, N, Analog> {
         self.set_mode(CTL_ANALOG);
         Pin { _mode: PhantomData }
     }
+    /// Routes the pin to a peripheral through alternate function `AF`.
+    ///
+    /// Only numbers this pin actually has will compile — see [`ValidAf`]. The
+    /// number stays in the returned type, so a driver can demand the exact
+    /// function it needs.
     pub fn into_alternate<const AF: u8>(self) -> Pin<P, N, Alternate<AF>>
     where
         Self: ValidAf<AF>,
@@ -287,6 +365,12 @@ where
         self.set_af(AF as u32);
         Pin { _mode: PhantomData }
     }
+    /// Freezes the pin's configuration until the next chip reset.
+    ///
+    /// Mode, pull, output type, speed and alternate function all stop responding
+    /// to writes. There is no way to undo this, in hardware or in the type: the
+    /// returned [`Locked`] pin can still be read and written, but never
+    /// reconfigured. Only available on ports that have a `LOCK` register.
     pub fn lock(self) -> Pin<P, N, Locked<MODE>>
     where
         Self: HasLock,
@@ -301,9 +385,11 @@ where
         Pin { _mode: PhantomData }
     }
 
+    /// Selects the internal pull resistor.
     pub fn set_pull(&self, p: Pull) {
         self.set_pud(p as u32);
     }
+    /// Selects the output slew rate.
     pub fn set_speed(&self, s: Speed) {
         self.set_ospd(s as u32);
     }
@@ -403,14 +489,27 @@ where
     }
 }
 
+/// Extension trait splitting a GPIO port into its individual pins.
 pub trait GpioExt {
+    /// The struct of individual pins this port yields.
     type Parts;
+
+    /// Enables the port's clock and returns its pins.
+    ///
+    /// Consumes the port, so its pins can only be obtained once — that is what
+    /// keeps two parts of a program from configuring the same pin.
     fn split(self, rcu: &mut Rcu) -> Self::Parts;
 }
 
 macro_rules! gpio {
     ($Parts:ident, $Gpio:ty, $P:literal, [ $($name:ident : $num:literal : $mode:ty),+ $(,)? ]) => {
-        pub struct $Parts { $( pub $name: Pin<$P, $num, $mode>, )+ }
+        /// The pins of this port, in their reset modes.
+        pub struct $Parts {
+            $(
+                #[doc = concat!("Pin ", stringify!($name), ".")]
+                pub $name: Pin<$P, $num, $mode>,
+            )+
+        }
 
         impl GpioExt for $Gpio {
             type Parts = $Parts;

@@ -1,3 +1,21 @@
+//! Asynchronous serial (USART), blocking and non-blocking.
+//!
+//! Word width is a typestate: a [`Usart<.., Byte>`](Usart) moves `u8` values and
+//! is what [`new`](Usart::new) builds, while [`new_word`](Usart::new_word) gives a
+//! `Usart<.., Word>` for raw 9-bit frames carrying `u16`. Methods of the other
+//! width don't exist on either, so the two can't be mixed up.
+//!
+//! ```ignore
+//! let tx = parts.pa9.into_alternate::<1>();
+//! let rx = parts.pa10.into_alternate::<1>();
+//! let serial = Usart::new(&mut rcu, dp.usart0, tx, rx, clocks, UsartConfig::default());
+//! serial.write_byte(b'x');
+//! ```
+//!
+//! Which pins are valid depends on the chip variant — on the x8 part `PA2`/`PA3`
+//! reach USART1, not USART0 — but that is settled at compile time by the pin
+//! bounds, so a wrong pin simply fails to build.
+
 use core::marker::PhantomData;
 use core::ops::Deref;
 use embedded_hal_nb::serial::{ErrorKind, ErrorType, Read, Write};
@@ -14,7 +32,9 @@ const DATA_7BIT_MASK: u8 = 0x7F;
 /// 9 data bits: the full 9-bit word in `WL=1, PCEN=0` mode.
 const DATA_9BIT_MASK: u32 = 0x1FF;
 
+/// Marks a pin usable as `TX` for `USART`, in the right alternate function.
 pub trait TxPin<USART> {}
+/// Marks a pin usable as `RX` for `USART`, in the right alternate function.
 pub trait RxPin<USART> {}
 
 macro_rules! usart_pins {
@@ -51,7 +71,14 @@ usart_pins! {
         RX: [ 'A' 3:1, 'A' 15:1, 'B' 0:4 ],
 }
 
+/// Supplies the clock frequency feeding a given USART.
+///
+/// USART0 can be reclocked away from its bus (see
+/// [`Usart0Sel`](crate::rcu::Usart0Sel)) while USART1 always runs off APB1.
+/// Resolving that per peripheral type keeps the baud divisor from ever being
+/// computed against the wrong frequency.
 pub trait BusClocks {
+    /// Returns the frequency actually clocking this USART.
     fn clock(clocks: &Clocks) -> Hertz;
 }
 
@@ -67,6 +94,11 @@ impl BusClocks for gd32e230::Usart1 {
     }
 }
 
+/// Named constants for the standard bit rates.
+///
+/// Purely a readability aid — [`UsartConfig::baud`] takes any `u32`, since the
+/// hardware divisor is not restricted to these values.
+#[allow(missing_docs)]
 pub mod baud {
     pub const B110: u32 = 110;
     pub const B300: u32 = 300;
@@ -85,25 +117,46 @@ pub mod baud {
     pub const B921600: u32 = 921_600;
 }
 
+/// How many times each bit is sampled.
+///
+/// ×16 is the default and more tolerant of clock error; ×8 halves the sampling
+/// rate, which allows higher bit rates from the same peripheral clock.
 #[derive(Clone, Copy)]
 pub enum Oversampling {
+    /// 8 samples per bit — allows twice the bit rate from the same clock.
     X8,
+    /// 16 samples per bit — the default, more tolerant of clock error.
     X16,
 }
 
-/// 8-bit-word frame formats (`WL`/`PCEN`/`PM` in `CTL0`). `E7`/`O7` give only 7 real
-/// data bits (parity replaces the MSB); `E8`/`O8` keep the full 8 bits by widening the
-/// frame to 9 bits and putting parity in the extra bit. See `Usart::new_word` for the
-/// 9-bit-word, no-parity case, which needs a `u16`, not `u8`.
+/// Word length and parity, as a single setting.
+///
+/// Named for how the frame appears to the caller rather than for the register
+/// bits: `E7`/`O7` leave only 7 real data bits, because parity replaces the top
+/// bit of the byte, while `E8`/`O8` keep all 8 by widening the frame to 9 bits
+/// and putting parity in the extra one. There is no `N7` — without parity a
+/// frame always carries the full 8 bits, which is `N8`.
+///
+/// For raw 9-bit words with no parity, see [`Usart::new_word`], which moves
+/// `u16` rather than `u8`.
 #[derive(Clone, Copy)]
 pub enum FrameFormat {
+    /// 8 data bits, no parity.
     N8,
+    /// 8 data bits, even parity.
     E8,
+    /// 8 data bits, odd parity.
     O8,
+    /// 7 data bits, even parity.
     E7,
+    /// 7 data bits, odd parity.
     O7,
 }
 
+/// Configuration for [`Usart::new`].
+///
+/// [`Default`] is 115200 baud, ×16 oversampling, [`FrameFormat::N8`] — i.e. the
+/// usual "115200 8N1".
 pub struct UsartConfig {
     baud: u32,
     oversampling: Oversampling,
@@ -111,14 +164,17 @@ pub struct UsartConfig {
 }
 
 impl UsartConfig {
+    /// Sets the bit rate. See the [`baud`] module for named constants.
     pub fn baud(mut self, baud: u32) -> Self {
         self.baud = baud;
         self
     }
+    /// Sets the oversampling ratio.
     pub fn oversampling(mut self, oversampling: Oversampling) -> Self {
         self.oversampling = oversampling;
         self
     }
+    /// Sets the word length and parity.
     pub fn frame_format(mut self, frame_format: FrameFormat) -> Self {
         self.frame_format = frame_format;
         self
@@ -135,16 +191,22 @@ impl Default for UsartConfig {
     }
 }
 
+/// Configuration for [`Usart::new_word`].
+///
+/// Deliberately has no frame-format field: the 9-bit path is always
+/// "9 data bits, no parity", so there would be nothing meaningful to choose.
 pub struct UsartConfig9 {
     baud: u32,
     oversampling: Oversampling,
 }
 
 impl UsartConfig9 {
+    /// Sets the bit rate. See the [`baud`] module for named constants.
     pub fn baud(mut self, baud: u32) -> Self {
         self.baud = baud;
         self
     }
+    /// Sets the oversampling ratio.
     pub fn oversampling(mut self, oversampling: Oversampling) -> Self {
         self.oversampling = oversampling;
         self
@@ -194,11 +256,19 @@ fn configure<USARTX>(
     });
 }
 
-/// Word-width marker: 8-bit words (`write_byte`/`read_byte`), optionally with parity.
+/// Word-width marker: 8-bit words ([`Usart::write_byte`], [`Usart::read_byte`]),
+/// optionally with parity.
 pub struct Byte;
-/// Word-width marker: raw 9-bit words (`write_word`/`read_word`), no parity possible.
+/// Word-width marker: raw 9-bit words ([`Usart::write_word`],
+/// [`Usart::read_word`]), no parity possible.
 pub struct Word;
 
+/// A configured USART, owning the peripheral and both pins.
+///
+/// `WORD` records the word width, so methods of the wrong width don't exist:
+/// `write_byte`/`read_byte` are available only on `Usart<.., Byte>`, and
+/// `write_word`/`read_word` only on `Usart<.., Word>`. It defaults to [`Byte`],
+/// so the parameter can be omitted.
 pub struct Usart<USARTX, TX, RX, WORD = Byte> {
     usart: USARTX,
     tx_pin: TX,
@@ -236,6 +306,10 @@ where
         error
     }
 
+    /// Disables the peripheral and returns it along with both pins.
+    ///
+    /// The clock is left enabled and no reset is performed — a later `new()`
+    /// does both anyway.
     pub fn release(self) -> (USARTX, TX, RX) {
         self.usart.ctl0().modify(|_, w| w.uen().disabled());
         (self.usart, self.tx_pin, self.rx_pin)
@@ -261,6 +335,12 @@ where
     TX: TxPin<USARTX>,
     RX: RxPin<USARTX>,
 {
+    /// Enables the peripheral's clock, resets it and configures 8-bit words.
+    ///
+    /// The pins must already be in the alternate function this USART uses; the
+    /// bounds reject any other pin at compile time. They are moved in and handed
+    /// back by [`release`](Usart::release). `clocks` supplies the frequency the
+    /// baud divisor is computed from.
     pub fn new(
         rcu: &mut Rcu,
         usart: USARTX,
@@ -287,10 +367,18 @@ where
         }
     }
 
+    /// Sends one byte, blocking until the transmit buffer can accept it.
+    ///
+    /// Returning does not mean the byte has left the wire — for that, flush via
+    /// [`Write::flush`], which waits for transmission to complete.
     pub fn write_byte(&self, byte: u8) {
         while !self.usart.stat().read().tbe().bit() {}
         self.usart.tdata().write(|w| unsafe { w.bits(byte as u32) });
     }
+    /// Receives one byte, blocking until one arrives.
+    ///
+    /// A line error consumes the offending frame and is reported instead of the
+    /// data, so a damaged byte is never mistaken for a good one.
     pub fn read_byte(&self) -> Result<u8, ErrorKind> {
         while !self.usart.stat().read().rbne().bit() {}
         if let Some(e) = self.take_error() {
@@ -307,6 +395,10 @@ where
     TX: TxPin<USARTX>,
     RX: RxPin<USARTX>,
 {
+    /// Same as [`new`](Usart::new), but configures raw 9-bit words with no parity.
+    ///
+    /// All nine bits carry data, so there is no frame format to choose and the
+    /// peripheral moves `u16` rather than `u8`.
     pub fn new_word(
         rcu: &mut Rcu,
         usart: USARTX,
@@ -316,9 +408,6 @@ where
         config: UsartConfig9,
     ) -> Self {
         configure(rcu, &usart, &clocks, config.baud, config.oversampling);
-
-        // WL=1 (9-bit frame), PCEN disabled: no parity possible in this mode, all 9
-        // bits are real data.
         usart.ctl0().modify(|_, w| w.pcen().disabled().wl().bit9());
         Self {
             usart,
@@ -330,12 +419,16 @@ where
         }
     }
 
+    /// Sends one 9-bit word, blocking until the transmit buffer can accept it.
+    ///
+    /// Bits above the ninth are discarded.
     pub fn write_word(&self, word: u16) {
         while !self.usart.stat().read().tbe().bit() {}
         self.usart
             .tdata()
             .write(|w| unsafe { w.bits(word as u32 & DATA_9BIT_MASK) });
     }
+    /// Receives one 9-bit word, blocking until one arrives.
     pub fn read_word(&self) -> Result<u16, ErrorKind> {
         while !self.usart.stat().read().rbne().bit() {}
         if let Some(e) = self.take_error() {

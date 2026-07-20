@@ -1,24 +1,49 @@
+//! Typed units for frequencies and durations.
+//!
+//! These are newtypes over `u32`, so they cost nothing at runtime but keep a bare
+//! number from being passed where a frequency is expected. Values are wrapped at
+//! API boundaries and unwrapped (`.0`) for internal arithmetic.
+//!
+//! ```ignore
+//! use gd32e230_hal::time::U32Ext;
+//! let baud = 115_200.bps();
+//! let sysclk = 48.mhz();
+//! ```
+
 use core::ops;
 
+/// Frequency in hertz.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Hertz(pub u32);
+/// Frequency in kilohertz.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct KiloHertz(pub u32);
+/// Frequency in megahertz.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct MegaHertz(pub u32);
+/// Bit rate in bits per second.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Bps(pub u32);
+/// Duration in milliseconds.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct MilliSeconds(pub u32);
+/// Duration in microseconds.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct MicroSeconds(pub u32);
 
+/// Extension trait attaching unit suffixes to plain integers.
 pub trait U32Ext {
+    /// Wraps as [`Hertz`].
     fn hz(self) -> Hertz;
+    /// Wraps as [`KiloHertz`].
     fn khz(self) -> KiloHertz;
+    /// Wraps as [`MegaHertz`].
     fn mhz(self) -> MegaHertz;
+    /// Wraps as [`Bps`].
     fn bps(self) -> Bps;
+    /// Wraps as [`MilliSeconds`].
     fn ms(self) -> MilliSeconds;
+    /// Wraps as [`MicroSeconds`].
     fn mcs(self) -> MicroSeconds;
 }
 
@@ -58,11 +83,13 @@ impl From<MegaHertz> for KiloHertz {
         Self(val.0 * 1_000)
     }
 }
+/// Period to frequency — a reciprocal, not a change of unit.
 impl From<MilliSeconds> for Hertz {
     fn from(milliseconds: MilliSeconds) -> Self {
         Self(1_000 / milliseconds.0)
     }
 }
+/// Period to frequency — a reciprocal, not a change of unit.
 impl From<MicroSeconds> for Hertz {
     fn from(microseconds: MicroSeconds) -> Self {
         Self(1_000_000 / microseconds.0)

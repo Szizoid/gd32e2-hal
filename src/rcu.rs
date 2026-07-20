@@ -1,3 +1,24 @@
+//! Reset and clock unit: the system clock tree and per-peripheral clock gating.
+//!
+//! Start with [`RcuExt::constrain`], build the clock tree with [`CFGR`], then
+//! freeze it into a [`Clocks`] value that the other modules take as an argument.
+//! Freezing writes the registers once; the resulting frequencies are read-only
+//! afterwards.
+//!
+//! ```ignore
+//! let mut rcu = dp.rcu.constrain();
+//! let clocks = CFGR::default()
+//!     .sysclk(PllFreq::Mhz48)
+//!     .adc_sel(AdcSel::Prescaled(AdcPsc::Apb2Div8))
+//!     .freeze(&mut rcu, &mut dp.fmc);
+//! ```
+//!
+//! Peripheral clocks are gated through the [`Enable`] and [`Reset`] traits, which
+//! each peripheral implements; drivers call them from their constructors, so a
+//! peripheral cannot be used unclocked.
+//!
+//! `HXTAL` and `LXTAL` are not started — no crystal is fitted on the target board.
+
 use gd32e2::gd32e230;
 
 use crate::time::Hertz;
@@ -18,7 +39,14 @@ const WS0_MAX_HCLK: u32 = 24_000_000;
 const WS1_MAX_HCLK: u32 = 48_000_000;
 const WS2_MAX_HCLK: u32 = 72_000_000;
 
+/// Target system clock produced by the PLL, in 4 MHz steps up to the 72 MHz limit.
+///
+/// Named by the resulting frequency rather than the multiplier because the PLL
+/// source is fixed (IRC8M/2 = 4 MHz), so the two map one-to-one. Only reachable
+/// frequencies exist as variants, which makes an impossible request a compile
+/// error instead of a silently rounded one.
 #[derive(Clone, Copy)]
+#[allow(missing_docs)]
 pub enum PllFreq {
     Mhz8 = 8_000_000,
     Mhz12 = 12_000_000,
@@ -39,7 +67,13 @@ pub enum PllFreq {
     Mhz72 = 72_000_000,
 }
 
+/// AHB prescaler: divides the system clock down to `hclk`.
+///
+/// Named by the divider, not the resulting frequency, because the source
+/// (`sysclk`) varies with configuration. Division can't exceed the source, so
+/// every variant is legal at any `sysclk`.
 #[derive(Clone, Copy)]
+#[allow(missing_docs)]
 pub enum AhbPsc {
     Div1 = 1,
     Div2 = 2,
@@ -52,7 +86,9 @@ pub enum AhbPsc {
     Div512 = 512,
 }
 
+/// APB prescaler: divides `hclk` down to `pclk1` (APB1) or `pclk2` (APB2).
 #[derive(Clone, Copy)]
+#[allow(missing_docs)]
 pub enum ApbPsc {
     Div1 = 1,
     Div2 = 2,
@@ -61,7 +97,9 @@ pub enum ApbPsc {
     Div16 = 16,
 }
 
+/// Divider for the prescaled `CK_ADC` branch, including which bus it taps.
 #[derive(Clone, Copy)]
+#[allow(missing_docs)]
 pub enum AdcPsc {
     Apb2Div2,
     Apb2Div4,
@@ -73,26 +111,48 @@ pub enum AdcPsc {
     AhbDiv9,
 }
 
+/// Divider on the internal 28 MHz oscillator feeding `CK_ADC`.
 #[derive(Clone, Copy)]
+#[allow(missing_docs)]
 pub enum Irc28mDiv {
     Div1,
     Div2,
 }
 
+/// Source of the ADC clock.
+///
+/// Each branch carries its own divider inside the variant, so a divider can't be
+/// specified for the branch it doesn't belong to.
 #[derive(Clone, Copy)]
 pub enum AdcSel {
+    /// The dedicated internal 28 MHz oscillator, which [`CFGR::freeze`] starts.
     Irc28m(Irc28mDiv),
+    /// A prescaled tap off APB2 or AHB.
     Prescaled(AdcPsc),
 }
 
+/// Source of the USART0 clock, independent of the APB2 bus clock.
 #[derive(Clone, Copy)]
 pub enum Usart0Sel {
+    /// The APB2 bus clock — the reset default.
     Apb2,
+    /// The system clock, unaffected by the bus prescalers.
     Sysclk,
+    /// The 32.768 kHz crystal.
+    ///
+    /// Selecting this without starting `LXTAL` leaves USART0 unclocked, and its
+    /// blocking reads and writes will never return. The HAL cannot know what is
+    /// fitted on a given board, so this is left to the caller.
     Lxtal,
+    /// The internal 8 MHz RC oscillator, independent of the system clock.
     Irc8m,
 }
 
+/// Frozen clock frequencies, produced by [`CFGR::freeze`].
+///
+/// Passed by value into the drivers that need it (USART for its baud divisor,
+/// ADC for its calibration delay). There are no setters — once frozen, the tree
+/// matches what was actually written to the registers.
 #[derive(Clone, Copy)]
 pub struct Clocks {
     hclk: Hertz,
@@ -104,26 +164,37 @@ pub struct Clocks {
 }
 
 impl Clocks {
+    /// AHB clock, which also clocks the core.
     pub fn hclk(&self) -> Hertz {
         self.hclk
     }
+    /// APB1 bus clock.
     pub fn pclk1(&self) -> Hertz {
         self.pclk1
     }
+    /// APB2 bus clock.
     pub fn pclk2(&self) -> Hertz {
         self.pclk2
     }
+    /// System clock, before the AHB prescaler.
     pub fn sysclk(&self) -> Hertz {
         self.sysclk
     }
+    /// Clock actually feeding USART0, per [`Usart0Sel`].
     pub fn usart0(&self) -> Hertz {
         self.usart0
     }
+    /// Clock feeding the ADC. Zero if [`CFGR::adc_sel`] was never called.
     pub fn ck_adc(&self) -> Hertz {
         self.ck_adc
     }
 }
 
+/// Builder for the clock tree, applied by [`freeze`](CFGR::freeze).
+///
+/// Every field is optional: anything left unset keeps its reset value and its
+/// registers are not written. With no calls at all, the system clock stays on
+/// IRC8M at 8 MHz with no bus division.
 #[derive(Default)]
 pub struct CFGR {
     hclk: Option<AhbPsc>,
@@ -139,31 +210,48 @@ impl CFGR {
         (desired as u32) / PLL_SRC
     }
 
+    /// Sets the AHB prescaler, dividing `sysclk` down to `hclk`.
     pub fn hclk(mut self, psc: AhbPsc) -> Self {
         self.hclk = Some(psc);
         self
     }
+    /// Sets the APB1 prescaler, dividing `hclk` down to `pclk1`.
     pub fn pclk1(mut self, psc: ApbPsc) -> Self {
         self.pclk1 = Some(psc);
         self
     }
+    /// Sets the APB2 prescaler, dividing `hclk` down to `pclk2`.
     pub fn pclk2(mut self, psc: ApbPsc) -> Self {
         self.pclk2 = Some(psc);
         self
     }
+    /// Runs the system clock off the PLL at the given frequency.
+    ///
+    /// Without this the system clock stays on IRC8M at 8 MHz.
     pub fn sysclk(mut self, freq: PllFreq) -> Self {
         self.sysclk = Some(freq);
         self
     }
+    /// Picks the USART0 clock source. Defaults to the APB2 bus clock.
     pub fn usart0_sel(mut self, src: Usart0Sel) -> Self {
         self.usart0_sel = Some(src);
         self
     }
+    /// Picks the ADC clock source and starts it if needed.
+    ///
+    /// Without this the ADC is left unclocked and [`Clocks::ck_adc`] stays zero —
+    /// constructing an [`Adc`](crate::adc::Adc) would then divide by zero rather
+    /// than silently hang in calibration.
     pub fn adc_sel(mut self, sel: AdcSel) -> Self {
         self.adc_sel = Some(sel);
         self
     }
 
+    /// Applies the configuration and returns the resulting frequencies.
+    ///
+    /// Flash wait states are raised from the new `hclk` *before* the system clock
+    /// switches over, so the flash is never read faster than it can respond.
+    /// `fmc` is taken because those wait states live in a separate peripheral.
     pub fn freeze(self, rcu: &mut Rcu, fmc: &mut gd32e230::Fmc) -> Clocks {
         let sysclk = match self.sysclk {
             None => IRC8M,
@@ -329,25 +417,42 @@ impl CFGR {
     }
 }
 
+/// Divider on the PLL branch feeding `CK_OUT`, ahead of the source multiplexer.
 #[derive(Clone, Copy)]
+#[allow(missing_docs)]
 pub enum PllDiv {
     Div1,
     Div2,
 }
 
+/// Clock node to route out on the `CK_OUT` pin.
+///
+/// The PLL branch carries its own pre-multiplexer divider inside the variant, so
+/// it cannot be set for a source it doesn't apply to. Selecting a source that
+/// isn't running simply leaves the pin quiet.
 #[derive(Clone, Copy)]
 pub enum CkOutSrc {
+    /// Nothing driven out.
     None,
+    /// The internal RC oscillator dedicated to the ADC.
     Irc14m,
+    /// The internal low-speed RC oscillator.
     Lsi40k,
+    /// The external low-speed crystal.
     Lxtal,
+    /// The system clock.
     Sysclk,
+    /// The internal 8 MHz RC oscillator.
     Irc8m,
+    /// The external high-speed crystal.
     Hxtal,
+    /// The PLL output, through its own divider.
     Pll(PllDiv),
 }
 
+/// Divider applied to `CK_OUT` after the source multiplexer, for any source.
 #[derive(Clone, Copy)]
+#[allow(missing_docs)]
 pub enum CkOutDiv {
     Div1,
     Div2,
@@ -359,11 +464,20 @@ pub enum CkOutDiv {
     Div128,
 }
 
+/// Owns the RCU peripheral; obtained from [`RcuExt::constrain`].
 pub struct Rcu {
-    rcu: gd32e230::Rcu, // Own raw Peripheral
+    rcu: gd32e230::Rcu,
 }
 
 impl Rcu {
+    /// Routes an internal clock node out onto `PA8` (AF0) or `PA9` (AF5).
+    ///
+    /// The pin still has to be put into the matching alternate function. With no
+    /// debug probe on this board, this is the only way to measure a real clock
+    /// frequency with a scope or logic analyser.
+    ///
+    /// Unlike the [`CFGR`] settings this is applied immediately and not recorded
+    /// in [`Clocks`] — nothing else needs to know about it afterwards.
     pub fn ck_out(&mut self, src: CkOutSrc, div: CkOutDiv) {
         self.rcu.cfg0().modify(|_, w| {
             let w = match div {
@@ -396,7 +510,9 @@ impl Rcu {
     }
 }
 
+/// Extension trait turning the raw RCU peripheral into the managed [`Rcu`].
 pub trait RcuExt {
+    /// Consumes the raw peripheral and returns the managed wrapper.
     fn constrain(self) -> Rcu;
 }
 
@@ -406,12 +522,20 @@ impl RcuExt for gd32e230::Rcu {
     }
 }
 
+/// Clock gating for a peripheral, implemented per peripheral type.
+///
+/// Drivers call [`enable`](Enable::enable) from their constructors, so a
+/// peripheral cannot be used before its clock is running.
 pub trait Enable {
+    /// Switches the peripheral's clock on.
     fn enable(rcu: &mut Rcu);
+    /// Switches the peripheral's clock off.
     fn disable(rcu: &mut Rcu);
 }
 
+/// Reset control for a peripheral, implemented per peripheral type.
 pub trait Reset {
+    /// Pulses the peripheral's reset line, returning its registers to defaults.
     fn reset(rcu: &mut Rcu);
 }
 

@@ -1,8 +1,38 @@
-#![no_std]
+//! Hardware abstraction layer for the GD32E230 (Cortex-M23), built on top of the
+//! [`gd32e2`] peripheral access crate.
+//!
+//! The API leans on the type system: a pin's port, number and mode live in its
+//! type, so an invalid alternate function or a method that makes no sense for the
+//! current mode fails to compile rather than misbehaving on the board.
+//!
+//! # Chip variants
+//!
+//! The alternate-function map differs across the GD32E230x series — the same pin
+//! at the same AF number can reach a different peripheral depending on the part
+//! (`PA2` AF1 is `USART0_TX` on x4 but `USART1_TX` on x8). Exactly one of the
+//! `gd32e230x4` / `gd32e230x6` / `gd32e230x8` features must be enabled; zero or
+//! several is a compile error rather than a silently wrong pin map. The default
+//! is `gd32e230x8`, matching the GD32E230K8U6 this HAL is developed against.
+//!
+//! # Getting started
+//!
+//! Clocks come first: [`rcu`] hands out a [`Clocks`](rcu::Clocks) value that the
+//! other modules need, and enables each peripheral's clock as it is constructed.
+//!
+//! ```ignore
+//! let mut dp = gd32e230::Peripherals::take().unwrap();
+//! let mut rcu = dp.rcu.constrain();
+//! let clocks = CFGR::default()
+//!     .sysclk(PllFreq::Mhz48)
+//!     .freeze(&mut rcu, &mut dp.fmc);
+//! let parts = dp.gpioa.split(&mut rcu);
+//! let mut led = parts.pa5.into_output();
+//! led.set_high().unwrap();
+//! ```
 
-// Exactly one chip-variant feature must be selected: the alternate-function map
-// differs between variants, so building with none (or several) would produce a
-// silently wrong pin map instead of a compile error.
+#![no_std]
+#![warn(missing_docs)]
+
 #[cfg(not(any(feature = "gd32e230x4", feature = "gd32e230x6", feature = "gd32e230x8")))]
 compile_error!(
     "select a chip variant: enable exactly one of the \

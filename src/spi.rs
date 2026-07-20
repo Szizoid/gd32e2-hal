@@ -1,3 +1,21 @@
+//! SPI master.
+//!
+//! Covers both SPI0 and SPI1 in master, full-duplex, blocking mode with software
+//! NSS (chip select is an ordinary GPIO the caller toggles). Frames are 8 or 16
+//! bits wide, selected by a typestate parameter.
+//!
+//! Every SPI operation is a simultaneous *exchange*: a word leaves on MOSI while
+//! another arrives on MISO. There is no read-only or write-only transfer at the
+//! hardware level, so [`SpiBus::read`] sends zeros and [`SpiBus::write`] discards
+//! what comes back.
+//!
+//! ```ignore
+//! let sck = parts.pa5.into_alternate::<0>();
+//! let miso = parts.pa6.into_alternate::<0>();
+//! let mosi = parts.pa7.into_alternate::<0>();
+//! let spi = Spi::new(&mut rcu, dp.spi0, sck, miso, mosi, SpiConfig::new(SpiPsc::Div8));
+//! ```
+
 use core::marker::PhantomData;
 use embedded_hal::spi::{ErrorKind, ErrorType, MODE_0, Mode, Phase, Polarity, SpiBus};
 use gd32e2::gd32e230;
@@ -12,7 +30,12 @@ use crate::{
 const DZ_8BIT: u8 = 0b0111;
 const DZ_16BIT: u8 = 0b1111;
 
+/// SCK prescaler: divides `pclk` down to the serial clock.
+///
+/// Discriminants are the `PSC` register encoding. There is no universal default
+/// — the right divider depends on `pclk` and the slave's maximum clock.
 #[derive(Clone, Copy)]
+#[allow(missing_docs)]
 pub enum SpiPsc {
     Div2 = 0b000,
     Div4 = 0b001,
@@ -24,12 +47,28 @@ pub enum SpiPsc {
     Div256 = 0b111,
 }
 
+/// Order in which the bits of a word are shifted onto the wire.
+///
+/// Both ends of the link must agree, or every word arrives bit-reversed with no
+/// error reported. Most devices are MSB-first, which is the default.
 #[derive(Clone, Copy, PartialEq)]
 pub enum BitOrder {
+    /// Most significant bit first.
     MsbFirst,
+    /// Least significant bit first.
     LsbFirst,
 }
 
+/// Bus configuration passed to [`Spi::new`] / [`Spi::new_word`].
+///
+/// Built with [`SpiConfig::new`], which requires a prescaler; [`mode`](Self::mode)
+/// and [`bit_order`](Self::bit_order) refine the defaults fluently.
+///
+/// ```ignore
+/// SpiConfig::new(SpiPsc::Div16)
+///     .mode(embedded_hal::spi::MODE_3)
+///     .bit_order(BitOrder::LsbFirst)
+/// ```
 pub struct SpiConfig {
     psc: SpiPsc,
     mode: Mode,
@@ -37,10 +76,10 @@ pub struct SpiConfig {
 }
 
 impl SpiConfig {
-    /// `psc` is required: there is no universal default SCK divider (it depends
-    /// on `pclk` and the slave's max clock), so it must be chosen explicitly.
-    /// `mode`/`bit_order` default to Mode 0 / MSB-first and can be overridden
-    /// fluently. (No `Default` impl — a config can't be built without `psc`.)
+    /// Creates a configuration with the given prescaler, Mode 0 and MSB-first.
+    ///
+    /// The prescaler is a required argument and this type has no `Default`: an
+    /// SCK divider has no conventional value, so it must be chosen deliberately.
     pub fn new(psc: SpiPsc) -> Self {
         Self {
             psc,
@@ -48,18 +87,23 @@ impl SpiConfig {
             bit_order: BitOrder::MsbFirst,
         }
     }
+    /// Sets the clock polarity and phase (CPOL/CPHA), per the slave's datasheet.
     pub fn mode(mut self, mode: Mode) -> Self {
         self.mode = mode;
         self
     }
+    /// Sets the bit order. Defaults to [`BitOrder::MsbFirst`].
     pub fn bit_order(mut self, bit_order: BitOrder) -> Self {
         self.bit_order = bit_order;
         self
     }
 }
 
+/// Marks a pin usable as `SCK` for `SPI`, in the right alternate function.
 pub trait SckPin<SPI> {}
+/// Marks a pin usable as `MISO` for `SPI`, in the right alternate function.
 pub trait MisoPin<SPI> {}
+/// Marks a pin usable as `MOSI` for `SPI`, in the right alternate function.
 pub trait MosiPin<SPI> {}
 
 macro_rules! spi_pins {
@@ -106,18 +150,37 @@ spi_pins!(
         MOSI: ['A' 14 : 6, 'B' 15 : 0]
 );
 
-/// Word-width marker: 8-bit frames (`transfer_byte`, `SpiBus<u8>`).
+/// Word-width marker: 8-bit frames ([`Spi::transfer_byte`], `SpiBus<u8>`).
 pub struct Byte;
-/// Word-width marker: 16-bit frames (`transfer_word`, `SpiBus<u16>`).
+/// Word-width marker: 16-bit frames ([`Spi::transfer_word`], `SpiBus<u16>`).
 pub struct Word;
 
+/// A peripheral that [`Spi`] can drive.
+///
+/// SPI0 and SPI1 have distinct register block types whose bits do not line up —
+/// frame width is `FF16` in `CTL0` on SPI0, but `DZ` in `CTL1` on SPI1, where
+/// that bit position means something else entirely. A generic bound over a
+/// shared register block is therefore impossible, so this trait abstracts the
+/// peripheral at the *operation* level instead: every register access lives in
+/// the implementations, and [`Spi`] itself never touches a register.
 pub trait Instance: Enable + Reset {
-    fn apply_config(&self, config: SpiConfig, wide: bool); // `wide`: false = 8-bit, true = 16-bit.
+    /// Writes the full master configuration, leaving the peripheral enabled.
+    ///
+    /// `wide` selects the frame width: `false` for 8-bit, `true` for 16-bit.
+    /// Implementations are responsible for whatever else follows from the width
+    /// (on SPI1, the FIFO access size must match it or reception stalls).
+    fn apply_config(&self, config: SpiConfig, wide: bool);
+    /// Transmit buffer empty — ready to accept the next word.
     fn tbe(&self) -> bool;
+    /// Receive buffer not empty — a word has arrived.
     fn rbne(&self) -> bool;
+    /// Writes a word to the data register, which starts the clock in master mode.
     fn write_data(&self, word: u16);
+    /// Reads the received word from the data register.
     fn read_data(&self) -> u16;
+    /// Returns the first pending error, if any, clearing it as the manual requires.
     fn take_error(&self) -> Option<ErrorKind>;
+    /// Enables or disables the peripheral (`SPIEN`).
     fn set_enabled(&self, on: bool);
 }
 
@@ -241,6 +304,15 @@ impl Instance for gd32e230::Spi1 {
     }
 }
 
+/// A configured SPI master, owning the peripheral and its three pins.
+///
+/// `WORD` records the frame width, so methods of the wrong width don't exist:
+/// [`transfer_byte`](Self::transfer_byte) and `SpiBus<u8>` are available only on
+/// `Spi<.., Byte>`, [`transfer_word`](Self::transfer_word) and `SpiBus<u16>` only
+/// on `Spi<.., Word>`. It defaults to [`Byte`], so the parameter can be omitted.
+///
+/// Chip select is not handled here — NSS is software-managed, so drive the
+/// slave's CS with an ordinary output pin around each transaction.
 #[derive(Debug)]
 pub struct Spi<SPIX, SCK, MISO, MOSI, WORD = Byte> {
     spi: SPIX,
@@ -257,6 +329,11 @@ where
     MISO: MisoPin<SPIX>,
     MOSI: MosiPin<SPIX>,
 {
+    /// Enables the peripheral's clock, resets it and configures 8-bit master mode.
+    ///
+    /// The pins must already be in the alternate function this SPI uses; the
+    /// bounds reject any other pin at compile time. They are moved in and handed
+    /// back by [`release`](Spi::release).
     pub fn new(
         rcu: &mut Rcu,
         spi: SPIX,
@@ -285,6 +362,7 @@ where
     MISO: MisoPin<SPIX>,
     MOSI: MosiPin<SPIX>,
 {
+    /// Same as [`new`](Spi::new), but configures 16-bit frames.
     pub fn new_word(
         rcu: &mut Rcu,
         spi: SPIX,
@@ -310,6 +388,10 @@ impl<SPIX, SCK, MISO, MOSI, WORD> Spi<SPIX, SCK, MISO, MOSI, WORD>
 where
     SPIX: Instance,
 {
+    /// Disables the peripheral and returns it along with the three pins.
+    ///
+    /// The clock is left enabled and no reset is performed — a later `new()`
+    /// does both anyway.
     pub fn release(self) -> (SPIX, SCK, MISO, MOSI) {
         self.spi.set_enabled(false);
         (self.spi, self.sck_pin, self.miso_pin, self.mosi_pin)
@@ -320,6 +402,10 @@ impl<SPIX, SCK, MISO, MOSI> Spi<SPIX, SCK, MISO, MOSI, Byte>
 where
     SPIX: Instance,
 {
+    /// Exchanges one byte: sends `byte` on MOSI and returns what arrived on MISO.
+    ///
+    /// Blocks until the exchange has completed, so nothing is left pending on the
+    /// bus when it returns.
     pub fn transfer_byte(&self, byte: u8) -> Result<u8, ErrorKind> {
         while !self.spi.tbe() {}
         self.spi.write_data(byte as u16);
@@ -336,6 +422,10 @@ impl<SPIX, SCK, MISO, MOSI> Spi<SPIX, SCK, MISO, MOSI, Word>
 where
     SPIX: Instance,
 {
+    /// Exchanges one 16-bit word: sends `word` on MOSI, returns what arrived on MISO.
+    ///
+    /// Blocks until the exchange has completed, so nothing is left pending on the
+    /// bus when it returns.
     pub fn transfer_word(&self, word: u16) -> Result<u16, ErrorKind> {
         while !self.spi.tbe() {}
         self.spi.write_data(word);

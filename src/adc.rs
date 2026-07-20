@@ -1,3 +1,20 @@
+//! 12-bit analog-to-digital converter.
+//!
+//! Single-channel blocking conversions, software triggered. The ADC needs its own
+//! clock, which is *not* started by default — call
+//! [`CFGR::adc_sel`](crate::rcu::CFGR::adc_sel) before constructing an [`Adc`],
+//! or [`Clocks::ck_adc`](crate::rcu::Clocks::ck_adc) is zero and [`Adc::new`]
+//! panics on the division rather than hanging in calibration.
+//!
+//! ```ignore
+//! let clocks = CFGR::default()
+//!     .adc_sel(AdcSel::Prescaled(AdcPsc::Apb2Div8))
+//!     .freeze(&mut rcu, &mut dp.fmc);
+//! let adc = Adc::new(&mut rcu, dp.adc, clocks);
+//! let pin = parts.pa0.into_analog();
+//! let raw = adc.read(&pin, SampTime::Cycles55_5);
+//! ```
+
 use gd32e2::gd32e230;
 
 use crate::{
@@ -22,7 +39,13 @@ const TEMP_MIN_SAMPTIME_US_X10: u64 = 171;
 const MAX_SAMPTIME_CYCLES_X10: u64 = 2395;
 const US_PER_S: u64 = 1_000_000;
 
+/// How long the input is sampled before conversion, in `CK_ADC` cycles.
+///
+/// Longer sampling suits higher-impedance sources; the internal temperature
+/// sensor has a minimum requirement expressed in *time*, so how long is long
+/// enough depends on the actual `CK_ADC` frequency.
 #[derive(Clone, Copy)]
+#[allow(missing_docs)]
 pub enum SampTime {
     Cycles1_5 = 0b000,
     Cycles7_5 = 0b001,
@@ -34,7 +57,12 @@ pub enum SampTime {
     Cycles239_5 = 0b111,
 }
 
+/// Binds a pin to the ADC input number it is wired to.
+///
+/// Implemented only for pins in [`Analog`] mode, so a pin that hasn't been
+/// through [`into_analog`](crate::gpio::Pin::into_analog) can't be measured.
 pub trait Channel {
+    /// The ADC input number for this pin.
     const CHANNEL: u8;
 }
 
@@ -57,12 +85,22 @@ channel!(
     'B' 1 => 9,
 );
 
+/// A calibrated ADC, ready to convert.
 pub struct Adc {
     adc: gd32e230::Adc,
     clocks: Clocks,
 }
 
 impl Adc {
+    /// Enables the peripheral, powers it up and runs the calibration sequence.
+    ///
+    /// Blocks until calibration completes.
+    ///
+    /// # Panics
+    ///
+    /// If the ADC clock was never selected — [`Clocks::ck_adc`](crate::rcu::Clocks::ck_adc)
+    /// is then zero and the calibration delay divides by it. Configure the clock
+    /// with [`CFGR::adc_sel`](crate::rcu::CFGR::adc_sel) first.
     pub fn new(rcu: &mut Rcu, adc: gd32e230::Adc, clocks: Clocks) -> Self {
         <gd32e230::Adc as Enable>::enable(rcu);
         <gd32e230::Adc as Reset>::reset(rcu);
@@ -131,12 +169,24 @@ impl Adc {
         result
     }
 
+    /// Converts one channel and returns the raw 12-bit code (0..=4095).
+    ///
+    /// The pin is borrowed only to identify the channel — nothing is read from
+    /// the value itself. Blocks until the conversion finishes.
     pub fn read<PIN: Channel>(&self, _pin: &PIN, time: SampTime) -> u16 {
         self.set_channel(PIN::CHANNEL);
         self.set_sample_time(PIN::CHANNEL, time);
         self.convert()
     }
-    /// Return temperature * 10 in Celsius
+    /// Reads the internal temperature sensor, in tenths of a degree Celsius.
+    ///
+    /// Scaled against the real supply voltage from [`read_vref`](Self::read_vref)
+    /// rather than a nominal 3.3 V, and computed in fixed point — the sensor's
+    /// slope is not a whole number of mV per degree.
+    ///
+    /// Returns `None` when `CK_ADC` runs too fast for the sensor's minimum
+    /// sampling time: even the longest [`SampTime`] is a fixed number of cycles,
+    /// so above roughly 14 MHz it no longer spans the required 17.1 µs.
     pub fn read_temperature(&self) -> Option<i32> {
         if !self.sample_time_sufficient() {
             return None;
@@ -151,7 +201,13 @@ impl Adc {
         let temperature_x10 = 100 * (V25_MV - v_temperature_mv) / AVG_SLOPE_X10 + 250;
         Some(temperature_x10)
     }
-    /// Return VDDA in mV
+    /// Measures the actual analog supply voltage `VDDA`, in millivolts.
+    ///
+    /// The internal reference is a fixed voltage, so its raw code moves only
+    /// because `VDDA` — which is also the ADC's reference — has moved. Comparing
+    /// that code against the factory calibration value stored in flash therefore
+    /// yields the real supply, which is what the other readings should be scaled
+    /// against.
     pub fn read_vref(&self) -> i32 {
         let vrefint_cal = unsafe { core::ptr::read_volatile(VREFINT_CAL_ADDR) };
         let raw = self.with_internal(|s| {
