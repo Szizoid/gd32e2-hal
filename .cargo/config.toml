@@ -10,3 +10,5 @@ example = "build --release --example"
 # Produce firmware.bin from src/main.rs (copy the example you want there first
 # — `cp examples/usart-echo.rs src/main.rs` — src/main.rs isn't tracked in git).
 bin = "objcopy --release -- -O binary firmware.bin"
+
+# cargo objcopy --release --example {example_file} -- -O binary firmware.bin
