@@ -27,6 +27,33 @@ use crate::rcu::Rcu;
 use crate::spi::{self, Spi};
 use crate::usart::{self, Usart};
 
+/// Channel priority when several channels contend for the bus.
+///
+/// Affects only arbitration latency, never the correctness of a single transfer.
+#[allow(missing_docs)]
+pub enum Prio {
+    Low,
+    Medium,
+    High,
+    UltraHigh,
+}
+
+/// Transfer direction, selecting the `DIR` bit.
+pub(crate) enum Dir {
+    /// Peripheral to memory.
+    P2M,
+    /// Memory to peripheral.
+    M2P,
+}
+
+/// Width of one transferred unit, selecting `PWIDTH`/`MWIDTH`.
+#[allow(missing_docs)]
+pub enum Width {
+    Bits8,
+    Bits16,
+    Bits32,
+}
+
 /// One DMA channel, identified by its number at the type level.
 ///
 /// Cannot be constructed outside this module: the only channels that exist come
@@ -46,6 +73,7 @@ impl<const N: u8> Channel<N> {
 /// `pub(crate)`: these setters take raw addresses and start the channel, so
 /// exposing them would let safe code point the hardware at arbitrary memory.
 pub(crate) trait ChannelOps {
+    fn configure(&mut self, dir: Dir, width: Width, prio: Prio);
     fn set_paddr(&mut self, addr: u32);
     fn set_maddr(&mut self, addr: u32);
     fn set_cnt(&mut self, cnt: u16);
@@ -61,6 +89,46 @@ macro_rules! channels {
                      $ftfif:ident, $errif:ident, $gifc:ident;)+) => {
         $(
             impl ChannelOps for Channel<$N> {
+                /// Writes the whole of `CHxCTL` in one go: direction, width,
+                /// priority, memory increment on, peripheral increment off, and
+                /// M2M/circular/interrupts off.
+                ///
+                /// A single `write` (not `modify`) so unmentioned fields reset to
+                /// zero — this clears any leftover bits when a channel is reused,
+                /// and must run while `CHEN` is 0 (before the channel is enabled).
+                fn configure(&mut self, dir: Dir, width: Width, prio: Prio) {
+                    self.reg().$ctl().write(|w| {
+                        let w = w.pnaga()
+                                 .fixed()
+                                 .mnaga()
+                                 .increment()
+                                 .m2m()
+                                 .disabled()
+                                 .cmen()
+                                 .disabled()
+                                 .errie()
+                                 .disabled()
+                                 .htfie()
+                                 .disabled()
+                                 .ftfie()
+                                 .disabled();
+                        let w = match dir {
+                            Dir::P2M => w.dir().from_peripheral(),
+                            Dir::M2P => w.dir().from_memory(),
+                        };
+                        let w = match width {
+                            Width::Bits8 => w.mwidth().bits8().pwidth().bits8(),
+                            Width::Bits16 => w.mwidth().bits16().pwidth().bits16(),
+                            Width::Bits32 => w.mwidth().bits32().pwidth().bits32(),
+                        };
+                        match prio {
+                            Prio::Low => w.prio().low(),
+                            Prio::Medium => w.prio().medium(),
+                            Prio::High => w.prio().high(),
+                            Prio::UltraHigh => w.prio().very_high(),
+                        }
+                    });
+                }
                 /// Points the channel at the peripheral data register.
                 fn set_paddr(&mut self, addr: u32) {
                     self.reg().$paddr().write(|w| unsafe { w.bits(addr) });
@@ -110,20 +178,23 @@ channels! {
     4 => ch4ctl, ch4cnt, ch4paddr, ch4maddr, ftfif4, errif4, gifc4;
 }
 
-/// A type DMA can move one unit of per transfer, encoding `PWIDTH`/`MWIDTH`.
-pub trait Width {
-    /// The `PWIDTH`/`MWIDTH` field encoding for this type's size.
-    const WIDTH: u8;
+/// A type usable as a DMA transfer unit, mapping to its [`Width`].
+///
+/// Bounds the peripheral's word type so only `u8`/`u16`/`u32` qualify, and
+/// carries the [`Width`] that a channel writes into `PWIDTH`/`MWIDTH`.
+pub trait DmaWord {
+    /// The transfer width of this type.
+    const WIDTH: Width;
 }
 
-impl Width for u8 {
-    const WIDTH: u8 = 0b00;
+impl DmaWord for u8 {
+    const WIDTH: Width = Width::Bits8;
 }
-impl Width for u16 {
-    const WIDTH: u8 = 0b01;
+impl DmaWord for u16 {
+    const WIDTH: Width = Width::Bits16;
 }
-impl Width for u32 {
-    const WIDTH: u8 = 0b10;
+impl DmaWord for u32 {
+    const WIDTH: Width = Width::Bits32;
 }
 
 /// A peripheral channel `N` can read from, for peripheral-to-memory transfers.
@@ -133,7 +204,7 @@ impl Width for u32 {
 /// transfer that is never requested.
 pub trait DmaSrc<const N: u8> {
     /// The word type this peripheral transfers, fixing `PWIDTH`/`MWIDTH`.
-    type Word: Width;
+    type Word: DmaWord;
     /// Address of the peripheral's data register.
     fn addr(&self) -> u32;
 }
@@ -143,7 +214,7 @@ pub trait DmaSrc<const N: u8> {
 /// The counterpart of [`DmaSrc`]; see there for why the channel is fixed.
 pub trait DmaDst<const N: u8> {
     /// The word type this peripheral transfers, fixing `PWIDTH`/`MWIDTH`.
-    type Word: Width;
+    type Word: DmaWord;
     /// Address of the peripheral's data register.
     fn addr(&self) -> u32;
 }
@@ -210,17 +281,18 @@ where
     /// Starts a memory-to-peripheral transfer, moving `buf` into `periph`.
     ///
     /// Takes the channel, `periph` and `buf` by value; none of the three are
-    /// accessible again until [`Transfer::wait`] returns them. `CHxCTL` itself
-    /// (direction, width, address increment, priority) is not written yet —
-    /// only `PADDR`/`MADDR`/`CNT` are set before the channel is enabled.
+    /// accessible again until [`Transfer::wait`] returns them. The transfer
+    /// width follows from the peripheral's word type, so `buf` must match it.
     pub fn write_to<P: DmaDst<N>>(
         mut self,
         periph: P,
         buf: &'static [P::Word],
+        prio: Prio,
     ) -> Transfer<N, P, &'static [P::Word]> {
         self.set_maddr(buf.as_ptr() as u32);
         self.set_paddr(periph.addr());
         self.set_cnt(buf.len() as u16);
+        self.configure(Dir::M2P, <P::Word as DmaWord>::WIDTH, prio);
         self.set_enabled(true);
         Transfer {
             channel: self,
@@ -232,17 +304,18 @@ where
     ///
     /// Takes the channel, `periph` and `buf` by value; none of the three are
     /// accessible again until [`Transfer::wait`] returns them — in particular,
-    /// `buf` cannot be read before the transfer completes. `CHxCTL` itself
-    /// (direction, width, address increment, priority) is not written yet —
-    /// only `PADDR`/`MADDR`/`CNT` are set before the channel is enabled.
+    /// `buf` cannot be read before the transfer completes. The transfer width
+    /// follows from the peripheral's word type, so `buf` must match it.
     pub fn read_from<P: DmaSrc<N>>(
         mut self,
         periph: P,
         buf: &'static mut [P::Word],
+        prio: Prio,
     ) -> Transfer<N, P, &'static mut [P::Word]> {
         self.set_maddr(buf.as_mut_ptr() as u32);
         self.set_paddr(periph.addr());
         self.set_cnt(buf.len() as u16);
+        self.configure(Dir::P2M, <P::Word as DmaWord>::WIDTH, prio);
         self.set_enabled(true);
         Transfer {
             channel: self,
@@ -252,7 +325,8 @@ where
     }
 }
 
-/// A DMA transfer in progress, started by [`Channel::write_to`]/[`read_from`](Channel::read_from).
+/// A DMA transfer in progress, started by [`Channel::write_to`] or
+/// [`read_from`](Channel::read_from).
 ///
 /// Owns the channel, the peripheral and the buffer for as long as the transfer
 /// runs; [`wait`](Transfer::wait) is the only way to get them back.
