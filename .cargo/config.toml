@@ -1,8 +1,8 @@
 [build]
 target = "thumbv8m.base-none-eabi"
-
-[target.thumbv8m.base-none-eabi]
 rustflags = ["-C", "link-arg=-Tlink.x"]
+
+# runner = "probe-rs" (???)
 
 [alias]
 # Compile-check an example: cargo example usart-echo
