@@ -24,9 +24,10 @@
 
 use core::convert::Infallible;
 use core::marker::PhantomData;
-use embedded_hal::digital::{ErrorType, InputPin, OutputPin, StatefulOutputPin};
-use gd32e2::gd32e230;
 
+use embedded_hal::digital::{ErrorType, InputPin, OutputPin, StatefulOutputPin};
+
+use crate::pac;
 use crate::rcu::Rcu;
 
 const CTL_INPUT: u32 = 0b00;
@@ -232,11 +233,11 @@ impl<const P: char, const N: u8> Pin<P, N, Debugger> {
 }
 
 impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
-    fn reg(&self) -> &gd32e230::gpioa::RegisterBlock {
+    fn reg(&self) -> &pac::gpioa::RegisterBlock {
         let ptr = match P {
-            'A' => gd32e230::Gpioa::ptr(),
-            'B' => gd32e230::Gpiob::ptr() as *const _,
-            'F' => gd32e230::Gpiof::ptr() as *const _, // AFSEL0/1 and LOCK registers are unavailable
+            'A' => pac::Gpioa::ptr(),
+            'B' => pac::Gpiob::ptr() as *const _,
+            'F' => pac::Gpiof::ptr() as *const _, // AFSEL0/1 and LOCK registers are unavailable
             _ => unreachable!(),
         };
         unsafe { &*ptr }
@@ -521,12 +522,12 @@ macro_rules! gpio {
     };
 }
 
-gpio!(PartsA, gd32e230::Gpioa, 'A',
+gpio!(PartsA, pac::Gpioa, 'A',
     [pa0:0:Input, pa1:1:Input, pa2:2:Input, pa3:3:Input, pa4:4:Input, pa5:5:Input, pa6:6:Input, pa7:7:Input,
      pa8:8:Input, pa9:9:Input, pa10:10:Input, pa11:11:Input, pa12:12:Input, pa13:13:Debugger, pa14:14:Debugger, pa15:15:Input]);
 
-gpio!(PartsB, gd32e230::Gpiob, 'B',
+gpio!(PartsB, pac::Gpiob, 'B',
     [pb0:0:Input, pb1:1:Input, pb2:2:Input, pb3:3:Input, pb4:4:Input, pb5:5:Input, pb6:6:Input, pb7:7:Input,
      pb8:8:Input, pb9:9:Input, pb10:10:Input, pb11:11:Input, pb12:12:Input, pb13:13:Input, pb14:14:Input, pb15:15:Input]);
 
-gpio!(PartsF, gd32e230::Gpiof, 'F', [pf0:0:Input, pf1:1:Input]);
+gpio!(PartsF, pac::Gpiof, 'F', [pf0:0:Input, pf1:1:Input]);

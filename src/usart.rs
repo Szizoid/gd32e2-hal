@@ -18,14 +18,13 @@
 
 use core::marker::PhantomData;
 use core::ops::Deref;
-use embedded_hal_nb::serial::{ErrorKind, ErrorType, Read, Write};
-use gd32e2::gd32e230;
 
-use crate::{
-    gpio::{Alternate, Pin},
-    rcu::{Clocks, Enable, Rcu, Reset},
-    time::Hertz,
-};
+use embedded_hal_nb::serial::{ErrorKind, ErrorType, Read, Write};
+
+use crate::gpio::{Alternate, Pin};
+use crate::pac;
+use crate::rcu::{Clocks, Enable, Rcu, Reset};
+use crate::time::Hertz;
 
 /// 7 data bits: parity occupies bit 7 inside the u8 (`E7`/`O7`).
 const DATA_7BIT_MASK: u8 = 0x7F;
@@ -50,7 +49,7 @@ macro_rules! usart_pins {
 // variant (datasheet Table 2-13 footnotes): USART0 on GD32E230x4, USART1 on
 // GD32E230x8/6. They are therefore listed in the gated blocks, not here.
 usart_pins! {
-    gd32e230::Usart0:
+    pac::Usart0:
         TX: [ 'A' 9:1, 'B' 6:0 ]
         RX: [ 'A' 10:1, 'B' 7:0 ],
 }
@@ -58,7 +57,7 @@ usart_pins! {
 // ---- (1) GD32E230x4 only: PA2/PA3/PA14/PA15 AF1 are USART0 ----
 #[cfg(feature = "gd32e230x4")]
 usart_pins! {
-    gd32e230::Usart0:
+    pac::Usart0:
         TX: [ 'A' 2:1, 'A' 14:1 ]
         RX: [ 'A' 3:1, 'A' 15:1 ],
 }
@@ -66,7 +65,7 @@ usart_pins! {
 // ---- (2) GD32E230x8/6: PA2/PA3/PA14/PA15 AF1 are USART1; USART1 exists ----
 #[cfg(any(feature = "gd32e230x6", feature = "gd32e230x8"))]
 usart_pins! {
-    gd32e230::Usart1:
+    pac::Usart1:
         TX: [ 'A' 2:1, 'A' 8:4, 'A' 14:1 ]
         RX: [ 'A' 3:1, 'A' 15:1, 'B' 0:4 ],
 }
@@ -82,13 +81,13 @@ pub trait BusClocks {
     fn clock(clocks: &Clocks) -> Hertz;
 }
 
-impl BusClocks for gd32e230::Usart0 {
+impl BusClocks for pac::Usart0 {
     fn clock(clocks: &Clocks) -> Hertz {
         clocks.usart0()
     }
 }
 
-impl BusClocks for gd32e230::Usart1 {
+impl BusClocks for pac::Usart1 {
     fn clock(clocks: &Clocks) -> Hertz {
         clocks.pclk1()
     }
@@ -229,7 +228,7 @@ fn configure<USARTX>(
     baud: u32,
     oversampling: Oversampling,
 ) where
-    USARTX: Deref<Target = gd32e230::usart0::RegisterBlock> + Enable + Reset + BusClocks,
+    USARTX: Deref<Target = pac::usart0::RegisterBlock> + Enable + Reset + BusClocks,
 {
     USARTX::enable(rcu);
     USARTX::reset(rcu);
@@ -279,7 +278,7 @@ pub struct Usart<USARTX, TX, RX, WORD = Byte> {
 
 impl<USARTX, TX, RX, WORD> Usart<USARTX, TX, RX, WORD>
 where
-    USARTX: Deref<Target = gd32e230::usart0::RegisterBlock>,
+    USARTX: Deref<Target = pac::usart0::RegisterBlock>,
 {
     fn take_error(&self) -> Option<ErrorKind> {
         let stat = self.usart.stat().read();
@@ -318,7 +317,7 @@ where
 
 impl<USARTX, TX, RX> Usart<USARTX, TX, RX, Byte>
 where
-    USARTX: Deref<Target = gd32e230::usart0::RegisterBlock>,
+    USARTX: Deref<Target = pac::usart0::RegisterBlock>,
 {
     fn received_byte(&self) -> u8 {
         let raw = self.usart.rdata().read().bits() as u8;
@@ -331,7 +330,7 @@ where
 
 impl<USARTX, TX, RX> Usart<USARTX, TX, RX, Byte>
 where
-    USARTX: Deref<Target = gd32e230::usart0::RegisterBlock> + Enable + Reset + BusClocks,
+    USARTX: Deref<Target = pac::usart0::RegisterBlock> + Enable + Reset + BusClocks,
     TX: TxPin<USARTX>,
     RX: RxPin<USARTX>,
 {
@@ -391,7 +390,7 @@ where
 
 impl<USARTX, TX, RX> Usart<USARTX, TX, RX, Word>
 where
-    USARTX: Deref<Target = gd32e230::usart0::RegisterBlock> + Enable + Reset + BusClocks,
+    USARTX: Deref<Target = pac::usart0::RegisterBlock> + Enable + Reset + BusClocks,
     TX: TxPin<USARTX>,
     RX: RxPin<USARTX>,
 {
@@ -445,7 +444,7 @@ impl<USARTX, TX, RX, WORD> ErrorType for Usart<USARTX, TX, RX, WORD> {
 
 impl<USARTX, TX, RX> Read<u8> for Usart<USARTX, TX, RX, Byte>
 where
-    USARTX: Deref<Target = gd32e230::usart0::RegisterBlock>,
+    USARTX: Deref<Target = pac::usart0::RegisterBlock>,
 {
     fn read(&mut self) -> nb::Result<u8, Self::Error> {
         if !self.usart.stat().read().rbne().bit() {
@@ -461,7 +460,7 @@ where
 
 impl<USARTX, TX, RX> Write<u8> for Usart<USARTX, TX, RX, Byte>
 where
-    USARTX: Deref<Target = gd32e230::usart0::RegisterBlock>,
+    USARTX: Deref<Target = pac::usart0::RegisterBlock>,
 {
     fn write(&mut self, byte: u8) -> nb::Result<(), Self::Error> {
         if !self.usart.stat().read().tbe().bit() {

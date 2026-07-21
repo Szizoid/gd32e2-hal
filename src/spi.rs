@@ -17,13 +17,12 @@
 //! ```
 
 use core::marker::PhantomData;
-use embedded_hal::spi::{ErrorKind, ErrorType, MODE_0, Mode, Phase, Polarity, SpiBus};
-use gd32e2::gd32e230;
 
-use crate::{
-    gpio::{Alternate, Pin},
-    rcu::{Enable, Rcu, Reset},
-};
+use embedded_hal::spi::{ErrorKind, ErrorType, MODE_0, Mode, Phase, Polarity, SpiBus};
+
+use crate::gpio::{Alternate, Pin};
+use crate::pac;
+use crate::rcu::{Enable, Rcu, Reset};
 
 /// SPI1 `DZ` encodes the frame length as (bits - 1); values below 0b0011 are
 /// forced to 8-bit by hardware.
@@ -124,7 +123,7 @@ macro_rules! spi_pins {
 // variant (datasheet Table 2-14 footnotes): SPI0 on GD32E230x4, SPI1 on
 // GD32E230x8. They are therefore listed in the gated blocks, not here.
 spi_pins!(
-    gd32e230::Spi0:
+    pac::Spi0:
         SCK: ['A' 5 : 0, 'B' 3 : 0]
         MISO: ['A' 6 : 0, 'B' 4 : 0]
         MOSI: ['A' 7 : 0, 'B' 5 : 0]
@@ -133,7 +132,7 @@ spi_pins!(
 // ---- (1) GD32E230x4 only: PB13/14/15 AF0 are SPI0 ----
 #[cfg(feature = "gd32e230x4")]
 spi_pins!(
-    gd32e230::Spi0:
+    pac::Spi0:
         SCK: ['B' 13 : 0]
         MISO: ['B' 14 : 0]
         MOSI: ['B' 15 : 0]
@@ -144,7 +143,7 @@ spi_pins!(
 // the `Debugger` typestate first, and doing so gives up SWD debugging.
 #[cfg(feature = "gd32e230x8")]
 spi_pins!(
-    gd32e230::Spi1:
+    pac::Spi1:
         SCK: ['B' 1 : 6, 'B' 10 : 7, 'B' 13 : 0]
         MISO: ['A' 13 : 6, 'B' 14 : 0]
         MOSI: ['A' 14 : 6, 'B' 15 : 0]
@@ -184,7 +183,7 @@ pub trait Instance: Enable + Reset {
     fn set_enabled(&self, on: bool);
 }
 
-impl Instance for gd32e230::Spi0 {
+impl Instance for pac::Spi0 {
     fn apply_config(&self, config: SpiConfig, wide: bool) {
         self.ctl0().modify(|_, w| {
             let w = w
@@ -243,7 +242,7 @@ impl Instance for gd32e230::Spi0 {
     }
 }
 
-impl Instance for gd32e230::Spi1 {
+impl Instance for pac::Spi1 {
     fn apply_config(&self, config: SpiConfig, wide: bool) {
         self.ctl1().modify(|_, w| {
             let w = w.byten().bit(!wide);

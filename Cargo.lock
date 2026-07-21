@@ -95,8 +95,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "gd32e230-hal"
-version = "0.4.2"
+name = "gd32e2-hal"
+version = "0.5.0"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",

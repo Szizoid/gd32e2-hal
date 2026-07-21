@@ -5,7 +5,7 @@
 //! API boundaries and unwrapped (`.0`) for internal arithmetic.
 //!
 //! ```ignore
-//! use gd32e230_hal::time::U32Ext;
+//! use gd32e2_hal::time::U32Ext;
 //! let baud = 115_200.bps();
 //! let sysclk = 48.mhz();
 //! ```

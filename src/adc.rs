@@ -15,12 +15,9 @@
 //! let raw = adc.read(&pin, SampTime::Cycles55_5);
 //! ```
 
-use gd32e2::gd32e230;
-
-use crate::{
-    gpio::{Analog, Pin},
-    rcu::{Clocks, Enable, Rcu, Reset},
-};
+use crate::gpio::{Analog, Pin};
+use crate::pac;
+use crate::rcu::{Clocks, Enable, Rcu, Reset};
 
 const VREFINT_CAL_ADDR: *const u16 = 0x1FFFF7C0 as *const u16;
 const NOMINAL_VDDA_MV: i32 = 3300;
@@ -87,7 +84,7 @@ channel!(
 
 /// A calibrated ADC, ready to convert.
 pub struct Adc {
-    adc: gd32e230::Adc,
+    adc: pac::Adc,
     clocks: Clocks,
 }
 
@@ -101,9 +98,9 @@ impl Adc {
     /// If the ADC clock was never selected — [`Clocks::ck_adc`](crate::rcu::Clocks::ck_adc)
     /// is then zero and the calibration delay divides by it. Configure the clock
     /// with [`CFGR::adc_sel`](crate::rcu::CFGR::adc_sel) first.
-    pub fn new(rcu: &mut Rcu, adc: gd32e230::Adc, clocks: Clocks) -> Self {
-        <gd32e230::Adc as Enable>::enable(rcu);
-        <gd32e230::Adc as Reset>::reset(rcu);
+    pub fn new(rcu: &mut Rcu, adc: pac::Adc, clocks: Clocks) -> Self {
+        <pac::Adc as Enable>::enable(rcu);
+        <pac::Adc as Reset>::reset(rcu);
         adc.ctl1().modify(|_, w| w.adcon().enabled());
         cortex_m::asm::delay(
             (CALIBRATION_DELAY_CYCLES * clocks.hclk().0).div_ceil(clocks.ck_adc().0),

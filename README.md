@@ -1,4 +1,4 @@
-# gd32e230-hal
+# gd32e2-hal
 
 [English](#english) · [Русский](#русский)
 
@@ -112,11 +112,12 @@ Hardware NSS and CRC are deliberately not implemented.
 
 ```rust
 use embedded_hal::digital::OutputPin;
-use gd32e230_hal::gpio::GpioExt;
-use gd32e230_hal::rcu::{RcuExt, CFGR, PllFreq};
-use gd32e230_hal::usart::{Usart, UsartConfig};
+use gd32e2_hal::gpio::GpioExt;
+use gd32e2_hal::pac;
+use gd32e2_hal::rcu::{RcuExt, CFGR, PllFreq};
+use gd32e2_hal::usart::{Usart, UsartConfig};
 
-let mut dp = gd32e230::Peripherals::take().unwrap();
+let mut dp = pac::Peripherals::take().unwrap();
 let mut rcu = dp.rcu.constrain();
 let clocks = CFGR::default()
     .sysclk(PllFreq::Mhz48)                  // PLL from IRC8M -> 48 MHz
@@ -310,11 +311,12 @@ x8 — надмножество x6; там, где строка помечена
 
 ```rust
 use embedded_hal::digital::OutputPin;
-use gd32e230_hal::gpio::GpioExt;
-use gd32e230_hal::rcu::{RcuExt, CFGR, PllFreq};
-use gd32e230_hal::usart::{Usart, UsartConfig};
+use gd32e2_hal::gpio::GpioExt;
+use gd32e2_hal::pac;
+use gd32e2_hal::rcu::{RcuExt, CFGR, PllFreq};
+use gd32e2_hal::usart::{Usart, UsartConfig};
 
-let mut dp = gd32e230::Peripherals::take().unwrap();
+let mut dp = pac::Peripherals::take().unwrap();
 let mut rcu = dp.rcu.constrain();
 let clocks = CFGR::default()
     .sysclk(PllFreq::Mhz48)                  // PLL от IRC8M -> 48 МГц

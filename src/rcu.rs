@@ -19,8 +19,7 @@
 //!
 //! `HXTAL` and `LXTAL` are not started — no crystal is fitted on the target board.
 
-use gd32e2::gd32e230;
-
+use crate::pac;
 use crate::time::Hertz;
 
 const IRC8M: u32 = 8_000_000;
@@ -252,7 +251,7 @@ impl CFGR {
     /// Flash wait states are raised from the new `hclk` *before* the system clock
     /// switches over, so the flash is never read faster than it can respond.
     /// `fmc` is taken because those wait states live in a separate peripheral.
-    pub fn freeze(self, rcu: &mut Rcu, fmc: &mut gd32e230::Fmc) -> Clocks {
+    pub fn freeze(self, rcu: &mut Rcu, fmc: &mut pac::Fmc) -> Clocks {
         let sysclk = match self.sysclk {
             None => IRC8M,
             Some(desired) => {
@@ -466,7 +465,7 @@ pub enum CkOutDiv {
 
 /// Owns the RCU peripheral; obtained from [`RcuExt::constrain`].
 pub struct Rcu {
-    rcu: gd32e230::Rcu,
+    rcu: pac::Rcu,
 }
 
 impl Rcu {
@@ -516,7 +515,7 @@ pub trait RcuExt {
     fn constrain(self) -> Rcu;
 }
 
-impl RcuExt for gd32e230::Rcu {
+impl RcuExt for pac::Rcu {
     fn constrain(self) -> Rcu {
         Rcu { rcu: self }
     }
@@ -568,24 +567,24 @@ macro_rules! bus_rst {
 }
 
 bus_en! {
-    gd32e230::Gpioa => ahben, paen,
-    gd32e230::Gpiob => ahben, pben,
-    gd32e230::Gpiof => ahben, pfen,
-    gd32e230::Dma => ahben, dmaen,
-    gd32e230::Usart1 => apb1en, usart1en,
-    gd32e230::Spi1 => apb1en, spi1en,
-    gd32e230::Usart0 => apb2en, usart0en,
-    gd32e230::Adc => apb2en, adcen,
-    gd32e230::Spi0 => apb2en, spi0en,
+    pac::Gpioa => ahben, paen,
+    pac::Gpiob => ahben, pben,
+    pac::Gpiof => ahben, pfen,
+    pac::Dma => ahben, dmaen,
+    pac::Usart1 => apb1en, usart1en,
+    pac::Spi1 => apb1en, spi1en,
+    pac::Usart0 => apb2en, usart0en,
+    pac::Adc => apb2en, adcen,
+    pac::Spi0 => apb2en, spi0en,
 }
 
 bus_rst! {
-    gd32e230::Gpioa => ahbrst, parst,
-    gd32e230::Gpiob => ahbrst, pbrst,
-    gd32e230::Gpiof => ahbrst, pfrst,
-    gd32e230::Usart1 => apb1rst, usart1rst,
-    gd32e230::Spi1 => apb1rst, spi1rst,
-    gd32e230::Usart0 => apb2rst, usart0rst,
-    gd32e230::Adc => apb2rst, adcrst,
-    gd32e230::Spi0 => apb2rst, spi0rst,
+    pac::Gpioa => ahbrst, parst,
+    pac::Gpiob => ahbrst, pbrst,
+    pac::Gpiof => ahbrst, pfrst,
+    pac::Usart1 => apb1rst, usart1rst,
+    pac::Spi1 => apb1rst, spi1rst,
+    pac::Usart0 => apb2rst, usart0rst,
+    pac::Adc => apb2rst, adcrst,
+    pac::Spi0 => apb2rst, spi0rst,
 }

@@ -20,9 +20,8 @@
 
 use core::marker::PhantomData;
 
-use gd32e2::gd32e230;
-
 use crate::adc::Adc;
+use crate::pac;
 use crate::rcu::Rcu;
 use crate::spi::{self, Spi};
 use crate::usart::{self, Usart};
@@ -63,8 +62,8 @@ pub struct Channel<const N: u8> {
 }
 
 impl<const N: u8> Channel<N> {
-    fn reg(&self) -> &gd32e230::dma::RegisterBlock {
-        unsafe { &*gd32e230::Dma::ptr() }
+    fn reg(&self) -> &pac::dma::RegisterBlock {
+        unsafe { &*pac::Dma::ptr() }
     }
 }
 
@@ -249,27 +248,27 @@ macro_rules! dma_map {
 }
 
 dma_map! {
-    DmaSrc<0> for Adc, u16, gd32e230::Adc, rdata, [];
+    DmaSrc<0> for Adc, u16, pac::Adc, rdata, [];
 
-    DmaSrc<1> for Spi<gd32e230::Spi0, SCK, MISO, MOSI, spi::Byte>, u8, gd32e230::Spi0, data, [SCK, MISO, MOSI];
-    DmaSrc<1> for Spi<gd32e230::Spi0, SCK, MISO, MOSI, spi::Word>, u16, gd32e230::Spi0, data, [SCK, MISO, MOSI];
-    DmaDst<1> for Usart<gd32e230::Usart0, TX, RX, usart::Byte>, u8, gd32e230::Usart0, tdata, [TX, RX];
-    DmaDst<1> for Usart<gd32e230::Usart0, TX, RX, usart::Word>, u16, gd32e230::Usart0, tdata, [TX, RX];
+    DmaSrc<1> for Spi<pac::Spi0, SCK, MISO, MOSI, spi::Byte>, u8, pac::Spi0, data, [SCK, MISO, MOSI];
+    DmaSrc<1> for Spi<pac::Spi0, SCK, MISO, MOSI, spi::Word>, u16, pac::Spi0, data, [SCK, MISO, MOSI];
+    DmaDst<1> for Usart<pac::Usart0, TX, RX, usart::Byte>, u8, pac::Usart0, tdata, [TX, RX];
+    DmaDst<1> for Usart<pac::Usart0, TX, RX, usart::Word>, u16, pac::Usart0, tdata, [TX, RX];
 
-    DmaDst<2> for Spi<gd32e230::Spi0, SCK, MISO, MOSI, spi::Byte>, u8, gd32e230::Spi0, data, [SCK, MISO, MOSI];
-    DmaDst<2> for Spi<gd32e230::Spi0, SCK, MISO, MOSI, spi::Word>, u16, gd32e230::Spi0, data, [SCK, MISO, MOSI];
-    DmaSrc<2> for Usart<gd32e230::Usart0, TX, RX, usart::Byte>, u8, gd32e230::Usart0, rdata, [TX, RX];
-    DmaSrc<2> for Usart<gd32e230::Usart0, TX, RX, usart::Word>, u16, gd32e230::Usart0, rdata, [TX, RX];
+    DmaDst<2> for Spi<pac::Spi0, SCK, MISO, MOSI, spi::Byte>, u8, pac::Spi0, data, [SCK, MISO, MOSI];
+    DmaDst<2> for Spi<pac::Spi0, SCK, MISO, MOSI, spi::Word>, u16, pac::Spi0, data, [SCK, MISO, MOSI];
+    DmaSrc<2> for Usart<pac::Usart0, TX, RX, usart::Byte>, u8, pac::Usart0, rdata, [TX, RX];
+    DmaSrc<2> for Usart<pac::Usart0, TX, RX, usart::Word>, u16, pac::Usart0, rdata, [TX, RX];
 
-    DmaSrc<3> for Spi<gd32e230::Spi1, SCK, MISO, MOSI, spi::Byte>, u8, gd32e230::Spi1, data, [SCK, MISO, MOSI];
-    DmaSrc<3> for Spi<gd32e230::Spi1, SCK, MISO, MOSI, spi::Word>, u16, gd32e230::Spi1, data, [SCK, MISO, MOSI];
-    DmaDst<3> for Usart<gd32e230::Usart1, TX, RX, usart::Byte>, u8, gd32e230::Usart1, tdata, [TX, RX];
-    DmaDst<3> for Usart<gd32e230::Usart1, TX, RX, usart::Word>, u16, gd32e230::Usart1, tdata, [TX, RX];
+    DmaSrc<3> for Spi<pac::Spi1, SCK, MISO, MOSI, spi::Byte>, u8, pac::Spi1, data, [SCK, MISO, MOSI];
+    DmaSrc<3> for Spi<pac::Spi1, SCK, MISO, MOSI, spi::Word>, u16, pac::Spi1, data, [SCK, MISO, MOSI];
+    DmaDst<3> for Usart<pac::Usart1, TX, RX, usart::Byte>, u8, pac::Usart1, tdata, [TX, RX];
+    DmaDst<3> for Usart<pac::Usart1, TX, RX, usart::Word>, u16, pac::Usart1, tdata, [TX, RX];
 
-    DmaDst<4> for Spi<gd32e230::Spi1, SCK, MISO, MOSI, spi::Byte>, u8, gd32e230::Spi1, data, [SCK, MISO, MOSI];
-    DmaDst<4> for Spi<gd32e230::Spi1, SCK, MISO, MOSI, spi::Word>, u16, gd32e230::Spi1, data, [SCK, MISO, MOSI];
-    DmaSrc<4> for Usart<gd32e230::Usart1, TX, RX, usart::Byte>, u8, gd32e230::Usart1, rdata, [TX, RX];
-    DmaSrc<4> for Usart<gd32e230::Usart1, TX, RX, usart::Word>, u16, gd32e230::Usart1, rdata, [TX, RX];
+    DmaDst<4> for Spi<pac::Spi1, SCK, MISO, MOSI, spi::Byte>, u8, pac::Spi1, data, [SCK, MISO, MOSI];
+    DmaDst<4> for Spi<pac::Spi1, SCK, MISO, MOSI, spi::Word>, u16, pac::Spi1, data, [SCK, MISO, MOSI];
+    DmaSrc<4> for Usart<pac::Usart1, TX, RX, usart::Byte>, u8, pac::Usart1, rdata, [TX, RX];
+    DmaSrc<4> for Usart<pac::Usart1, TX, RX, usart::Word>, u16, pac::Usart1, rdata, [TX, RX];
 }
 
 // The bound is what restricts N to the five channels that have an impl.
@@ -377,10 +376,10 @@ pub trait DmaExt {
     fn split(self, rcu: &mut Rcu) -> Self::Channels;
 }
 
-impl DmaExt for gd32e230::Dma {
+impl DmaExt for pac::Dma {
     type Channels = Channels;
     fn split(self, rcu: &mut Rcu) -> Self::Channels {
-        <gd32e230::Dma as crate::rcu::Enable>::enable(rcu);
+        <pac::Dma as crate::rcu::Enable>::enable(rcu);
         Channels {
             ch0: Channel {
                 _marker: PhantomData,

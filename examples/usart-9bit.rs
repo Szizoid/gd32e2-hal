@@ -12,16 +12,16 @@
 #![no_main]
 
 use cortex_m_rt::entry;
-use gd32e2::gd32e230;
 use panic_halt as _;
 
-use gd32e230_hal::gpio::GpioExt;
-use gd32e230_hal::rcu::{CFGR, PllFreq, RcuExt};
-use gd32e230_hal::usart::{Oversampling, Usart, UsartConfig9, baud};
+use gd32e2_hal::gpio::GpioExt;
+use gd32e2_hal::pac;
+use gd32e2_hal::rcu::{CFGR, PllFreq, RcuExt};
+use gd32e2_hal::usart::{Oversampling, Usart, UsartConfig9, baud};
 
 #[entry]
 fn main() -> ! {
-    let mut dp = gd32e230::Peripherals::take().unwrap();
+    let mut dp = pac::Peripherals::take().unwrap();
     let mut rcu = dp.rcu.constrain();
     let clocks = CFGR::default()
         .sysclk(PllFreq::Mhz48)

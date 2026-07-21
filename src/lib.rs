@@ -1,5 +1,6 @@
-//! Hardware abstraction layer for the GD32E230 (Cortex-M23), built on top of the
-//! [`gd32e2`] peripheral access crate.
+//! Hardware abstraction layer for the GD32E23x series (Cortex-M23), built on top
+//! of the [`gd32e2`] peripheral access crate. Only the GD32E230 is implemented so
+//! far; the crate is named for the family it is meant to grow into.
 //!
 //! The API leans on the type system: a pin's port, number and mode live in its
 //! type, so an invalid alternate function or a method that makes no sense for the
@@ -20,7 +21,7 @@
 //! other modules need, and enables each peripheral's clock as it is constructed.
 //!
 //! ```ignore
-//! let mut dp = gd32e230::Peripherals::take().unwrap();
+//! let mut dp = pac::Peripherals::take().unwrap();
 //! let mut rcu = dp.rcu.constrain();
 //! let clocks = CFGR::default()
 //!     .sysclk(PllFreq::Mhz48)
@@ -48,6 +49,11 @@ compile_error!(
     "the `gd32e230x4` / `gd32e230x6` / `gd32e230x8` features are mutually \
      exclusive: enable exactly one"
 );
+
+/// Re-export of the peripheral access crate this HAL is built on. Referring to
+/// it as `pac` keeps the door open to other parts of the family behind a single
+/// alias, instead of naming a specific chip module throughout.
+pub use gd32e2::gd32e230 as pac;
 
 pub mod adc;
 pub mod dma;
