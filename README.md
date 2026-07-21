@@ -11,8 +11,9 @@ Rust from scratch on top of the [`gd32e2`](https://crates.io/crates/gd32e2) PAC.
 
 > ⚠️ **Work in progress.** Written by hand, incrementally; the API is unstable.
 > The package is a library (`src/lib.rs` → `adc`, `dma`, `gpio`, `rcu`, `spi`,
-> `time`, `usart`) plus on-hardware test binaries in `examples/`; the board has
-> verified RCU PLL, GPIO output and USART0 echo (`examples/usart-echo.rs`) so far.
+> `time`, `usart`) plus on-hardware test binaries in `examples/`; all 8 examples
+> have been flashed and verified on the board — RCU, GPIO, USART (8/9-bit and
+> parity), SPI0/SPI1 and ADC. DMA is the one piece still unverified (see Roadmap).
 
 ### Principles
 
@@ -89,7 +90,8 @@ cycles, `RSTCLB`/`CLB`). `read<PIN: Channel>(&pin, SampTime) -> u16` performs a
 single blocking, software-triggered conversion. `Channel` is implemented only
 for `Pin<P, N, Analog>`, so a pin must actually have gone through
 `into_analog()`. Internal channels: `read_vref() -> i32` returns the real `VDDA`
-in mV (derived from the factory `VREFINT_CAL` in flash), and
+in mV (derived from the factory `VREFINT_CAL` in flash, falling back to the
+typical ~1.2 V VREFINT if that calibration is blank), and
 `read_temperature() -> Option<i32>` returns tenths of °C — `None` when `CK_ADC`
 is too fast to satisfy the sensor's minimum sampling time. Scan mode needs DMA
 and is deferred.
@@ -174,15 +176,16 @@ Flash to `0x08000000`, read the log in a terminal @ 115200 8N1.
 
 ### Roadmap
 
-- [ ] **Flash and verify on hardware** — SPI (both instances, 8/16-bit), ADC
-      (`read`, `read_vref`, `read_temperature`), USART 9-bit mode. Only USART0
-      echo (RCU PLL + GPIO + USART0 TX/RX) is verified on the board so far;
-      planned before continuing DMA below.
-- [ ] DMA (`src/dma.rs`) — in progress. Channel ownership (`Channel<N>`), the typed
-      `DmaSrc<N>`/`DmaDst<N>` request map, and the `Transfer` skeleton (`write_to` /
-      `read_from` / `wait`) are done; `CHxCTL` — direction, width, address increment,
-      circular mode, priority — isn't wired yet, so a transfer isn't correctly
-      configured in hardware. Unblocks ADC scan mode and SPI/USART over DMA once done.
+- [x] ~~Flash and verify on hardware~~ — done; all 8 examples run on the board
+      (RCU PLL, GPIO, USART0 echo, ADC, SPI0/SPI1, USART 9-bit and E8 parity,
+      CK_OUT).
+- [ ] DMA (`src/dma.rs`) — the one-shot path is complete: channel ownership
+      (`Channel<N>`), the typed `DmaSrc<N>`/`DmaDst<N>` request map, `Transfer`
+      (`write_to`/`read_from`/`wait`), and `CHxCTL` (direction, width, increment,
+      priority) are all wired and configured correctly. What's missing is on the
+      peripheral side: USART/SPI/ADC never enable their DMA request lines
+      (`DENT`/`DENR`, `DMATEN`/`DMAREN`, ADC `DMA`), so a transfer never
+      actually starts yet. Circular mode / `M2M` are separately deferred.
 - [ ] Timers / PWM.
 - [ ] I²C.
 - [ ] Interrupt-driven operation (NVIC infrastructure — also affects USART/SPI).
@@ -210,8 +213,9 @@ HAL для микроконтроллера **GD32E230K8U6** (Cortex-M23), на�
 
 > ⚠️ **Работа в процессе.** Пишется вручную и постепенно; API нестабилен. Пакет —
 > библиотека (`src/lib.rs` → `adc`, `dma`, `gpio`, `rcu`, `spi`, `time`, `usart`)
-> плюс тестовые бинарники на железо в `examples/`; на плате проверены RCU PLL,
-> GPIO output и echo по USART0 (`examples/usart-echo.rs`).
+> плюс тестовые бинарники на железо в `examples/`; все 8 примеров прошиты и
+> проверены на плате — RCU, GPIO, USART (8/9-бит и чётность), SPI0/SPI1 и ADC.
+> DMA — единственное, что пока не проверено (см. Roadmap).
 
 ### Принципы
 
@@ -257,8 +261,9 @@ x8 — надмножество x6; там, где строка помечена
 **RCU** (`src/rcu.rs`) — `dp.rcu.constrain()` (`RcuExt`). Трейты `Enable` и
 `Reset` на каждую периферию, генерируются макросами `bus_en!`/`bus_rst!`
 (разнесены порознь, потому что не у каждой периферии есть бит сброса — у DMA
-его нет) и вплетены в `split()`, так что порт нельзя использовать без такта. Дерево тактов: билдер
-`CFGR` → `.freeze(&mut rcu, &mut dp.fmc)` → замороженный `Clocks`. PLL от IRC8M
+его нет) и вплетены в `split()`, так что порт нельзя использовать без такта.
+Дерево тактов: билдер `CFGR` → `.freeze(&mut rcu, &mut dp.fmc)` → замороженный
+`Clocks`. PLL от IRC8M
 (`PllFreq`, 8–72 МГц) и прескейлеры шин (`AhbPsc` / `ApbPsc`) — типизированные
 энумы, поэтому недостижимая частота даёт ошибку компиляции, а не тихое
 округление; wait state'ы flash выставляются от получившегося `hclk` до
@@ -288,7 +293,8 @@ x8 — надмножество x6; там, где строка помечена
 блокирующее преобразование по софт-триггеру. `Channel` реализован только для
 `Pin<P, N, Analog>`, поэтому пин обязан реально пройти через `into_analog()`.
 Внутренние каналы: `read_vref() -> i32` возвращает реальное `VDDA` в мВ
-(вычисляется по заводскому `VREFINT_CAL` из flash), а
+(вычисляется по заводскому `VREFINT_CAL` из flash, а если эта калибровка пустая —
+по типовому VREFINT ≈ 1.2 В), а
 `read_temperature() -> Option<i32>` — десятые доли °C; `None`, когда `CK_ADC`
 слишком высока для минимального времени сэмплирования датчика. Scan-режим
 требует DMA и отложен.
@@ -373,16 +379,16 @@ cargo build --release --no-default-features --features gd32e230x4
 
 ### Roadmap
 
-- [ ] **Прошить и проверить на железе** — SPI (оба инстанса, 8/16 бит), ADC
-      (`read`, `read_vref`, `read_temperature`), 9-битный режим USART. Пока на
-      плате проверено только echo по USART0 (RCU PLL + GPIO + USART0 TX/RX);
-      запланировано перед продолжением DMA ниже.
-- [ ] DMA (`src/dma.rs`) — в процессе. Готовы владение каналом (`Channel<N>`),
-      типизированная карта запросов `DmaSrc<N>`/`DmaDst<N>` и скелет `Transfer`
-      (`write_to` / `read_from` / `wait`); `CHxCTL` — направление, ширина, инкремент
-      адреса, циклический режим, приоритет — ещё не настраивается, поэтому передача
-      физически неправильно сконфигурирована. После доделки разблокирует scan-режим
-      ADC и SPI/USART через DMA.
+- [x] ~~Прошить и проверить на железе~~ — сделано; все 8 примеров прогнаны на
+      чипе (RCU PLL, GPIO, echo по USART0, ADC, SPI0/SPI1, USART 9-бит и
+      E8-чётность, CK_OUT).
+- [ ] DMA (`src/dma.rs`) — разовая передача полностью готова: владение каналом
+      (`Channel<N>`), типизированная карта запросов `DmaSrc<N>`/`DmaDst<N>`,
+      `Transfer` (`write_to`/`read_from`/`wait`) и `CHxCTL` (направление,
+      ширина, инкремент, приоритет) настраиваются верно. Не сделана периферийная
+      сторона: USART/SPI/ADC не включают свои линии DMA-запроса (`DENT`/`DENR`,
+      `DMATEN`/`DMAREN`, ADC `DMA`), поэтому передача физически пока не
+      стартует. Циклический режим / `M2M` отложены отдельно.
 - [ ] Таймеры / PWM.
 - [ ] I²C.
 - [ ] Работа на прерываниях (инфраструктура NVIC — затронет и USART/SPI).

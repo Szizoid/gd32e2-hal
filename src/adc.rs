@@ -20,6 +20,11 @@ use crate::pac;
 use crate::rcu::{Clocks, Enable, Rcu, Reset};
 
 const VREFINT_CAL_ADDR: *const u16 = 0x1FFFF7C0 as *const u16;
+/// Erased-flash value: the factory VREFINT calibration is missing on this part.
+const VREFINT_CAL_BLANK: u16 = 0xFFFF;
+/// Typical VREFINT (datasheet 4.13): ~1.2 V. Used only when the factory
+/// calibration is blank, so `VDDA` can still be estimated ratiometrically.
+const VREFINT_TYP_MV: i32 = 1200;
 const NOMINAL_VDDA_MV: i32 = 3300;
 const ADC_MAX_CODE: i32 = 4095;
 const V25_MV: i32 = 1450;
@@ -108,6 +113,8 @@ impl Adc {
         adc.ctl1().modify(|_, w| w.rstclb().start());
         adc.ctl1().modify(|_, w| w.clb().start());
         while adc.ctl1().read().clb().is_not_complete() {}
+        adc.ctl1()
+            .modify(|_, w| w.eterc().enabled().etsrc().swrcst());
         Self { adc, clocks }
     }
 
@@ -148,9 +155,8 @@ impl Adc {
         });
     }
     fn convert(&self) -> u16 {
-        self.adc
-            .ctl1()
-            .modify(|_, w| w.etsrc().swrcst().swrcst().start());
+        self.adc.ctl1().modify(|_, w| w.swrcst().start());
+        while self.adc.ctl1().read().swrcst().is_not_started() {}
         while self.adc.stat().read().eoc().is_not_complete() {}
         self.adc.rdata().read().rdata().bits()
     }
@@ -205,13 +211,21 @@ impl Adc {
     /// that code against the factory calibration value stored in flash therefore
     /// yields the real supply, which is what the other readings should be scaled
     /// against.
+    ///
+    /// If that calibration is blank (`0xFFFF` — erased or never programmed, seen
+    /// on some parts), it falls back to the typical VREFINT of ~1.2 V, which is
+    /// less accurate but keeps the reading sane instead of wildly wrong.
     pub fn read_vref(&self) -> i32 {
         let vrefint_cal = unsafe { core::ptr::read_volatile(VREFINT_CAL_ADDR) };
         let raw = self.with_internal(|s| {
             s.set_internal_channel(VREF_CHANNEL);
             s.set_internal_sample_time(VREF_CHANNEL, SampTime::Cycles239_5);
             s.convert()
-        });
-        NOMINAL_VDDA_MV * vrefint_cal as i32 / raw as i32
+        }) as i32;
+        if vrefint_cal == VREFINT_CAL_BLANK {
+            VREFINT_TYP_MV * ADC_MAX_CODE / raw
+        } else {
+            NOMINAL_VDDA_MV * vrefint_cal as i32 / raw
+        }
     }
 }

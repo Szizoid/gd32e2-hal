@@ -246,8 +246,10 @@ fn configure<USARTX>(
         }
     });
 
+    // UEN is left off here: WL/parity must be written while the USART is
+    // disabled, so the callers set those and enable UEN last.
     usart.ctl0().modify(|_, w| {
-        let w = w.uen().enabled().ten().enabled().ren().enabled();
+        let w = w.ten().enabled().ren().enabled();
         match oversampling {
             Oversampling::X16 => w.ovsmod().oversampling16(),
             Oversampling::X8 => w.ovsmod().oversampling8(),
@@ -357,6 +359,7 @@ where
             FrameFormat::E7 => w.pcen().enabled().pm().even().wl().bit8(),
             FrameFormat::O7 => w.pcen().enabled().pm().odd().wl().bit8(),
         });
+        usart.ctl0().modify(|_, w| w.uen().enabled());
         Self {
             usart,
             tx_pin,
@@ -408,6 +411,7 @@ where
     ) -> Self {
         configure(rcu, &usart, &clocks, config.baud, config.oversampling);
         usart.ctl0().modify(|_, w| w.pcen().disabled().wl().bit9());
+        usart.ctl0().modify(|_, w| w.uen().enabled());
         Self {
             usart,
             tx_pin,
