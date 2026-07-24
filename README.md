@@ -66,8 +66,8 @@ so an unreachable frequency is a compile error instead of silent rounding; flash
 wait states are set from the resulting `hclk` before the source switch.
 `Usart0Sel` and `AdcSel` / `AdcPsc` resolve into `Clocks` for the USART and ADC
 modules. `rcu.ck_out(src, div)` routes an internal clock node onto `PA8`/`PA9`
-(`CkOutSrc` / `CkOutDiv`) — the only way to check a real frequency here, since
-the board has no debug probe. Typed frequencies live in `src/time.rs` (`Hertz`
+(`CkOutSrc` / `CkOutDiv`), so a real frequency can be measured on a pin rather
+than trusted. Typed frequencies live in `src/time.rs` (`Hertz`
 and friends, `U32Ext`, unit conversions). `HXTAL` is out of scope — no crystal
 on this board.
 
@@ -140,9 +140,9 @@ if let Ok(byte) = usart0.read_byte() {
 ### Constraints
 
 - **PAC-only base, no third-party HAL.**
-- **No debug probe** — flashing via the UART bootloader (GD32 All-In-One
-  Programmer) only; all output over USART0 @ 115200 8N1. No RTT / `defmt` /
-  semihosting.
+- **Flashing and debugging over SWD** (ST-Link V2 + `probe-rs`, `PA13`/`PA14`).
+  Runtime output currently still goes over USART0 @ 115200 8N1 — no RTT /
+  `defmt` yet.
 - Target `thumbv8m.base-none-eabi`; flash 64K, RAM 8K.
 - `gd32e2` is generated from patched SVDs — verify field names against
   `docs/GD32E23x_User_Manual.pdf` (PDFs are kept locally, not committed).
@@ -151,16 +151,26 @@ if let Ok(byte) = usart0.read_byte() {
 
 ```sh
 cargo build --release          # library only
-cargo example usart-echo       # compile-check one example, needs no probe
+cargo be usart-echo            # compile-check one example, needs no probe
+cargo bre usart-echo           # same, release profile
 ```
 
-To flash: copy the example you want onto `src/main.rs` (not tracked in git —
-`.cargo/config.toml`'s `bin` alias builds that file, since a fixed cargo alias
-can't take an example name as an argument), then:
+To flash, with an ST-Link on `PA13`/`PA14`:
 
 ```sh
-cp examples/usart-echo.rs src/main.rs
-cargo bin             # -> firmware.bin (needs cargo-binutils + llvm-tools)
+cargo re usart-echo   # build + flash over SWD, then stay attached
+```
+
+`re` is `cargo run --release --example`; `.cargo/config.toml` points the
+target's `runner` at `probe-rs run --chip GD32E230K8`, which flashes the ELF
+directly (no `objcopy`, no `.bin`). It then keeps the probe attached waiting for
+RTT — there is no RTT block in the firmware yet, so it just sits silently; exit
+with Ctrl-C. The chip keeps running on its own, and the freed probe can read any
+register live:
+
+```sh
+probe-rs reset --chip GD32E230K8              # run the firmware from reset
+probe-rs read  --chip GD32E230K8 b32 0x48000014 1   # e.g. GPIOA_OCTL
 ```
 
 The default feature targets the `GD32E230K8U6` (x8); for another variant:
@@ -169,7 +179,7 @@ The default feature targets the `GD32E230K8U6` (x8); for another variant:
 cargo build --release --no-default-features --features gd32e230x4
 ```
 
-Flash to `0x08000000`, read the log in a terminal @ 115200 8N1.
+Read the log in a terminal @ 115200 8N1.
 
 > On Windows without Visual Studio the host uses the GNU toolchain (see
 > `rust-toolchain.toml`), so the MSVC linker isn't required.
@@ -198,8 +208,9 @@ Flash to `0x08000000`, read the log in a terminal @ 115200 8N1.
       which pins are bonded out at all (`PC13`–`PC15`, `PF6`/`PF7` exist on
       QFN48 but not on this QFN32).
 - [x] ~~Test bench → `examples/`~~ — done; `src/main.rs` is gone, each on-hardware
-      test is its own file under `examples/`, copied onto `src/main.rs` (untracked)
-      only to flash it. `cargo example <name>` compile-checks one without a probe.
+      test is its own file under `examples/`, flashed straight from there with
+      `cargo re <name>`. `cargo be <name>` compile-checks one without a probe.
+- [ ] `defmt` + RTT over the probe, replacing the USART0 log.
 - [ ] Extract the HAL into its own standalone crate/repo (not just `examples/` —
       splitting the library out entirely). No rush to publish on crates.io; local
       + GitHub is enough for now.
@@ -269,8 +280,8 @@ x8 — надмножество x6; там, где строка помечена
 округление; wait state'ы flash выставляются от получившегося `hclk` до
 переключения источника. `Usart0Sel` и `AdcSel` / `AdcPsc` оседают в `Clocks` для
 модулей USART и ADC. `rcu.ck_out(src, div)` выводит внутренний тактовый узел на
-`PA8`/`PA9` (`CkOutSrc` / `CkOutDiv`) — единственный способ проверить реальную
-частоту, раз на плате нет зонда. Типизированные частоты — в `src/time.rs`
+`PA8`/`PA9` (`CkOutSrc` / `CkOutDiv`), так что реальную частоту можно измерить на
+ноге, а не принимать на веру. Типизированные частоты — в `src/time.rs`
 (`Hertz` и семейство, `U32Ext`, конверсии единиц). `HXTAL` вне скоупа — кварц на
 плате не запаян.
 
@@ -343,9 +354,9 @@ if let Ok(byte) = usart0.read_byte() {
 ### Ограничения
 
 - **PAC-only база, без сторонних HAL.**
-- **Нет отладочного зонда** — прошивка только через UART-бутлоадер (GD32
-  All-In-One Programmer), вывод через USART0 @ 115200 8N1. Никаких RTT /
-  `defmt` / semihosting.
+- **Прошивка и отладка по SWD** (ST-Link V2 + `probe-rs`, `PA13`/`PA14`). Вывод
+  из прошивки пока по-прежнему через USART0 @ 115200 8N1 — RTT / `defmt` ещё
+  не заведены.
 - Target `thumbv8m.base-none-eabi`; флеш 64K, ОЗУ 8K.
 - `gd32e2` сгенерирован из патченных SVD — имена полей сверять по
   `docs/GD32E23x_User_Manual.pdf` (PDF лежат локально, в git не входят).
@@ -354,16 +365,25 @@ if let Ok(byte) = usart0.read_byte() {
 
 ```sh
 cargo build --release          # только библиотека
-cargo example usart-echo       # проверить сборку одного примера, зонд не нужен
+cargo be usart-echo            # проверить сборку одного примера, зонд не нужен
+cargo bre usart-echo           # то же самое, release
 ```
 
-Чтобы прошить: скопировать нужный пример в `src/main.rs` (в git не входит —
-алиас `bin` из `.cargo/config.toml` собирает именно этот файл, поскольку
-фиксированный cargo-алиас не умеет принимать имя примера аргументом), затем:
+Чтобы прошить, с ST-Link на `PA13`/`PA14`:
 
 ```sh
-cp examples/usart-echo.rs src/main.rs
-cargo bin             # -> firmware.bin (нужны cargo-binutils + llvm-tools)
+cargo re usart-echo   # сборка + прошивка по SWD, дальше остаётся подключённым
+```
+
+`re` — это `cargo run --release --example`; в `.cargo/config.toml` у цели прописан
+`runner = "probe-rs run --chip GD32E230K8"`, который заливает ELF напрямую (без
+`objcopy` и без `.bin`). После записи он держит зонд и ждёт RTT — RTT-блока в
+прошивке пока нет, поэтому просто молчит, выход по Ctrl-C. Чип при этом работает
+сам, а освободившийся зонд читает любой регистр вживую:
+
+```sh
+probe-rs reset --chip GD32E230K8              # запустить прошивку со сброса
+probe-rs read  --chip GD32E230K8 b32 0x48000014 1   # например, GPIOA_OCTL
 ```
 
 Дефолтная фича собирает под `GD32E230K8U6` (x8); для другого варианта:
@@ -372,7 +392,7 @@ cargo bin             # -> firmware.bin (нужны cargo-binutils + llvm-tools)
 cargo build --release --no-default-features --features gd32e230x4
 ```
 
-Прошивать на `0x08000000`, читать лог в терминале @ 115200 8N1.
+Читать лог в терминале @ 115200 8N1.
 
 > На Windows без Visual Studio host переключён на GNU-toolchain (см.
 > `rust-toolchain.toml`), чтобы не требовался MSVC-линкер.
@@ -402,9 +422,9 @@ cargo build --release --no-default-features --features gd32e230x4
       ноги вообще разварены (`PC13`–`PC15`, `PF6`/`PF7` есть на QFN48, но не на
       нашем QFN32).
 - [x] ~~Стенд → `examples/`~~ — сделано; `src/main.rs` больше нет, каждый тест на
-      железе — отдельный файл в `examples/`, копируется в `src/main.rs` (не
-      отслеживается git) только для прошивки. `cargo example <имя>` проверяет
-      сборку одного примера без зонда.
+      железе — отдельный файл в `examples/`, прошивается прямо оттуда через
+      `cargo re <имя>`. `cargo be <имя>` проверяет сборку одного примера без зонда.
+- [ ] `defmt` + RTT через зонд вместо лога по USART0.
 - [ ] Вынос HAL в полностью отдельный крейт/репозиторий (не просто `examples/` —
       разделение самой библиотеки). Публиковать на crates.io пока не спешим;
       достаточно локально и на GitHub.

@@ -19,11 +19,9 @@ gd32e230x6 = []
 gd32e230x8 = []
 
 [dependencies]
-# critical-section-single-core: impl gd32e2's `critical-section` feature needs
-# to link a binary; the library itself only calls cortex_m::asm::delay (adc.rs).
-cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] } # feature is [dev-dependencies]
-cortex-m-rt = "0.7.3" # [dev-dependencies]
-panic-halt = "0.2.0" # [dev-dependencies]
+# The library itself only calls cortex_m::asm::delay (adc.rs); the
+# critical-section impl is an examples-only concern, see [dev-dependencies].
+cortex-m = "0.7.7"
 # Trait-only interface so portable drivers work against our Pin types.
 embedded-hal = "1.0"
 # Non-blocking serial traits, split out of embedded-hal since 1.0.
@@ -34,7 +32,18 @@ nb = "1.0"
 # critical-section = safe interrupt-free register access.
 gd32e2 = { version = "0.9.1", features = ["gd32e230", "rt", "critical-section"] }
 
-# Small, predictable binary; debug info is dropped by objcopy for the .bin.
+# Needed only to link a runnable binary, i.e. examples/: the reset handler and
+# vector table, a #[panic_handler], and an impl for the critical-section that
+# gd32e2's `critical-section` feature requires. Cargo unifies features across
+# dependency kinds, so naming cortex-m here just adds the impl feature on top of
+# the plain dependency above.
+[dev-dependencies]
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7.3"
+panic-halt = "0.2.0"
+
+# Small, predictable binary. debug = true costs no flash — probe-rs only loads
+# the loadable sections — and is what gives symbols to `probe-rs gdb`.
 [profile.release]
 opt-level = "s"
 lto = true

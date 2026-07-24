@@ -2,13 +2,10 @@
 target = "thumbv8m.base-none-eabi"
 rustflags = ["-C", "link-arg=-Tlink.x"]
 
-# runner = "probe-rs" (???)
+[target.thumbv8m.base-none-eabi]
+runner = "probe-rs run --chip GD32E230K8"
 
 [alias]
-# Compile-check an example: cargo example usart-echo
-example = "build --release --example"
-# Produce firmware.bin from src/main.rs (copy the example you want there first
-# — `cp examples/usart-echo.rs src/main.rs` — src/main.rs isn't tracked in git).
-bin = "objcopy --release -- -O binary firmware.bin"
-
-# cargo objcopy --release --example {example_file} -- -O binary firmware.bin
+be = "build --example"
+bre = "build --release --example"
+re = "run --release --example"
