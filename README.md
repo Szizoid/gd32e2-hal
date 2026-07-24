@@ -11,9 +11,9 @@ Rust from scratch on top of the [`gd32e2`](https://crates.io/crates/gd32e2) PAC.
 
 > ⚠️ **Work in progress.** Written by hand, incrementally; the API is unstable.
 > The package is a library (`src/lib.rs` → `adc`, `dma`, `gpio`, `rcu`, `spi`,
-> `time`, `usart`) plus on-hardware test binaries in `examples/`; all 8 examples
+> `time`, `usart`) plus on-hardware test binaries in `examples/`; all 9 examples
 > have been flashed and verified on the board — RCU, GPIO, USART (8/9-bit and
-> parity), SPI0/SPI1 and ADC. DMA is the one piece still unverified (see Roadmap).
+> parity), SPI0/SPI1, ADC and a one-shot DMA transfer.
 
 ### Principles
 
@@ -110,6 +110,21 @@ despite their distinct `RegisterBlock` types and bit-level divergence (`FF16` in
 Errors map onto `spi::ErrorKind`; `release()` returns the peripheral and pins.
 Hardware NSS and CRC are deliberately not implemented.
 
+**DMA** (`src/dma.rs`) — one-shot transfers, verified on hardware. `dp.dma.split(&mut rcu)`
+(`DmaExt`) hands out `Channel<0>`…`Channel<4>`, each a unique ZST token, so a
+channel can't drive two transfers at once. `write_to` / `read_from` take the
+channel, the peripheral **and** the buffer by value and return a `Transfer`;
+`wait()` is the only way to get all three back, which is what makes it impossible
+to read a buffer the hardware is still filling. Buffers are `&'static [W]` /
+`&'static mut [W]`. `DmaSrc<N>` / `DmaDst<N>` encode the datasheet's request map
+(Table 8-3), so a peripheral paired with the wrong channel doesn't compile rather
+than silently never being requested, and the associated `Word` derives
+`PWIDTH`/`MWIDTH` from the peripheral's own typestate. The shared `DmaPeriph<N>`
+supertrait also gates the request line (`DENT`/`DENR`, `DMATEN`/`DMAREN`, ADC
+`DMA`) — raised on start, dropped before the peripheral goes back to its owner —
+so the drivers themselves know nothing about DMA. `remaining()` and `is_error()`
+inspect a running transfer. Circular mode and `M2M` are deferred.
+
 ### Usage
 
 ```rust
@@ -186,16 +201,14 @@ Read the log in a terminal @ 115200 8N1.
 
 ### Roadmap
 
-- [x] ~~Flash and verify on hardware~~ — done; all 8 examples run on the board
+- [x] ~~Flash and verify on hardware~~ — done; all 9 examples run on the board
       (RCU PLL, GPIO, USART0 echo, ADC, SPI0/SPI1, USART 9-bit and E8 parity,
-      CK_OUT).
-- [ ] DMA (`src/dma.rs`) — the one-shot path is complete: channel ownership
-      (`Channel<N>`), the typed `DmaSrc<N>`/`DmaDst<N>` request map, `Transfer`
-      (`write_to`/`read_from`/`wait`), and `CHxCTL` (direction, width, increment,
-      priority) are all wired and configured correctly. What's missing is on the
-      peripheral side: USART/SPI/ADC never enable their DMA request lines
-      (`DENT`/`DENR`, `DMATEN`/`DMAREN`, ADC `DMA`), so a transfer never
-      actually starts yet. Circular mode / `M2M` are separately deferred.
+      CK_OUT, DMA to USART0).
+- [x] ~~DMA one-shot transfers~~ — done and verified on the board: channel
+      ownership (`Channel<N>`), the typed `DmaSrc<N>`/`DmaDst<N>` request map,
+      `Transfer` (`write_to`/`read_from`/`wait`), `CHxCTL`, and the peripheral-side
+      request lines gated through `DmaPeriph<N>`.
+- [ ] DMA: circular mode and `M2M`.
 - [ ] Timers / PWM.
 - [ ] I²C.
 - [ ] Interrupt-driven operation (NVIC infrastructure — also affects USART/SPI).
@@ -224,9 +237,9 @@ HAL для микроконтроллера **GD32E230K8U6** (Cortex-M23), на�
 
 > ⚠️ **Работа в процессе.** Пишется вручную и постепенно; API нестабилен. Пакет —
 > библиотека (`src/lib.rs` → `adc`, `dma`, `gpio`, `rcu`, `spi`, `time`, `usart`)
-> плюс тестовые бинарники на железо в `examples/`; все 8 примеров прошиты и
-> проверены на плате — RCU, GPIO, USART (8/9-бит и чётность), SPI0/SPI1 и ADC.
-> DMA — единственное, что пока не проверено (см. Roadmap).
+> плюс тестовые бинарники на железо в `examples/`; все 9 примеров прошиты и
+> проверены на плате — RCU, GPIO, USART (8/9-бит и чётность), SPI0/SPI1, ADC и
+> разовая передача по DMA.
 
 ### Принципы
 
@@ -324,6 +337,21 @@ x8 — надмножество x6; там, где строка помечена
 `BYTEN` выводится из ширины). Ошибки ложатся на `spi::ErrorKind`; `release()`
 возвращает периферию и пины. Аппаратный NSS и CRC сознательно не реализованы.
 
+**DMA** (`src/dma.rs`) — разовые передачи, проверены на железе.
+`dp.dma.split(&mut rcu)` (`DmaExt`) раздаёт `Channel<0>`…`Channel<4>` — каждый
+уникальный ZST-токен, поэтому один канал не может вести две передачи сразу.
+`write_to` / `read_from` забирают по значению канал, периферию **и** буфер и
+отдают `Transfer`; вернуть все три можно только через `wait()` — именно это
+делает невозможным чтение буфера, который железо ещё заполняет. Буферы —
+`&'static [W]` / `&'static mut [W]`. `DmaSrc<N>` / `DmaDst<N>` кодируют карту
+запросов из datasheet (Table 8-3), поэтому периферия в паре с неверным каналом не
+компилируется, а не простаивает молча, а ассоциированный `Word` выводит
+`PWIDTH`/`MWIDTH` из typestate самой периферии. Общий супертрейт `DmaPeriph<N>`
+заодно держит линию запроса (`DENT`/`DENR`, `DMATEN`/`DMAREN`, ADC `DMA`) —
+поднимает на старте и гасит до возврата периферии владельцу, — так что сами
+драйверы про DMA ничего не знают. `remaining()` и `is_error()` показывают
+состояние идущей передачи. Циклический режим и `M2M` отложены.
+
 ### Пример
 
 ```rust
@@ -399,16 +427,14 @@ cargo build --release --no-default-features --features gd32e230x4
 
 ### Roadmap
 
-- [x] ~~Прошить и проверить на железе~~ — сделано; все 8 примеров прогнаны на
+- [x] ~~Прошить и проверить на железе~~ — сделано; все 9 примеров прогнаны на
       чипе (RCU PLL, GPIO, echo по USART0, ADC, SPI0/SPI1, USART 9-бит и
-      E8-чётность, CK_OUT).
-- [ ] DMA (`src/dma.rs`) — разовая передача полностью готова: владение каналом
+      E8-чётность, CK_OUT, DMA в USART0).
+- [x] ~~DMA, разовые передачи~~ — сделано и проверено на плате: владение каналом
       (`Channel<N>`), типизированная карта запросов `DmaSrc<N>`/`DmaDst<N>`,
-      `Transfer` (`write_to`/`read_from`/`wait`) и `CHxCTL` (направление,
-      ширина, инкремент, приоритет) настраиваются верно. Не сделана периферийная
-      сторона: USART/SPI/ADC не включают свои линии DMA-запроса (`DENT`/`DENR`,
-      `DMATEN`/`DMAREN`, ADC `DMA`), поэтому передача физически пока не
-      стартует. Циклический режим / `M2M` отложены отдельно.
+      `Transfer` (`write_to`/`read_from`/`wait`), `CHxCTL` и линии запроса на
+      стороне периферии через `DmaPeriph<N>`.
+- [ ] DMA: циклический режим и `M2M`.
 - [ ] Таймеры / PWM.
 - [ ] I²C.
 - [ ] Работа на прерываниях (инфраструктура NVIC — затронет и USART/SPI).

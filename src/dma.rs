@@ -196,27 +196,45 @@ impl DmaWord for u32 {
     const WIDTH: Width = Width::Bits32;
 }
 
+/// Everything a channel needs from the peripheral on the other end of it.
+///
+/// Split out from [`DmaSrc`]/[`DmaDst`] because both roles need exactly the same
+/// things, and duplicating them would mean [`Transfer::wait`] — which cannot know
+/// which of the two started it — had no single trait to call them through.
+///
+/// The channel number is what makes one impl per role unambiguous: a peripheral
+/// serving both directions reaches them over different channels and gates them
+/// with different bits, so `DmaPeriph<1> for Usart0` drives `DENT` while
+/// `DmaPeriph<2> for Usart0` drives `DENR`, with no impl having to decide at
+/// runtime which one it is.
+pub trait DmaPeriph<const N: u8> {
+    /// The word type this peripheral transfers, fixing `PWIDTH`/`MWIDTH`.
+    type Word: DmaWord;
+    /// Address of the peripheral's data register.
+    fn addr(&self) -> u32;
+    /// Lets the peripheral raise DMA requests on its channel.
+    ///
+    /// Until this is called the channel is configured but never asked to move
+    /// anything, so a transfer would sit at its full count forever.
+    fn enable_dma(&mut self);
+    /// Stops the peripheral raising DMA requests.
+    ///
+    /// Called before the peripheral goes back to its owner, so it is handed over
+    /// in the state it arrived in rather than still driving a dead channel.
+    fn disable_dma(&mut self);
+}
+
 /// A peripheral channel `N` can read from, for peripheral-to-memory transfers.
 ///
 /// Implemented only for the channel a peripheral's request line actually
 /// reaches, so an impossible pairing fails to compile rather than producing a
 /// transfer that is never requested.
-pub trait DmaSrc<const N: u8> {
-    /// The word type this peripheral transfers, fixing `PWIDTH`/`MWIDTH`.
-    type Word: DmaWord;
-    /// Address of the peripheral's data register.
-    fn addr(&self) -> u32;
-}
+pub trait DmaSrc<const N: u8>: DmaPeriph<N> {}
 
 /// A peripheral channel `N` can write to, for memory-to-peripheral transfers.
 ///
 /// The counterpart of [`DmaSrc`]; see there for why the channel is fixed.
-pub trait DmaDst<const N: u8> {
-    /// The word type this peripheral transfers, fixing `PWIDTH`/`MWIDTH`.
-    type Word: DmaWord;
-    /// Address of the peripheral's data register.
-    fn addr(&self) -> u32;
-}
+pub trait DmaDst<const N: u8>: DmaPeriph<N> {}
 
 // Request mapping, Table 8-3. Entries marked (1) apply while the corresponding
 // remap bit in SYSCFG_CFG0 is clear — the state after reset — and (2) while it
@@ -235,40 +253,52 @@ pub trait DmaDst<const N: u8> {
 //   Ch4: SPI1_TX, USART0_RX(2), USART1_RX, I2C1_RX, TIMER0_CH2, TIMER0_UP,
 //        TIMER14_CH0, TIMER14_UP, TIMER14_TRIG, TIMER14_COM, TIMER14_CH1
 macro_rules! dma_map {
-    ($($Trait:ident<$N:literal> for $Ty:ty, $W:ty, $Periph:ty, $reg:ident, [$($gen:ident),*];)+) => {
+    ($($Trait:ident<$N:literal> for $Ty:ty, $W:ty, $Periph:ty, $reg:ident,
+                     $ctl:ident, $den:ident, [$($gen:ident),*];)+) => {
         $(
-            impl<$($gen),*> $Trait<$N> for $Ty {
+            impl<$($gen),*> DmaPeriph<$N> for $Ty {
                 type Word = $W;
                 fn addr(&self) -> u32 {
                     unsafe { (*<$Periph>::ptr()).$reg().as_ptr() as u32 }
                 }
+                /// `modify`, not `write`: the rest of the register holds settings
+                /// the driver already made. Safe to read-modify-write because
+                /// `&mut self` is exclusive access to this peripheral.
+                fn enable_dma(&mut self) {
+                    unsafe { (*<$Periph>::ptr()).$ctl().modify(|_, w| w.$den().set_bit()) };
+                }
+                /// See [`enable_dma`](DmaPeriph::enable_dma) for why `modify`.
+                fn disable_dma(&mut self) {
+                    unsafe { (*<$Periph>::ptr()).$ctl().modify(|_, w| w.$den().clear_bit()) };
+                }
             }
+            impl<$($gen),*> $Trait<$N> for $Ty {}
         )+
     };
 }
 
 dma_map! {
-    DmaSrc<0> for Adc, u16, pac::Adc, rdata, [];
+    DmaSrc<0> for Adc, u16, pac::Adc, rdata, ctl1, dma, [];
 
-    DmaSrc<1> for Spi<pac::Spi0, SCK, MISO, MOSI, spi::Byte>, u8, pac::Spi0, data, [SCK, MISO, MOSI];
-    DmaSrc<1> for Spi<pac::Spi0, SCK, MISO, MOSI, spi::Word>, u16, pac::Spi0, data, [SCK, MISO, MOSI];
-    DmaDst<1> for Usart<pac::Usart0, TX, RX, usart::Byte>, u8, pac::Usart0, tdata, [TX, RX];
-    DmaDst<1> for Usart<pac::Usart0, TX, RX, usart::Word>, u16, pac::Usart0, tdata, [TX, RX];
+    DmaSrc<1> for Spi<pac::Spi0, SCK, MISO, MOSI, spi::Byte>, u8, pac::Spi0, data, ctl1, dmaren, [SCK, MISO, MOSI];
+    DmaSrc<1> for Spi<pac::Spi0, SCK, MISO, MOSI, spi::Word>, u16, pac::Spi0, data, ctl1, dmaren, [SCK, MISO, MOSI];
+    DmaDst<1> for Usart<pac::Usart0, TX, RX, usart::Byte>, u8, pac::Usart0, tdata, ctl2, dent, [TX, RX];
+    DmaDst<1> for Usart<pac::Usart0, TX, RX, usart::Word>, u16, pac::Usart0, tdata, ctl2, dent, [TX, RX];
 
-    DmaDst<2> for Spi<pac::Spi0, SCK, MISO, MOSI, spi::Byte>, u8, pac::Spi0, data, [SCK, MISO, MOSI];
-    DmaDst<2> for Spi<pac::Spi0, SCK, MISO, MOSI, spi::Word>, u16, pac::Spi0, data, [SCK, MISO, MOSI];
-    DmaSrc<2> for Usart<pac::Usart0, TX, RX, usart::Byte>, u8, pac::Usart0, rdata, [TX, RX];
-    DmaSrc<2> for Usart<pac::Usart0, TX, RX, usart::Word>, u16, pac::Usart0, rdata, [TX, RX];
+    DmaDst<2> for Spi<pac::Spi0, SCK, MISO, MOSI, spi::Byte>, u8, pac::Spi0, data, ctl1, dmaten, [SCK, MISO, MOSI];
+    DmaDst<2> for Spi<pac::Spi0, SCK, MISO, MOSI, spi::Word>, u16, pac::Spi0, data, ctl1, dmaten, [SCK, MISO, MOSI];
+    DmaSrc<2> for Usart<pac::Usart0, TX, RX, usart::Byte>, u8, pac::Usart0, rdata, ctl2, denr, [TX, RX];
+    DmaSrc<2> for Usart<pac::Usart0, TX, RX, usart::Word>, u16, pac::Usart0, rdata, ctl2, denr, [TX, RX];
 
-    DmaSrc<3> for Spi<pac::Spi1, SCK, MISO, MOSI, spi::Byte>, u8, pac::Spi1, data, [SCK, MISO, MOSI];
-    DmaSrc<3> for Spi<pac::Spi1, SCK, MISO, MOSI, spi::Word>, u16, pac::Spi1, data, [SCK, MISO, MOSI];
-    DmaDst<3> for Usart<pac::Usart1, TX, RX, usart::Byte>, u8, pac::Usart1, tdata, [TX, RX];
-    DmaDst<3> for Usart<pac::Usart1, TX, RX, usart::Word>, u16, pac::Usart1, tdata, [TX, RX];
+    DmaSrc<3> for Spi<pac::Spi1, SCK, MISO, MOSI, spi::Byte>, u8, pac::Spi1, data, ctl1, dmaren, [SCK, MISO, MOSI];
+    DmaSrc<3> for Spi<pac::Spi1, SCK, MISO, MOSI, spi::Word>, u16, pac::Spi1, data, ctl1, dmaren, [SCK, MISO, MOSI];
+    DmaDst<3> for Usart<pac::Usart1, TX, RX, usart::Byte>, u8, pac::Usart1, tdata, ctl2, dent, [TX, RX];
+    DmaDst<3> for Usart<pac::Usart1, TX, RX, usart::Word>, u16, pac::Usart1, tdata, ctl2, dent, [TX, RX];
 
-    DmaDst<4> for Spi<pac::Spi1, SCK, MISO, MOSI, spi::Byte>, u8, pac::Spi1, data, [SCK, MISO, MOSI];
-    DmaDst<4> for Spi<pac::Spi1, SCK, MISO, MOSI, spi::Word>, u16, pac::Spi1, data, [SCK, MISO, MOSI];
-    DmaSrc<4> for Usart<pac::Usart1, TX, RX, usart::Byte>, u8, pac::Usart1, rdata, [TX, RX];
-    DmaSrc<4> for Usart<pac::Usart1, TX, RX, usart::Word>, u16, pac::Usart1, rdata, [TX, RX];
+    DmaDst<4> for Spi<pac::Spi1, SCK, MISO, MOSI, spi::Byte>, u8, pac::Spi1, data, ctl1, dmaten, [SCK, MISO, MOSI];
+    DmaDst<4> for Spi<pac::Spi1, SCK, MISO, MOSI, spi::Word>, u16, pac::Spi1, data, ctl1, dmaten, [SCK, MISO, MOSI];
+    DmaSrc<4> for Usart<pac::Usart1, TX, RX, usart::Byte>, u8, pac::Usart1, rdata, ctl2, denr, [TX, RX];
+    DmaSrc<4> for Usart<pac::Usart1, TX, RX, usart::Word>, u16, pac::Usart1, rdata, ctl2, denr, [TX, RX];
 }
 
 // The bound is what restricts N to the five channels that have an impl.
@@ -284,7 +314,7 @@ where
     /// width follows from the peripheral's word type, so `buf` must match it.
     pub fn write_to<P: DmaDst<N>>(
         mut self,
-        periph: P,
+        mut periph: P,
         buf: &'static [P::Word],
         prio: Prio,
     ) -> Transfer<N, P, &'static [P::Word]> {
@@ -293,6 +323,7 @@ where
         self.set_cnt(buf.len() as u16);
         self.configure(Dir::M2P, <P::Word as DmaWord>::WIDTH, prio);
         self.set_enabled(true);
+        periph.enable_dma();
         Transfer {
             channel: self,
             periph,
@@ -307,7 +338,7 @@ where
     /// follows from the peripheral's word type, so `buf` must match it.
     pub fn read_from<P: DmaSrc<N>>(
         mut self,
-        periph: P,
+        mut periph: P,
         buf: &'static mut [P::Word],
         prio: Prio,
     ) -> Transfer<N, P, &'static mut [P::Word]> {
@@ -316,6 +347,7 @@ where
         self.set_cnt(buf.len() as u16);
         self.configure(Dir::P2M, <P::Word as DmaWord>::WIDTH, prio);
         self.set_enabled(true);
+        periph.enable_dma();
         Transfer {
             channel: self,
             periph,
@@ -340,6 +372,7 @@ pub struct Transfer<const N: u8, P, BUF> {
 impl<const N: u8, P, BUF> Transfer<N, P, BUF>
 where
     Channel<N>: ChannelOps,
+    P: DmaPeriph<N>,
 {
     /// Blocks until the transfer completes, then returns the channel, the
     /// peripheral and the buffer.
@@ -348,9 +381,31 @@ where
     /// refusals for why a bus error is unreachable through this API.
     pub fn wait(mut self) -> (Channel<N>, P, BUF) {
         while !self.channel.is_complete() {}
+        self.periph.disable_dma();
         self.channel.set_enabled(false);
         self.channel.clear_flags();
         (self.channel, self.periph, self.buf)
+    }
+    /// How many transfers the channel has left, without waiting for it.
+    ///
+    /// Counts transfers, not bytes: at [`Width::Bits16`] every unit here is two
+    /// bytes on the wire. Subtract from the buffer length to get progress.
+    ///
+    /// A snapshot only — the hardware keeps counting down while the caller looks
+    /// at the returned value, so it is good for diagnostics and progress, not for
+    /// deciding that a particular part of the buffer is now safe to touch.
+    pub fn remaining(&self) -> u16 {
+        self.channel.cnt()
+    }
+    /// Whether the channel has raised `ERRIF`, having hit a bus error.
+    ///
+    /// Diagnostics rather than a check anyone is obliged to make: every address a
+    /// channel can be given through this API comes from a typed source, so there
+    /// is no safe way to aim it at memory that would fault. Offered because a
+    /// caller watching a live transfer through [`remaining`](Transfer::remaining)
+    /// should be able to tell a stalled channel from a failed one.
+    pub fn is_error(&self) -> bool {
+        self.channel.is_error()
     }
 }
 
