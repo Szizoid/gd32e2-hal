@@ -34,6 +34,7 @@ const DZ_16BIT: u8 = 0b1111;
 /// Discriminants are the `PSC` register encoding. There is no universal default
 /// — the right divider depends on `pclk` and the slave's maximum clock.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum SpiPsc {
     Div2 = 0b000,
@@ -51,6 +52,7 @@ pub enum SpiPsc {
 /// Both ends of the link must agree, or every word arrives bit-reversed with no
 /// error reported. Most devices are MSB-first, which is the default.
 #[derive(Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum BitOrder {
     /// Most significant bit first.
     MsbFirst,
@@ -154,6 +156,43 @@ pub struct Byte;
 /// Word-width marker: 16-bit frames ([`Spi::transfer_word`], `SpiBus<u16>`).
 pub struct Word;
 
+/// An error the peripheral flagged in `STAT`.
+///
+/// Its own type rather than [`ErrorKind`], which has no variant for a CRC
+/// mismatch and would have to report it as `Other` — indistinguishable from
+/// anything else unclassified. The portable classification is still one
+/// [`kind`] call away.
+///
+/// [`kind`]: embedded_hal::spi::Error::kind
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[non_exhaustive]
+pub enum Error {
+    /// A received word was overwritten before it had been read (`RXORERR`).
+    Overrun,
+    /// `NSS` was pulled low while configured as a master (`CONFERR`) — another
+    /// master is driving the bus.
+    ModeFault,
+    /// The received CRC does not match the one computed locally (`CRCERR`).
+    Crc,
+    /// A frame boundary arrived where none was expected (`FERR`), which only
+    /// the TI frame format can report.
+    Framing,
+}
+
+impl embedded_hal::spi::Error for Error {
+    fn kind(&self) -> ErrorKind {
+        match self {
+            Self::Overrun => ErrorKind::Overrun,
+            Self::ModeFault => ErrorKind::ModeFault,
+            // No CRC variant exists upstream; this is the loss our own type
+            // is here to keep out of the driver-facing API.
+            Self::Crc => ErrorKind::Other,
+            Self::Framing => ErrorKind::FrameFormat,
+        }
+    }
+}
+
 /// A peripheral that [`Spi`] can drive.
 ///
 /// SPI0 and SPI1 have distinct register block types whose bits do not line up —
@@ -178,7 +217,7 @@ pub trait Instance: Enable + Reset {
     /// Reads the received word from the data register.
     fn read_data(&self) -> u16;
     /// Returns the first pending error, if any, clearing it as the manual requires.
-    fn take_error(&self) -> Option<ErrorKind>;
+    fn take_error(&self) -> Option<Error>;
     /// Enables or disables the peripheral (`SPIEN`).
     fn set_enabled(&self, on: bool);
 }
@@ -218,21 +257,21 @@ impl Instance for pac::Spi0 {
     fn read_data(&self) -> u16 {
         self.data().read().data().bits()
     }
-    fn take_error(&self) -> Option<ErrorKind> {
+    fn take_error(&self) -> Option<Error> {
         let stat = self.stat().read();
         if stat.rxorerr().bit_is_set() {
             // clear: read DATA (done in transfer_byte) + read STAT (above)
-            Some(ErrorKind::Overrun)
+            Some(Error::Overrun)
         } else if stat.conferr().bit_is_set() {
             // clear: read STAT (above) + write CTL0
             self.ctl0().modify(|_, w| w);
-            Some(ErrorKind::ModeFault)
+            Some(Error::ModeFault)
         } else if stat.crcerr().bit_is_set() {
             self.stat().modify(|_, w| w.crcerr().clear_bit());
-            Some(ErrorKind::Other)
+            Some(Error::Crc)
         } else if stat.ferr().bit_is_set() {
             self.stat().modify(|_, w| w.ferr().clear_bit());
-            Some(ErrorKind::FrameFormat)
+            Some(Error::Framing)
         } else {
             None
         }
@@ -279,21 +318,21 @@ impl Instance for pac::Spi1 {
     fn read_data(&self) -> u16 {
         self.data().read().data().bits()
     }
-    fn take_error(&self) -> Option<ErrorKind> {
+    fn take_error(&self) -> Option<Error> {
         let stat = self.stat().read();
         if stat.rxorerr().bit_is_set() {
             // clear: read DATA (done in transfer_byte) + read STAT (above)
-            Some(ErrorKind::Overrun)
+            Some(Error::Overrun)
         } else if stat.conferr().bit_is_set() {
             // clear: read STAT (above) + write CTL0
             self.ctl0().modify(|_, w| w);
-            Some(ErrorKind::ModeFault)
+            Some(Error::ModeFault)
         } else if stat.crcerr().bit_is_set() {
             self.stat().modify(|_, w| w.crcerr().clear_bit());
-            Some(ErrorKind::Other)
+            Some(Error::Crc)
         } else if stat.ferr().bit_is_set() {
             self.stat().modify(|_, w| w.ferr().clear_bit());
-            Some(ErrorKind::FrameFormat)
+            Some(Error::Framing)
         } else {
             None
         }
@@ -405,7 +444,7 @@ where
     ///
     /// Blocks until the exchange has completed, so nothing is left pending on the
     /// bus when it returns.
-    pub fn transfer_byte(&self, byte: u8) -> Result<u8, ErrorKind> {
+    pub fn transfer_byte(&self, byte: u8) -> Result<u8, Error> {
         while !self.spi.tbe() {}
         self.spi.write_data(byte as u16);
         while !self.spi.rbne() {}
@@ -425,7 +464,7 @@ where
     ///
     /// Blocks until the exchange has completed, so nothing is left pending on the
     /// bus when it returns.
-    pub fn transfer_word(&self, word: u16) -> Result<u16, ErrorKind> {
+    pub fn transfer_word(&self, word: u16) -> Result<u16, Error> {
         while !self.spi.tbe() {}
         self.spi.write_data(word);
         while !self.spi.rbne() {}
@@ -441,7 +480,7 @@ impl<SPIX, SCK, MISO, MOSI, WORD> ErrorType for Spi<SPIX, SCK, MISO, MOSI, WORD>
 where
     SPIX: Instance,
 {
-    type Error = ErrorKind;
+    type Error = Error;
 }
 
 impl<SPIX, SCK, MISO, MOSI> SpiBus<u8> for Spi<SPIX, SCK, MISO, MOSI, Byte>

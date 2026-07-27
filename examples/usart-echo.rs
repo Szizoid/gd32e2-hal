@@ -1,7 +1,17 @@
+//! USART0 echoing every byte it receives, at 115200 8N1 on PA9/PA10.
+//!
+//! Needs a terminal on the other end of the wire: type into it and the same
+//! characters come back. What travels over the USART is the payload under test,
+//! so the running commentary goes to the RTT log instead — the two never share
+//! a channel and cannot be confused for one another.
+//!
+//! Covers: `Usart::new`, `UsartConfig::default`, `read_byte`, `write_byte`.
+
 #![no_std]
 #![no_main]
 
 use cortex_m_rt::entry;
+use defmt_rtt as _;
 use embedded_hal::digital::OutputPin;
 use panic_halt as _;
 
@@ -32,9 +42,12 @@ fn main() -> ! {
         UsartConfig::default(),
     );
 
+    defmt::info!("echo ready at 115200 8N1 on PA9/PA10");
+
     loop {
         if let Ok(byte) = usart0.read_byte() {
             usart0.write_byte(byte);
+            defmt::info!("echoed {=u8:#04x}", byte);
         }
     }
 }

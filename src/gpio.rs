@@ -77,6 +77,7 @@ pub struct Pin<const P: char, const N: u8, MODE> {
 
 /// Internal pull resistor.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Pull {
     /// No pull resistor.
     Floating = 0b00,
@@ -89,6 +90,7 @@ pub enum Pull {
 /// Output slew rate. Slower edges radiate less; faster ones are needed for
 /// high-speed peripherals.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum Speed {
     Mhz2 = 0b00,

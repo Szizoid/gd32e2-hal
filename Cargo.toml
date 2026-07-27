@@ -18,7 +18,13 @@ gd32e230x4 = []
 gd32e230x6 = []
 gd32e230x8 = []
 
+# Derives defmt::Format on the public enums so they can be logged. Off by
+# default: a user who does not log with defmt should not pull the crate in.
+defmt = ["dep:defmt", "embedded-hal/defmt-03"]
+
 [dependencies]
+# Only ever named inside cfg_attr(feature = "defmt", ...), see [features].
+defmt = { version = "1.1", optional = true }
 # The library itself only calls cortex_m::asm::delay (adc.rs); the
 # critical-section impl is an examples-only concern, see [dev-dependencies].
 cortex-m = "0.7.7"
@@ -41,6 +47,15 @@ gd32e2 = { version = "0.9.1", features = ["gd32e230", "rt", "critical-section"] 
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
 cortex-m-rt = "0.7.3"
 panic-halt = "0.2.0"
+# Logging for the examples: defmt keeps only a string index plus raw argument
+# bytes on the target, defmt-rtt drains them into the RTT ring buffer that
+# `probe-rs run` reads over SWD.
+defmt = "1.1"
+defmt-rtt = "1.3"
+# The crate depending on itself is not a cycle: this entry applies to examples
+# only, and it is the one way to build them with a feature of the library
+# enabled. Without it the examples cannot log our own error types.
+gd32e2-hal = { path = ".", features = ["defmt"] }
 
 # Small, predictable binary. debug = true costs no flash — probe-rs only loads
 # the loadable sections — and is what gives symbols to `probe-rs gdb`.

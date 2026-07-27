@@ -13,6 +13,7 @@
 #![no_main]
 
 use cortex_m_rt::entry;
+use defmt_rtt as _;
 use embedded_hal_nb::serial::{Read, Write};
 use panic_halt as _;
 
@@ -40,14 +41,23 @@ fn main() -> ! {
         .frame_format(FrameFormat::E8);
     let mut usart1 = Usart::new(&mut rcu, dp.usart1, tx, rx, clocks, config);
 
+    defmt::info!("USART1 E8 loopback at 9600 baud (wire PA2 -> PA3)");
+
     // Send a few bytes and read each back through the loopback wire.
     for b in *b"HAL" {
         let _ = nb::block!(usart1.write(b));
         let _ = nb::block!(usart1.flush());
-        let _echo = nb::block!(usart1.read());
+        match nb::block!(usart1.read()) {
+            Ok(echo) if echo == b => defmt::info!("sent {=u8:a}, got it back", b),
+            Ok(echo) => defmt::warn!("sent {=u8:#04x}, got {=u8:#04x}", b, echo),
+            // The error itself cannot be logged yet: `usart::Error` has no
+            // `defmt::Format` impl. A parity error is the interesting case here.
+            Err(_) => defmt::error!("read failed on {=u8:#04x}", b),
+        }
     }
 
     // Done exercising it — hand the peripheral and pins back.
     let (_usart1, _tx, _rx) = usart1.release();
+    defmt::info!("released, done");
     loop {}
 }

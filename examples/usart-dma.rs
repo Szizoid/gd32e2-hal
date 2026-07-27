@@ -7,6 +7,7 @@
 #![no_main]
 
 use cortex_m_rt::entry;
+use defmt_rtt as _;
 use embedded_hal::digital::OutputPin;
 use panic_halt as _;
 
@@ -50,9 +51,21 @@ fn main() -> ! {
         // The channel, the USART and the buffer all move into the transfer and
         // come back only from `wait`, so nothing here can touch a byte the DMA
         // is still moving.
-        let (channel, usart, _buf) = ch1.write_to(usart0, MSG, Prio::Low).wait();
+        let transfer = ch1.write_to(usart0, MSG, Prio::Low);
+
+        // Logging between the start and `wait` is the whole point: the core is
+        // free while the channel drains the buffer on its own. `remaining` is a
+        // live snapshot, so it is normally already below the message length.
+        defmt::info!(
+            "transfer started, {} of {} bytes left",
+            transfer.remaining(),
+            MSG.len()
+        );
+
+        let (channel, usart, _buf) = transfer.wait();
         ch1 = channel;
         usart0 = usart;
+        defmt::info!("transfer done");
 
         cortex_m::asm::delay(DELAY_CYCLES);
     }

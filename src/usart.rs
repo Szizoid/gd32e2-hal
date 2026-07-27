@@ -121,6 +121,7 @@ pub mod baud {
 /// ×16 is the default and more tolerant of clock error; ×8 halves the sampling
 /// rate, which allows higher bit rates from the same peripheral clock.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Oversampling {
     /// 8 samples per bit — allows twice the bit rate from the same clock.
     X8,
@@ -139,6 +140,7 @@ pub enum Oversampling {
 /// For raw 9-bit words with no parity, see [`Usart::new_word`], which moves
 /// `u16` rather than `u8`.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum FrameFormat {
     /// 8 data bits, no parity.
     N8,
@@ -264,6 +266,39 @@ pub struct Byte;
 /// [`Usart::read_word`]), no parity possible.
 pub struct Word;
 
+/// A line error the receiver reported for one frame.
+///
+/// Its own type rather than [`ErrorKind`] so that what the `STAT` register
+/// distinguishes stays distinguishable; the portable classification every
+/// `embedded-hal` driver understands is still one [`kind`] call away.
+///
+/// [`kind`]: embedded_hal_nb::serial::Error::kind
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[non_exhaustive]
+pub enum Error {
+    /// A frame arrived before the previous one had been read, and was lost.
+    Overrun,
+    /// The sampling logic disagreed with itself about a bit's level.
+    Noise,
+    /// The stop bit was not where the configured frame said it would be —
+    /// usually a baud rate or frame format mismatch between the two ends.
+    Framing,
+    /// The parity bit contradicts the data bits.
+    Parity,
+}
+
+impl embedded_hal_nb::serial::Error for Error {
+    fn kind(&self) -> ErrorKind {
+        match self {
+            Self::Overrun => ErrorKind::Overrun,
+            Self::Noise => ErrorKind::Noise,
+            Self::Framing => ErrorKind::FrameFormat,
+            Self::Parity => ErrorKind::Parity,
+        }
+    }
+}
+
 /// A configured USART, owning the peripheral and both pins.
 ///
 /// `WORD` records the word width, so methods of the wrong width don't exist:
@@ -282,20 +317,20 @@ impl<USARTX, TX, RX, WORD> Usart<USARTX, TX, RX, WORD>
 where
     USARTX: Deref<Target = pac::usart0::RegisterBlock>,
 {
-    fn take_error(&self) -> Option<ErrorKind> {
+    fn take_error(&self) -> Option<Error> {
         let stat = self.usart.stat().read();
         let error = if stat.orerr().bit() {
             self.usart.intc().write(|w| w.orec().clear());
-            Some(ErrorKind::Overrun)
+            Some(Error::Overrun)
         } else if stat.nerr().bit() {
             self.usart.intc().write(|w| w.nec().clear());
-            Some(ErrorKind::Noise)
+            Some(Error::Noise)
         } else if stat.ferr().bit() {
             self.usart.intc().write(|w| w.fec().clear());
-            Some(ErrorKind::FrameFormat)
+            Some(Error::Framing)
         } else if stat.perr().bit() {
             self.usart.intc().write(|w| w.pec().clear());
-            Some(ErrorKind::Parity)
+            Some(Error::Parity)
         } else {
             None
         };
@@ -381,7 +416,7 @@ where
     ///
     /// A line error consumes the offending frame and is reported instead of the
     /// data, so a damaged byte is never mistaken for a good one.
-    pub fn read_byte(&self) -> Result<u8, ErrorKind> {
+    pub fn read_byte(&self) -> Result<u8, Error> {
         while !self.usart.stat().read().rbne().bit() {}
         if let Some(e) = self.take_error() {
             Err(e)
@@ -432,7 +467,7 @@ where
             .write(|w| unsafe { w.bits(word as u32 & DATA_9BIT_MASK) });
     }
     /// Receives one 9-bit word, blocking until one arrives.
-    pub fn read_word(&self) -> Result<u16, ErrorKind> {
+    pub fn read_word(&self) -> Result<u16, Error> {
         while !self.usart.stat().read().rbne().bit() {}
         if let Some(e) = self.take_error() {
             Err(e)
@@ -443,7 +478,7 @@ where
 }
 
 impl<USARTX, TX, RX, WORD> ErrorType for Usart<USARTX, TX, RX, WORD> {
-    type Error = ErrorKind;
+    type Error = Error;
 }
 
 impl<USARTX, TX, RX> Read<u8> for Usart<USARTX, TX, RX, Byte>

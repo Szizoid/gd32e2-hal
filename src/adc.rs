@@ -47,6 +47,7 @@ const US_PER_S: u64 = 1_000_000;
 /// sensor has a minimum requirement expressed in *time*, so how long is long
 /// enough depends on the actual `CK_ADC` frequency.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum SampTime {
     Cycles1_5 = 0b000,

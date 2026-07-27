@@ -11,9 +11,9 @@ Rust from scratch on top of the [`gd32e2`](https://crates.io/crates/gd32e2) PAC.
 
 > ⚠️ **Work in progress.** Written by hand, incrementally; the API is unstable.
 > The package is a library (`src/lib.rs` → `adc`, `dma`, `gpio`, `rcu`, `spi`,
-> `time`, `usart`) plus on-hardware test binaries in `examples/`; all 9 examples
+> `time`, `usart`) plus on-hardware test binaries in `examples/`; all 10 examples
 > have been flashed and verified on the board — RCU, GPIO, USART (8/9-bit and
-> parity), SPI0/SPI1, ADC and a one-shot DMA transfer.
+> parity), SPI0/SPI1, ADC, a one-shot DMA transfer, RTT.
 
 ### Principles
 
@@ -39,6 +39,9 @@ mutually exclusive features; exactly one must be enabled, or it's a
 
 x8 is a superset of x6; where a row is footnoted only (1) and (3), x6 has no
 function on that AF at all.
+
+An orthogonal feature, **`defmt`**, derives `defmt::Format` on the public enums
+and error types. Off by default; also enables `embedded-hal/defmt-03`.
 
 ### What's implemented
 
@@ -80,8 +83,9 @@ constants in `usart::baud`), `Oversampling::{X16, X8}` and
 `FrameFormat::{N8, E8, O8, E7, O7}` (one source of truth for `WL`/`PCEN`/`PM`).
 Blocking `write_byte` / `read_byte`, plus `embedded-hal-nb` `Read<u8>` /
 `Write<u8>` / `flush` on the `Byte` width. Pure 9-bit words via `new_word` /
-`write_word` / `read_word` on the `Word` typestate (`UsartConfig9`). RX errors
-use `embedded_hal_nb::serial::ErrorKind` directly, cleared through `USART_INTC`.
+`write_word` / `read_word` on the `Word` typestate (`UsartConfig9`). RX errors are
+`usart::Error` (`Overrun` / `Noise` / `Framing` / `Parity`), cleared through
+`USART_INTC`; `ErrorKind` comes from the `serial::Error` trait impl.
 `release()` returns the peripheral and both pins.
 
 **ADC** (`src/adc.rs`) — `Adc::new(rcu, adc, clocks)` runs the manual's
@@ -107,7 +111,9 @@ wire serialization, not any method signature. An `Instance` trait abstracts the
 peripheral at the operation level, so one generic `Spi<>` serves both instances
 despite their distinct `RegisterBlock` types and bit-level divergence (`FF16` in
 `CTL0` on SPI0 vs `DZ` in `CTL1` on SPI1, with `BYTEN` derived from the width).
-Errors map onto `spi::ErrorKind`; `release()` returns the peripheral and pins.
+Errors are `spi::Error` (`Overrun` / `ModeFault` / `Crc` / `Framing`);
+`ErrorKind` comes from the `spi::Error` trait impl, where `Crc` maps to `Other`
+for lack of an upstream variant. `release()` returns the peripheral and pins.
 Hardware NSS and CRC are deliberately not implemented.
 
 **DMA** (`src/dma.rs`) — one-shot transfers, verified on hardware. `dp.dma.split(&mut rcu)`
@@ -156,8 +162,8 @@ if let Ok(byte) = usart0.read_byte() {
 
 - **PAC-only base, no third-party HAL.**
 - **Flashing and debugging over SWD** (ST-Link V2 + `probe-rs`, `PA13`/`PA14`).
-  Runtime output currently still goes over USART0 @ 115200 8N1 — no RTT /
-  `defmt` yet.
+  Runtime output goes over RTT on the same probe (`defmt` + `defmt-rtt`); no
+  USB-serial adapter, and `PA9`/`PA10` are used only by the USART examples.
 - Target `thumbv8m.base-none-eabi`; flash 64K, RAM 8K.
 - `gd32e2` is generated from patched SVDs — verify field names against
   `docs/GD32E23x_User_Manual.pdf` (PDFs are kept locally, not committed).
@@ -178,10 +184,10 @@ cargo re usart-echo   # build + flash over SWD, then stay attached
 
 `re` is `cargo run --release --example`; `.cargo/config.toml` points the
 target's `runner` at `probe-rs run --chip GD32E230K8`, which flashes the ELF
-directly (no `objcopy`, no `.bin`). It then keeps the probe attached waiting for
-RTT — there is no RTT block in the firmware yet, so it just sits silently; exit
-with Ctrl-C. The chip keeps running on its own, and the freed probe can read any
-register live:
+directly (no `objcopy`, no `.bin`) and then stays attached, printing the RTT log
+until Ctrl-C. The log level is fixed at compile time by `DEFMT_LOG` in
+`.cargo/config.toml`. The chip keeps running without the probe, so the freed
+probe can read any register live:
 
 ```sh
 probe-rs reset --chip GD32E230K8              # run the firmware from reset
@@ -194,20 +200,11 @@ The default feature targets the `GD32E230K8U6` (x8); for another variant:
 cargo build --release --no-default-features --features gd32e230x4
 ```
 
-Read the log in a terminal @ 115200 8N1.
-
 > On Windows without Visual Studio the host uses the GNU toolchain (see
 > `rust-toolchain.toml`), so the MSVC linker isn't required.
 
 ### Roadmap
 
-- [x] ~~Flash and verify on hardware~~ — done; all 9 examples run on the board
-      (RCU PLL, GPIO, USART0 echo, ADC, SPI0/SPI1, USART 9-bit and E8 parity,
-      CK_OUT, DMA to USART0).
-- [x] ~~DMA one-shot transfers~~ — done and verified on the board: channel
-      ownership (`Channel<N>`), the typed `DmaSrc<N>`/`DmaDst<N>` request map,
-      `Transfer` (`write_to`/`read_from`/`wait`), `CHxCTL`, and the peripheral-side
-      request lines gated through `DmaPeriph<N>`.
 - [ ] DMA: circular mode and `M2M`.
 - [ ] Timers / PWM.
 - [ ] I²C.
@@ -220,10 +217,10 @@ Read the log in a terminal @ 115200 8N1.
 - [ ] Package / pin-count variants — a second axis, independent of x4/x6/x8:
       which pins are bonded out at all (`PC13`–`PC15`, `PF6`/`PF7` exist on
       QFN48 but not on this QFN32).
-- [x] ~~Test bench → `examples/`~~ — done; `src/main.rs` is gone, each on-hardware
-      test is its own file under `examples/`, flashed straight from there with
-      `cargo re <name>`. `cargo be <name>` compile-checks one without a probe.
-- [ ] `defmt` + RTT over the probe, replacing the USART0 log.
+- [ ] `embedded-io` (`Read`/`Write`/`ReadReady`/`WriteReady`) for the USART —
+      `embedded-hal` has no serial traits and points here instead. Other trait
+      crates follow their peripherals: `DelayNs` with the timers, `i2c::I2c`
+      with I²C, `SetDutyCycle` with PWM, `embedded-dma` for the DMA buffers.
 - [ ] Extract the HAL into its own standalone crate/repo (not just `examples/` —
       splitting the library out entirely). No rush to publish on crates.io; local
       + GitHub is enough for now.
@@ -237,9 +234,9 @@ HAL для микроконтроллера **GD32E230K8U6** (Cortex-M23), на�
 
 > ⚠️ **Работа в процессе.** Пишется вручную и постепенно; API нестабилен. Пакет —
 > библиотека (`src/lib.rs` → `adc`, `dma`, `gpio`, `rcu`, `spi`, `time`, `usart`)
-> плюс тестовые бинарники на железо в `examples/`; все 9 примеров прошиты и
-> проверены на плате — RCU, GPIO, USART (8/9-бит и чётность), SPI0/SPI1, ADC и
-> разовая передача по DMA.
+> плюс тестовые бинарники на железо в `examples/`; все 10 примеров прошиты и
+> проверены на плате — RCU, GPIO, USART (8/9-бит и чётность), SPI0/SPI1, ADC,
+> разовая передача по DMA, RTT.
 
 ### Принципы
 
@@ -265,6 +262,9 @@ HAL для микроконтроллера **GD32E230K8U6** (Cortex-M23), на�
 
 x8 — надмножество x6; там, где строка помечена только (1) и (3), у x6 функции на
 этом AF нет вовсе.
+
+Ортогональная фича **`defmt`** вешает `defmt::Format` на публичные энумы и типы
+ошибок. По умолчанию выключена; заодно включает `embedded-hal/defmt-03`.
 
 ### Что уже есть
 
@@ -308,8 +308,9 @@ x8 — надмножество x6; там, где строка помечена
 `WL`/`PCEN`/`PM`). Блокирующие `write_byte` / `read_byte` плюс `embedded-hal-nb`
 `Read<u8>` / `Write<u8>` / `flush` на ширине `Byte`. Чистый 9-битный режим —
 `new_word` / `write_word` / `read_word` на typestate `Word` (`UsartConfig9`).
-Ошибки приёма — напрямую `embedded_hal_nb::serial::ErrorKind`, сбрасываются
-через `USART_INTC`. `release()` возвращает периферию и оба пина.
+Ошибки приёма — `usart::Error` (`Overrun` / `Noise` / `Framing` / `Parity`),
+сбрасываются через `USART_INTC`; `ErrorKind` даёт impl трейта `serial::Error`.
+`release()` возвращает периферию и оба пина.
 
 **ADC** (`src/adc.rs`) — `Adc::new(rcu, adc, clocks)` выполняет процедуру
 калибровки из мануала (`ADCON`, задержка 14 тактов `CK_ADC` в пересчёте на такты
@@ -334,8 +335,10 @@ x8 — надмножество x6; там, где строка помечена
 Трейт `Instance` абстрагирует периферию на уровне операций, поэтому один generic
 `Spi<>` обслуживает оба инстанса, несмотря на разные типы `RegisterBlock` и
 расхождение на уровне битов (`FF16` в `CTL0` у SPI0 против `DZ` в `CTL1` у SPI1,
-`BYTEN` выводится из ширины). Ошибки ложатся на `spi::ErrorKind`; `release()`
-возвращает периферию и пины. Аппаратный NSS и CRC сознательно не реализованы.
+`BYTEN` выводится из ширины). Ошибки — `spi::Error` (`Overrun` / `ModeFault` /
+`Crc` / `Framing`); `ErrorKind` даёт impl трейта `spi::Error`, где `Crc` ложится
+на `Other` за отсутствием варианта у апстрима. `release()` возвращает периферию
+и пины. Аппаратный NSS и CRC сознательно не реализованы.
 
 **DMA** (`src/dma.rs`) — разовые передачи, проверены на железе.
 `dp.dma.split(&mut rcu)` (`DmaExt`) раздаёт `Channel<0>`…`Channel<4>` — каждый
@@ -383,8 +386,8 @@ if let Ok(byte) = usart0.read_byte() {
 
 - **PAC-only база, без сторонних HAL.**
 - **Прошивка и отладка по SWD** (ST-Link V2 + `probe-rs`, `PA13`/`PA14`). Вывод
-  из прошивки пока по-прежнему через USART0 @ 115200 8N1 — RTT / `defmt` ещё
-  не заведены.
+  из прошивки идёт по RTT через тот же зонд (`defmt` + `defmt-rtt`);
+  USB-переходник не нужен, `PA9`/`PA10` заняты только в примерах на USART.
 - Target `thumbv8m.base-none-eabi`; флеш 64K, ОЗУ 8K.
 - `gd32e2` сгенерирован из патченных SVD — имена полей сверять по
   `docs/GD32E23x_User_Manual.pdf` (PDF лежат локально, в git не входят).
@@ -405,9 +408,10 @@ cargo re usart-echo   # сборка + прошивка по SWD, дальше �
 
 `re` — это `cargo run --release --example`; в `.cargo/config.toml` у цели прописан
 `runner = "probe-rs run --chip GD32E230K8"`, который заливает ELF напрямую (без
-`objcopy` и без `.bin`). После записи он держит зонд и ждёт RTT — RTT-блока в
-прошивке пока нет, поэтому просто молчит, выход по Ctrl-C. Чип при этом работает
-сам, а освободившийся зонд читает любой регистр вживую:
+`objcopy` и без `.bin`), а дальше остаётся подключённым и печатает RTT-лог до
+Ctrl-C. Уровень лога фиксируется на компиляции переменной `DEFMT_LOG` из того же
+`.cargo/config.toml`. Чип работает и без зонда, а освободившийся зонд читает
+любой регистр вживую:
 
 ```sh
 probe-rs reset --chip GD32E230K8              # запустить прошивку со сброса
@@ -420,20 +424,11 @@ probe-rs read  --chip GD32E230K8 b32 0x48000014 1   # например, GPIOA_OC
 cargo build --release --no-default-features --features gd32e230x4
 ```
 
-Читать лог в терминале @ 115200 8N1.
-
 > На Windows без Visual Studio host переключён на GNU-toolchain (см.
 > `rust-toolchain.toml`), чтобы не требовался MSVC-линкер.
 
 ### Roadmap
 
-- [x] ~~Прошить и проверить на железе~~ — сделано; все 9 примеров прогнаны на
-      чипе (RCU PLL, GPIO, echo по USART0, ADC, SPI0/SPI1, USART 9-бит и
-      E8-чётность, CK_OUT, DMA в USART0).
-- [x] ~~DMA, разовые передачи~~ — сделано и проверено на плате: владение каналом
-      (`Channel<N>`), типизированная карта запросов `DmaSrc<N>`/`DmaDst<N>`,
-      `Transfer` (`write_to`/`read_from`/`wait`), `CHxCTL` и линии запроса на
-      стороне периферии через `DmaPeriph<N>`.
 - [ ] DMA: циклический режим и `M2M`.
 - [ ] Таймеры / PWM.
 - [ ] I²C.
@@ -447,10 +442,10 @@ cargo build --release --no-default-features --features gd32e230x4
 - [ ] Варианты корпуса / числа ног — вторая ось, независимая от x4/x6/x8: какие
       ноги вообще разварены (`PC13`–`PC15`, `PF6`/`PF7` есть на QFN48, но не на
       нашем QFN32).
-- [x] ~~Стенд → `examples/`~~ — сделано; `src/main.rs` больше нет, каждый тест на
-      железе — отдельный файл в `examples/`, прошивается прямо оттуда через
-      `cargo re <имя>`. `cargo be <имя>` проверяет сборку одного примера без зонда.
-- [ ] `defmt` + RTT через зонд вместо лога по USART0.
+- [ ] `embedded-io` (`Read`/`Write`/`ReadReady`/`WriteReady`) для USART — своих
+      serial-трейтов у `embedded-hal` нет, апстрим отсылает сюда. Остальные
+      трейт-крейты идут за своей периферией: `DelayNs` с таймерами, `i2c::I2c`
+      с I²C, `SetDutyCycle` с PWM, `embedded-dma` для буферов DMA.
 - [ ] Вынос HAL в полностью отдельный крейт/репозиторий (не просто `examples/` —
       разделение самой библиотеки). Публиковать на crates.io пока не спешим;
       достаточно локально и на GitHub.

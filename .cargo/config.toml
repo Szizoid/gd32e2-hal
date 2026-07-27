@@ -1,6 +1,12 @@
 [build]
 target = "thumbv8m.base-none-eabi"
-rustflags = ["-C", "link-arg=-Tlink.x"]
+# defmt.x must come after link.x: it declares the non-loadable .defmt section
+# whose symbol addresses are the string indices sent over RTT.
+rustflags = ["-C", "link-arg=-Tlink.x", "-C", "link-arg=-Tdefmt.x"]
+
+# defmt filters log levels at compile time; without this only ERROR survives.
+[env]
+DEFMT_LOG = "trace"
 
 [target.thumbv8m.base-none-eabi]
 runner = "probe-rs run --chip GD32E230K8"

@@ -45,6 +45,7 @@ const WS2_MAX_HCLK: u32 = 72_000_000;
 /// frequencies exist as variants, which makes an impossible request a compile
 /// error instead of a silently rounded one.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum PllFreq {
     Mhz8 = 8_000_000,
@@ -72,6 +73,7 @@ pub enum PllFreq {
 /// (`sysclk`) varies with configuration. Division can't exceed the source, so
 /// every variant is legal at any `sysclk`.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum AhbPsc {
     Div1 = 1,
@@ -87,6 +89,7 @@ pub enum AhbPsc {
 
 /// APB prescaler: divides `hclk` down to `pclk1` (APB1) or `pclk2` (APB2).
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum ApbPsc {
     Div1 = 1,
@@ -98,6 +101,7 @@ pub enum ApbPsc {
 
 /// Divider for the prescaled `CK_ADC` branch, including which bus it taps.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum AdcPsc {
     Apb2Div2,
@@ -112,6 +116,7 @@ pub enum AdcPsc {
 
 /// Divider on the internal 28 MHz oscillator feeding `CK_ADC`.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum Irc28mDiv {
     Div1,
@@ -123,6 +128,7 @@ pub enum Irc28mDiv {
 /// Each branch carries its own divider inside the variant, so a divider can't be
 /// specified for the branch it doesn't belong to.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum AdcSel {
     /// The dedicated internal 28 MHz oscillator, which [`CFGR::freeze`] starts.
     Irc28m(Irc28mDiv),
@@ -132,6 +138,7 @@ pub enum AdcSel {
 
 /// Source of the USART0 clock, independent of the APB2 bus clock.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Usart0Sel {
     /// The APB2 bus clock — the reset default.
     Apb2,
@@ -418,6 +425,7 @@ impl CFGR {
 
 /// Divider on the PLL branch feeding `CK_OUT`, ahead of the source multiplexer.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum PllDiv {
     Div1,
@@ -430,6 +438,7 @@ pub enum PllDiv {
 /// it cannot be set for a source it doesn't apply to. Selecting a source that
 /// isn't running simply leaves the pin quiet.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum CkOutSrc {
     /// Nothing driven out.
     None,
@@ -451,6 +460,7 @@ pub enum CkOutSrc {
 
 /// Divider applied to `CK_OUT` after the source multiplexer, for any source.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum CkOutDiv {
     Div1,

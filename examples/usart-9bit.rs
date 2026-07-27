@@ -12,6 +12,7 @@
 #![no_main]
 
 use cortex_m_rt::entry;
+use defmt_rtt as _;
 use panic_halt as _;
 
 use gd32e2_hal::gpio::GpioExt;
@@ -36,9 +37,14 @@ fn main() -> ! {
         .oversampling(Oversampling::X16);
     let usart0 = Usart::new_word(&mut rcu, dp.usart0, tx, rx, clocks, config);
 
+    defmt::info!("9-bit echo ready, waiting for a word on PA10");
+
     loop {
         if let Ok(word) = usart0.read_word() {
             usart0.write_word(word);
+            // The ninth bit is exactly what a plain 8-bit terminal cannot show,
+            // so log it apart from the low byte.
+            defmt::info!("echoed {=u16:#x} (bit8 = {})", word, word & 0x100 != 0);
         }
     }
 }
