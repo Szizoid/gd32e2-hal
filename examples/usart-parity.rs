@@ -46,13 +46,14 @@ fn main() -> ! {
     // Send a few bytes and read each back through the loopback wire.
     for b in *b"HAL" {
         let _ = nb::block!(usart1.write(b));
-        let _ = nb::block!(usart1.flush());
+        // Spelled out because `Usart` also has an inherent, blocking `flush`,
+        // which would win plain method-call syntax; this is the `nb` one.
+        let _ = nb::block!(embedded_hal_nb::serial::Write::flush(&mut usart1));
         match nb::block!(usart1.read()) {
             Ok(echo) if echo == b => defmt::info!("sent {=u8:a}, got it back", b),
             Ok(echo) => defmt::warn!("sent {=u8:#04x}, got {=u8:#04x}", b, echo),
-            // The error itself cannot be logged yet: `usart::Error` has no
-            // `defmt::Format` impl. A parity error is the interesting case here.
-            Err(_) => defmt::error!("read failed on {=u8:#04x}", b),
+            // A parity error is the interesting case here.
+            Err(e) => defmt::error!("read failed on {=u8:#04x}: {}", b, e),
         }
     }
 

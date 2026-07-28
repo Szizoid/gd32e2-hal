@@ -8,7 +8,6 @@
 
 use cortex_m_rt::entry;
 use defmt_rtt as _;
-use embedded_hal::digital::OutputPin;
 use panic_halt as _;
 
 use gd32e2_hal::dma::{DmaExt, Prio};
@@ -30,8 +29,8 @@ fn main() -> ! {
         .sysclk(PllFreq::Mhz48)
         .freeze(&mut rcu, &mut dp.fmc);
     let parts = dp.gpioa.split(&mut rcu);
-    let mut pa6 = parts.pa6.into_output();
-    pa6.set_high().unwrap();
+    let pa6 = parts.pa6.into_output();
+    pa6.set_high();
 
     let tx_pin = parts.pa9.into_alternate::<1>();
     let rx_pin = parts.pa10.into_alternate::<1>();

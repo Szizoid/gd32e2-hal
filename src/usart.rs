@@ -19,8 +19,6 @@
 use core::marker::PhantomData;
 use core::ops::Deref;
 
-use embedded_hal_nb::serial::{ErrorKind, ErrorType, Read, Write};
-
 use crate::gpio::{Alternate, Pin};
 use crate::pac;
 use crate::rcu::{Clocks, Enable, Rcu, Reset};
@@ -268,11 +266,12 @@ pub struct Word;
 
 /// A line error the receiver reported for one frame.
 ///
-/// Its own type rather than [`ErrorKind`] so that what the `STAT` register
-/// distinguishes stays distinguishable; the portable classification every
-/// `embedded-hal` driver understands is still one [`kind`] call away.
-///
-/// [`kind`]: embedded_hal_nb::serial::Error::kind
+/// Its own type rather than a foreign `ErrorKind` so that what the `STAT`
+/// register distinguishes stays distinguishable; the portable classifications
+/// are still one `kind` call away, one per ecosystem —
+/// [`embedded_hal_nb::serial::Error::kind`] and [`embedded_io::Error::kind`].
+/// Both are lossy on purpose: neither foreign enum has a variant for every
+/// line condition this one names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
@@ -288,13 +287,35 @@ pub enum Error {
     Parity,
 }
 
-impl embedded_hal_nb::serial::Error for Error {
-    fn kind(&self) -> ErrorKind {
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Overrun => ErrorKind::Overrun,
-            Self::Noise => ErrorKind::Noise,
-            Self::Framing => ErrorKind::FrameFormat,
-            Self::Parity => ErrorKind::Parity,
+            Self::Overrun => write!(f, "receive overrun, a frame was lost"),
+            Self::Noise => write!(f, "noise detected on the line"),
+            Self::Framing => write!(f, "framing error, no stop bit where expected"),
+            Self::Parity => write!(f, "parity check failed"),
+        }
+    }
+}
+
+impl core::error::Error for Error {}
+
+impl embedded_io::Error for Error {
+    fn kind(&self) -> embedded_io::ErrorKind {
+        match self {
+            Self::Framing | Self::Noise | Self::Parity => embedded_io::ErrorKind::InvalidData,
+            Self::Overrun => embedded_io::ErrorKind::Other,
+        }
+    }
+}
+
+impl embedded_hal_nb::serial::Error for Error {
+    fn kind(&self) -> embedded_hal_nb::serial::ErrorKind {
+        match self {
+            Self::Overrun => embedded_hal_nb::serial::ErrorKind::Overrun,
+            Self::Noise => embedded_hal_nb::serial::ErrorKind::Noise,
+            Self::Framing => embedded_hal_nb::serial::ErrorKind::FrameFormat,
+            Self::Parity => embedded_hal_nb::serial::ErrorKind::Parity,
         }
     }
 }
@@ -319,16 +340,16 @@ where
 {
     fn take_error(&self) -> Option<Error> {
         let stat = self.usart.stat().read();
-        let error = if stat.orerr().bit() {
+        let error = if stat.orerr().bit_is_set() {
             self.usart.intc().write(|w| w.orec().clear());
             Some(Error::Overrun)
-        } else if stat.nerr().bit() {
+        } else if stat.nerr().bit_is_set() {
             self.usart.intc().write(|w| w.nec().clear());
             Some(Error::Noise)
-        } else if stat.ferr().bit() {
+        } else if stat.ferr().bit_is_set() {
             self.usart.intc().write(|w| w.fec().clear());
             Some(Error::Framing)
-        } else if stat.perr().bit() {
+        } else if stat.perr().bit_is_set() {
             self.usart.intc().write(|w| w.pec().clear());
             Some(Error::Parity)
         } else {
@@ -340,6 +361,22 @@ where
         }
 
         error
+    }
+
+    fn wait_tc(&self) {
+        while self.usart.stat().read().tc().bit_is_clear() {}
+    }
+
+    /// Blocks until everything handed to the peripheral has left the wire.
+    ///
+    /// Waits for `TC`, not `TBE`: the latter only reports that `TDATA` was
+    /// copied into the shift register, while the byte is still being clocked
+    /// out. Call this before cutting power to a transceiver or sleeping, or the
+    /// last frame is truncated mid-flight.
+    ///
+    /// Cannot fail — transmission has no error conditions.
+    pub fn flush(&self) {
+        self.wait_tc();
     }
 
     /// Disables the peripheral and returns it along with both pins.
@@ -362,6 +399,58 @@ where
             FrameFormat::E7 | FrameFormat::O7 => raw & DATA_7BIT_MASK,
             FrameFormat::N8 | FrameFormat::E8 | FrameFormat::O8 => raw,
         }
+    }
+
+    /// Sends one byte, blocking until the transmit buffer can accept it.
+    ///
+    /// Returning does not mean the byte has left the wire — for that, see
+    /// [`flush`](Usart::flush).
+    pub fn write_byte(&self, byte: u8) {
+        while self.usart.stat().read().tbe().bit_is_clear() {}
+        self.usart.tdata().write(|w| unsafe { w.bits(byte as u32) });
+    }
+    /// Sends every byte of `buf`, blocking until the last one is handed over.
+    ///
+    /// Returning does not mean the buffer has left the wire — for that, see
+    /// [`flush`](Usart::flush). Cannot fail: transmission has no error
+    /// conditions.
+    pub fn write_bytes(&self, buf: &[u8]) {
+        for &byte in buf {
+            self.write_byte(byte);
+        }
+    }
+    /// Receives one byte, blocking until one arrives.
+    ///
+    /// A line error consumes the offending frame and is reported instead of the
+    /// data, so a damaged byte is never mistaken for a good one.
+    pub fn read_byte(&self) -> Result<u8, Error> {
+        while self.usart.stat().read().rbne().bit_is_clear() {}
+        if let Some(e) = self.take_error() {
+            Err(e)
+        } else {
+            Ok(self.received_byte())
+        }
+    }
+    /// Receives into `buf` and returns how many bytes were placed there.
+    ///
+    /// Blocks until at least one byte arrives, then takes whatever else is
+    /// already waiting and returns — it deliberately does *not* wait for `buf`
+    /// to fill. A peer that sends a short command and then waits for the answer
+    /// would otherwise deadlock this call. Returns `0` only for an empty `buf`.
+    ///
+    /// A line error ends the call immediately; bytes copied before it are
+    /// unreachable, since the count is not reported alongside an error.
+    pub fn read_bytes(&self, buf: &mut [u8]) -> Result<usize, Error> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let mut index = 0;
+        while self.usart.stat().read().rbne().bit_is_clear() {}
+        while index < buf.len() && self.usart.stat().read().rbne().bit_is_set() {
+            buf[index] = self.read_byte()?;
+            index += 1;
+        }
+        Ok(index)
     }
 }
 
@@ -403,26 +492,55 @@ where
             _word: PhantomData,
         }
     }
+}
 
-    /// Sends one byte, blocking until the transmit buffer can accept it.
+impl<USARTX, TX, RX> Usart<USARTX, TX, RX, Word>
+where
+    USARTX: Deref<Target = pac::usart0::RegisterBlock>,
+{
+    /// Sends one 9-bit word, blocking until the transmit buffer can accept it.
     ///
-    /// Returning does not mean the byte has left the wire — for that, flush via
-    /// [`Write::flush`], which waits for transmission to complete.
-    pub fn write_byte(&self, byte: u8) {
-        while !self.usart.stat().read().tbe().bit() {}
-        self.usart.tdata().write(|w| unsafe { w.bits(byte as u32) });
+    /// Bits above the ninth are discarded.
+    pub fn write_word(&self, word: u16) {
+        while self.usart.stat().read().tbe().bit_is_clear() {}
+        self.usart
+            .tdata()
+            .write(|w| unsafe { w.bits(word as u32 & DATA_9BIT_MASK) });
     }
-    /// Receives one byte, blocking until one arrives.
+    /// Sends every word of `buf`, blocking until the last one is handed over.
     ///
-    /// A line error consumes the offending frame and is reported instead of the
-    /// data, so a damaged byte is never mistaken for a good one.
-    pub fn read_byte(&self) -> Result<u8, Error> {
-        while !self.usart.stat().read().rbne().bit() {}
+    /// Returning does not mean the buffer has left the wire — for that, see
+    /// [`flush`](Usart::flush). Cannot fail: transmission has no error
+    /// conditions.
+    pub fn write_words(&self, buf: &[u16]) {
+        for &word in buf {
+            self.write_word(word);
+        }
+    }
+    /// Receives one 9-bit word, blocking until one arrives.
+    pub fn read_word(&self) -> Result<u16, Error> {
+        while self.usart.stat().read().rbne().bit_is_clear() {}
         if let Some(e) = self.take_error() {
             Err(e)
         } else {
-            Ok(self.received_byte())
+            Ok((self.usart.rdata().read().bits() & DATA_9BIT_MASK) as u16)
         }
+    }
+    /// Receives into `buf` and returns how many words were placed there.
+    ///
+    /// Same blocking rule as [`read_bytes`](Usart::read_bytes): waits for the
+    /// first word, then takes only what is already waiting.
+    pub fn read_words(&self, buf: &mut [u16]) -> Result<usize, Error> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let mut index = 0;
+        while self.usart.stat().read().rbne().bit_is_clear() {}
+        while index < buf.len() && self.usart.stat().read().rbne().bit_is_set() {
+            buf[index] = self.read_word()?;
+            index += 1;
+        }
+        Ok(index)
     }
 }
 
@@ -456,37 +574,22 @@ where
             _word: PhantomData,
         }
     }
-
-    /// Sends one 9-bit word, blocking until the transmit buffer can accept it.
-    ///
-    /// Bits above the ninth are discarded.
-    pub fn write_word(&self, word: u16) {
-        while !self.usart.stat().read().tbe().bit() {}
-        self.usart
-            .tdata()
-            .write(|w| unsafe { w.bits(word as u32 & DATA_9BIT_MASK) });
-    }
-    /// Receives one 9-bit word, blocking until one arrives.
-    pub fn read_word(&self) -> Result<u16, Error> {
-        while !self.usart.stat().read().rbne().bit() {}
-        if let Some(e) = self.take_error() {
-            Err(e)
-        } else {
-            Ok((self.usart.rdata().read().bits() & DATA_9BIT_MASK) as u16)
-        }
-    }
 }
 
-impl<USARTX, TX, RX, WORD> ErrorType for Usart<USARTX, TX, RX, WORD> {
+impl<USARTX, TX, RX, WORD> embedded_hal_nb::serial::ErrorType for Usart<USARTX, TX, RX, WORD> {
     type Error = Error;
 }
 
-impl<USARTX, TX, RX> Read<u8> for Usart<USARTX, TX, RX, Byte>
+impl<USARTX, TX, RX, WORD> embedded_io::ErrorType for Usart<USARTX, TX, RX, WORD> {
+    type Error = Error;
+}
+
+impl<USARTX, TX, RX> embedded_hal_nb::serial::Read<u8> for Usart<USARTX, TX, RX, Byte>
 where
     USARTX: Deref<Target = pac::usart0::RegisterBlock>,
 {
     fn read(&mut self) -> nb::Result<u8, Self::Error> {
-        if !self.usart.stat().read().rbne().bit() {
+        if self.usart.stat().read().rbne().bit_is_clear() {
             return Err(nb::Error::WouldBlock);
         }
         if let Some(e) = self.take_error() {
@@ -497,12 +600,21 @@ where
     }
 }
 
-impl<USARTX, TX, RX> Write<u8> for Usart<USARTX, TX, RX, Byte>
+impl<USARTX, TX, RX> embedded_io::Read for Usart<USARTX, TX, RX, Byte>
+where
+    USARTX: Deref<Target = pac::usart0::RegisterBlock>,
+{
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        self.read_bytes(buf)
+    }
+}
+
+impl<USARTX, TX, RX> embedded_hal_nb::serial::Write<u8> for Usart<USARTX, TX, RX, Byte>
 where
     USARTX: Deref<Target = pac::usart0::RegisterBlock>,
 {
     fn write(&mut self, byte: u8) -> nb::Result<(), Self::Error> {
-        if !self.usart.stat().read().tbe().bit() {
+        if self.usart.stat().read().tbe().bit_is_clear() {
             Err(nb::Error::WouldBlock)
         } else {
             self.usart.tdata().write(|w| unsafe { w.bits(byte as u32) });
@@ -510,10 +622,29 @@ where
         }
     }
     fn flush(&mut self) -> nb::Result<(), Self::Error> {
-        if !self.usart.stat().read().tc().bit() {
+        if self.usart.stat().read().tc().bit_is_clear() {
             Err(nb::Error::WouldBlock)
         } else {
             Ok(())
         }
+    }
+}
+
+impl<USARTX, TX, RX> embedded_io::Write for Usart<USARTX, TX, RX, Byte>
+where
+    USARTX: Deref<Target = pac::usart0::RegisterBlock>,
+{
+    fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        match buf.first() {
+            Some(&b) => {
+                self.write_byte(b);
+                Ok(1usize)
+            }
+            None => Ok(0usize),
+        }
+    }
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        self.wait_tc();
+        Ok(())
     }
 }

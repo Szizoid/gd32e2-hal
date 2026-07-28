@@ -254,6 +254,17 @@ impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
         let bits = self.reg().octl().read().bits();
         ((bits >> N) & 0b1) == 0b1
     }
+    fn set_bop(&self) {
+        self.reg().bop().write(|w| unsafe { w.bits(1 << N) });
+    }
+
+    fn set_bc(&self) {
+        self.reg().bc().write(|w| unsafe { w.bits(1 << N) });
+    }
+
+    fn set_tg(&self) {
+        self.reg().tg().write(|w| unsafe { w.bits(1 << N) });
+    }
 }
 
 impl<const P: char, const N: u8, MODE> Pin<P, N, MODE>
@@ -398,16 +409,67 @@ where
     }
 }
 
+impl<const P: char, const N: u8, OTYPE> Pin<P, N, Output<OTYPE>> {
+    /// Drives the pin high.
+    pub fn set_high(&self) {
+        self.set_bop();
+    }
+    /// Drives the pin low.
+    pub fn set_low(&self) {
+        self.set_bc();
+    }
+    /// Inverts the driven level.
+    pub fn toggle(&self) {
+        self.set_tg();
+    }
+    /// Returns whether the pin is *being driven* high.
+    ///
+    /// Reads back `OCTL`, i.e. what was last written, not what the wire is at —
+    /// for the latter on an open-drain pin see [`is_high`](Pin::is_high).
+    pub fn is_set_high(&self) -> bool {
+        self.read_octl()
+    }
+    /// Returns whether the pin is *being driven* low.
+    pub fn is_set_low(&self) -> bool {
+        !self.read_octl()
+    }
+}
+
+impl<const P: char, const N: u8> Pin<P, N, Input> {
+    /// Returns whether the input reads high.
+    pub fn is_high(&self) -> bool {
+        self.read_pin()
+    }
+    /// Returns whether the input reads low.
+    pub fn is_low(&self) -> bool {
+        !self.read_pin()
+    }
+}
+
+impl<const P: char, const N: u8> Pin<P, N, Output<OpenDrain>> {
+    /// Returns whether the wire reads high.
+    ///
+    /// Open-drain can only pull low, so this reports the actual line level —
+    /// which another device on a shared bus may be holding down against us.
+    pub fn is_high(&self) -> bool {
+        self.read_pin()
+    }
+    /// Returns whether the wire reads low.
+    pub fn is_low(&self) -> bool {
+        !self.read_pin()
+    }
+}
+
 impl<const P: char, const N: u8, OTYPE> ErrorType for Pin<P, N, Output<OTYPE>> {
     type Error = Infallible;
 }
 impl<const P: char, const N: u8, OTYPE> OutputPin for Pin<P, N, Output<OTYPE>> {
     fn set_high(&mut self) -> Result<(), Self::Error> {
-        self.reg().bop().write(|w| unsafe { w.bits(1 << N) });
+        self.set_bop();
         Ok(())
     }
     fn set_low(&mut self) -> Result<(), Self::Error> {
-        self.reg().bc().write(|w| unsafe { w.bits(1 << N) });
+        self.set_bc();
         Ok(())
     }
 }
@@ -420,7 +482,7 @@ impl<const P: char, const N: u8, OTYPE> StatefulOutputPin for Pin<P, N, Output<O
         Ok(!self.read_octl())
     }
     fn toggle(&mut self) -> Result<(), Self::Error> {
-        self.reg().tg().write(|w| unsafe { w.bits(1 << N) });
+        self.set_tg();
         Ok(())
     }
 }
@@ -446,6 +508,52 @@ impl<const P: char, const N: u8> InputPin for Pin<P, N, Output<OpenDrain>> {
     }
 }
 
+impl<const P: char, const N: u8, MODE> Pin<P, N, Locked<MODE>>
+where
+    Pin<P, N, MODE>: OutputPin,
+{
+    /// Drives the pin high.
+    pub fn set_high(&self) {
+        self.set_bop();
+    }
+    /// Drives the pin low.
+    pub fn set_low(&self) {
+        self.set_bc();
+    }
+}
+
+impl<const P: char, const N: u8, MODE> Pin<P, N, Locked<MODE>>
+where
+    Pin<P, N, MODE>: StatefulOutputPin,
+{
+    /// Inverts the driven level.
+    pub fn toggle(&self) {
+        self.set_tg();
+    }
+    /// Returns whether the pin is *being driven* high, read back from `OCTL`.
+    pub fn is_set_high(&self) -> bool {
+        self.read_octl()
+    }
+    /// Returns whether the pin is *being driven* low, read back from `OCTL`.
+    pub fn is_set_low(&self) -> bool {
+        !self.read_octl()
+    }
+}
+
+impl<const P: char, const N: u8, MODE> Pin<P, N, Locked<MODE>>
+where
+    Pin<P, N, MODE>: InputPin,
+{
+    /// Returns whether the pin reads high.
+    pub fn is_high(&self) -> bool {
+        self.read_pin()
+    }
+    /// Returns whether the pin reads low.
+    pub fn is_low(&self) -> bool {
+        !self.read_pin()
+    }
+}
+
 impl<const P: char, const N: u8, MODE> ErrorType for Pin<P, N, Locked<MODE>> {
     type Error = Infallible;
 }
@@ -455,11 +563,11 @@ where
     Pin<P, N, MODE>: OutputPin,
 {
     fn set_high(&mut self) -> Result<(), Self::Error> {
-        self.reg().bop().write(|w| unsafe { w.bits(1 << N) });
+        self.set_bop();
         Ok(())
     }
     fn set_low(&mut self) -> Result<(), Self::Error> {
-        self.reg().bc().write(|w| unsafe { w.bits(1 << N) });
+        self.set_bc();
         Ok(())
     }
 }
@@ -475,7 +583,7 @@ where
         Ok(!self.read_octl())
     }
     fn toggle(&mut self) -> Result<(), Self::Error> {
-        self.reg().tg().write(|w| unsafe { w.bits(1 << N) });
+        self.set_tg();
         Ok(())
     }
 }

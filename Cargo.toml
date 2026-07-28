@@ -32,6 +32,10 @@ cortex-m = "0.7.7"
 embedded-hal = "1.0"
 # Non-blocking serial traits, split out of embedded-hal since 1.0.
 embedded-hal-nb = "1.0"
+# Byte-stream traits over USART. embedded-hal has no serial traits of its own
+# and points here for them; unlike embedded-hal-nb these are buffer-oriented
+# and always blocking.
+embedded-io = "0.7.1"
 # nb::Result/Error, used by embedded-hal-nb's trait signatures.
 nb = "1.0"
 # PAC for the GD32E2 family: gd32e230 = our chip, rt = interrupt vectors,

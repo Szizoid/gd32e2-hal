@@ -454,6 +454,44 @@ where
             None => Ok(received),
         }
     }
+
+    /// Exchanges two buffers of independent length.
+    ///
+    /// The bus clocks `max(read.len(), write.len())` bytes either way: once
+    /// `write` runs out `0x00` is sent, and once `read` is full the incoming
+    /// bytes are discarded.
+    pub fn transfer_bytes(&self, read: &mut [u8], write: &[u8]) -> Result<(), Error> {
+        let n = read.len().max(write.len());
+        for i in 0..n {
+            let sent = write.get(i).copied().unwrap_or(0x00);
+            let received = self.transfer_byte(sent)?;
+            if let Some(slot) = read.get_mut(i) {
+                *slot = received;
+            }
+        }
+        Ok(())
+    }
+    /// Exchanges `words` against itself: each byte is replaced by what came back.
+    pub fn transfer_bytes_in_place(&self, words: &mut [u8]) -> Result<(), Error> {
+        for word in words {
+            *word = self.transfer_byte(*word)?;
+        }
+        Ok(())
+    }
+    /// Clocks `words.len()` bytes in, sending `0x00` to drive the bus.
+    pub fn read_bytes(&self, words: &mut [u8]) -> Result<(), Error> {
+        for slot in words {
+            *slot = self.transfer_byte(0x00)?;
+        }
+        Ok(())
+    }
+    /// Clocks `words` out, discarding whatever arrives on MISO.
+    pub fn write_bytes(&self, words: &[u8]) -> Result<(), Error> {
+        for &b in words {
+            self.transfer_byte(b)?;
+        }
+        Ok(())
+    }
 }
 
 impl<SPIX, SCK, MISO, MOSI> Spi<SPIX, SCK, MISO, MOSI, Word>
@@ -474,6 +512,44 @@ where
             None => Ok(received),
         }
     }
+
+    /// Exchanges two buffers of independent length.
+    ///
+    /// The bus clocks `max(read.len(), write.len())` words either way: once
+    /// `write` runs out `0x0000` is sent, and once `read` is full the incoming
+    /// words are discarded.
+    pub fn transfer_words(&self, read: &mut [u16], write: &[u16]) -> Result<(), Error> {
+        let n = read.len().max(write.len());
+        for i in 0..n {
+            let sent = write.get(i).copied().unwrap_or(0x0000);
+            let received = self.transfer_word(sent)?;
+            if let Some(slot) = read.get_mut(i) {
+                *slot = received;
+            }
+        }
+        Ok(())
+    }
+    /// Exchanges `words` against itself: each word is replaced by what came back.
+    pub fn transfer_words_in_place(&self, words: &mut [u16]) -> Result<(), Error> {
+        for word in words {
+            *word = self.transfer_word(*word)?;
+        }
+        Ok(())
+    }
+    /// Clocks `words.len()` words in, sending `0x0000` to drive the bus.
+    pub fn read_words(&self, words: &mut [u16]) -> Result<(), Error> {
+        for slot in words {
+            *slot = self.transfer_word(0x0000)?;
+        }
+        Ok(())
+    }
+    /// Clocks `words` out, discarding whatever arrives on MISO.
+    pub fn write_words(&self, words: &[u16]) -> Result<(), Error> {
+        for &w in words {
+            self.transfer_word(w)?;
+        }
+        Ok(())
+    }
 }
 
 impl<SPIX, SCK, MISO, MOSI, WORD> ErrorType for Spi<SPIX, SCK, MISO, MOSI, WORD>
@@ -488,23 +564,10 @@ where
     SPIX: Instance,
 {
     fn transfer(&mut self, read: &mut [u8], write: &[u8]) -> Result<(), Self::Error> {
-        let n = read.len().max(write.len());
-        for i in 0..n {
-            // MOSI: send write[i], or a dummy 0x00 once write is exhausted
-            let sent = write.get(i).copied().unwrap_or(0x00);
-            let received = self.transfer_byte(sent)?;
-            // MISO: store into read[i] if it still has room, else discard
-            if let Some(slot) = read.get_mut(i) {
-                *slot = received;
-            }
-        }
-        Ok(())
+        self.transfer_bytes(read, write)
     }
     fn transfer_in_place(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
-        for word in words {
-            *word = self.transfer_byte(*word)?;
-        }
-        Ok(())
+        self.transfer_bytes_in_place(words)
     }
     fn flush(&mut self) -> Result<(), Self::Error> {
         // No-op: transfer_byte blocks until RBNE (the byte is fully exchanged),
@@ -512,16 +575,10 @@ where
         Ok(())
     }
     fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
-        for slot in words {
-            *slot = self.transfer_byte(0x00)?;
-        }
-        Ok(())
+        self.read_bytes(words)
     }
     fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
-        for &b in words {
-            self.transfer_byte(b)?;
-        }
-        Ok(())
+        self.write_bytes(words)
     }
 }
 
@@ -530,39 +587,20 @@ where
     SPIX: Instance,
 {
     fn transfer(&mut self, read: &mut [u16], write: &[u16]) -> Result<(), Self::Error> {
-        let n = read.len().max(write.len());
-        for i in 0..n {
-            // MOSI: send write[i], or a dummy 0x00 once write is exhausted
-            let sent = write.get(i).copied().unwrap_or(0x0000);
-            let received = self.transfer_word(sent)?;
-            // MISO: store into read[i] if it still has room, else discard
-            if let Some(slot) = read.get_mut(i) {
-                *slot = received;
-            }
-        }
-        Ok(())
+        self.transfer_words(read, write)
     }
     fn transfer_in_place(&mut self, words: &mut [u16]) -> Result<(), Self::Error> {
-        for word in words {
-            *word = self.transfer_word(*word)?;
-        }
-        Ok(())
+        self.transfer_words_in_place(words)
     }
     fn flush(&mut self) -> Result<(), Self::Error> {
-        // No-op: transfer_byte blocks until RBNE (the byte is fully exchanged),
+        // No-op: transfer_word blocks until RBNE (the word is fully exchanged),
         // so nothing is ever pending on the bus when a method returns.
         Ok(())
     }
     fn read(&mut self, words: &mut [u16]) -> Result<(), Self::Error> {
-        for slot in words {
-            *slot = self.transfer_word(0x00)?;
-        }
-        Ok(())
+        self.read_words(words)
     }
     fn write(&mut self, words: &[u16]) -> Result<(), Self::Error> {
-        for &b in words {
-            self.transfer_word(b)?;
-        }
-        Ok(())
+        self.write_words(words)
     }
 }
