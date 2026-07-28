@@ -61,4 +61,5 @@ pub mod gpio;
 pub mod rcu;
 pub mod spi;
 pub mod time;
+pub mod timer;
 pub mod usart;

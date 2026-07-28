@@ -11,9 +11,9 @@ Rust from scratch on top of the [`gd32e2`](https://crates.io/crates/gd32e2) PAC.
 
 > ⚠️ **Work in progress.** Written by hand, incrementally; the API is unstable.
 > The package is a library (`src/lib.rs` → `adc`, `dma`, `gpio`, `rcu`, `spi`,
-> `time`, `usart`) plus on-hardware test binaries in `examples/`; all 10 examples
-> have been flashed and verified on the board — RCU, GPIO, USART (8/9-bit and
-> parity), SPI0/SPI1, ADC, a one-shot DMA transfer, RTT.
+> `time`, `timer`, `usart`) plus on-hardware test binaries in `examples/`; all 11
+> examples have been flashed and verified on the board — RCU, GPIO, USART (8/9-bit
+> and parity), SPI0/SPI1, ADC, a one-shot DMA transfer, TIMER, RTT.
 
 ### Principles
 
@@ -73,9 +73,10 @@ wait states are set from the resulting `hclk` before the source switch.
 `Usart0Sel` and `AdcSel` / `AdcPsc` resolve into `Clocks` for the USART and ADC
 modules. `rcu.ck_out(src, div)` routes an internal clock node onto `PA8`/`PA9`
 (`CkOutSrc` / `CkOutDiv`), so a real frequency can be measured on a pin rather
-than trusted. Typed frequencies live in `src/time.rs` (`Hertz`
-and friends, `U32Ext`, unit conversions). `HXTAL` is out of scope — no crystal
-on this board.
+than trusted. `pclk1_tim` / `pclk2_tim` carry the timer branch: `hclk` at an
+undivided APB, twice the bus clock otherwise. Typed frequencies live in
+`src/time.rs`, aliases over `fugit` (`Hertz`), which is re-exported. `HXTAL` is
+out of scope — no crystal on this board.
 
 **USART** (`src/usart.rs`) — `Usart<USARTX, TX, RX, WORD = Byte>` owns the
 peripheral and both pins. `TxPin` / `RxPin` markers (filled by `usart_pins!`)
@@ -144,6 +145,19 @@ supertrait also gates the request line (`DENT`/`DENR`, `DMATEN`/`DMAREN`, ADC
 `DMA`) — raised on start, dropped before the peripheral goes back to its owner —
 so the drivers themselves know nothing about DMA. `remaining()` and `is_error()`
 inspect a running transfer. Circular mode and `M2M` are deferred.
+
+**TIMER** (`src/timer.rs`) — the counter core, verified on hardware. All seven
+timers: `Timer::new(rcu, timer, clocks)` clocks and resets the peripheral and
+records its own `CK_TIMERx` through the `Instance` trait, which binds each timer
+to its bus, so an APB2 timer can't be given the APB1 frequency. `start(psc, car)`
+consumes the stopped `Timer` and returns a running `CountDownTimer`, so `wait()`
+doesn't exist on a timer that was never started; `stop()` takes the peripheral
+back the other way. `start` writes both dividers, loads them out of their shadow
+registers with `UPG` and consumes the update event that raises, so the first
+`wait()` measures a full interval. `wait()` blocks for one rollover and leaves
+the timer running. Register access is confined to `Instance`, so no `Deref` to a
+register block is needed. Intervals are raw `PSC`/`CAR` for now; PWM, input
+capture and interrupts are not implemented.
 
 ### Usage
 
@@ -219,7 +233,7 @@ cargo build --release --no-default-features --features gd32e230x4
 ### Roadmap
 
 - [ ] DMA: circular mode and `M2M`.
-- [ ] Timers / PWM.
+- [ ] Timers: an interval API over raw `PSC`/`CAR`, PWM, input capture.
 - [ ] I²C.
 - [ ] Interrupt-driven operation (NVIC infrastructure — also affects USART/SPI).
 - [ ] SPI: half-duplex / single-wire modes (`BDEN`/`BDOEN`/`RO`).
@@ -245,10 +259,10 @@ HAL для микроконтроллера **GD32E230K8U6** (Cortex-M23), на�
 нуля поверх PAC-крейта [`gd32e2`](https://crates.io/crates/gd32e2).
 
 > ⚠️ **Работа в процессе.** Пишется вручную и постепенно; API нестабилен. Пакет —
-> библиотека (`src/lib.rs` → `adc`, `dma`, `gpio`, `rcu`, `spi`, `time`, `usart`)
-> плюс тестовые бинарники на железо в `examples/`; все 10 примеров прошиты и
-> проверены на плате — RCU, GPIO, USART (8/9-бит и чётность), SPI0/SPI1, ADC,
-> разовая передача по DMA, RTT.
+> библиотека (`src/lib.rs` → `adc`, `dma`, `gpio`, `rcu`, `spi`, `time`, `timer`,
+> `usart`) плюс тестовые бинарники на железо в `examples/`; все 11 примеров прошиты
+> и проверены на плате — RCU, GPIO, USART (8/9-бит и чётность), SPI0/SPI1, ADC,
+> разовая передача по DMA, TIMER, RTT.
 
 ### Принципы
 
@@ -309,9 +323,11 @@ x8 — надмножество x6; там, где строка помечена
 переключения источника. `Usart0Sel` и `AdcSel` / `AdcPsc` оседают в `Clocks` для
 модулей USART и ADC. `rcu.ck_out(src, div)` выводит внутренний тактовый узел на
 `PA8`/`PA9` (`CkOutSrc` / `CkOutDiv`), так что реальную частоту можно измерить на
-ноге, а не принимать на веру. Типизированные частоты — в `src/time.rs`
-(`Hertz` и семейство, `U32Ext`, конверсии единиц). `HXTAL` вне скоупа — кварц на
-плате не запаян.
+ноге, а не принимать на веру. `pclk1_tim` / `pclk2_tim` несут тактовую ветку
+таймеров: `hclk` при неделённой APB, удвоенная частота шины во всех остальных
+случаях. Типизированные частоты — в `src/time.rs`, псевдонимы над `fugit`
+(`Hertz`), сам крейт реэкспортируется. `HXTAL` вне скоупа — кварц на плате не
+запаян.
 
 **USART** (`src/usart.rs`) — `Usart<USARTX, TX, RX, WORD = Byte>` владеет
 периферией и обоими пинами. Маркеры `TxPin` / `RxPin` (заполняются
@@ -381,6 +397,19 @@ x8 — надмножество x6; там, где строка помечена
 поднимает на старте и гасит до возврата периферии владельцу, — так что сами
 драйверы про DMA ничего не знают. `remaining()` и `is_error()` показывают
 состояние идущей передачи. Циклический режим и `M2M` отложены.
+
+**TIMER** (`src/timer.rs`) — ядро счётчика, проверено на железе. Все семь
+таймеров: `Timer::new(rcu, timer, clocks)` тактирует и сбрасывает периферию и
+запоминает свой `CK_TIMERx` через трейт `Instance`, который привязывает каждый
+таймер к его шине, поэтому таймеру с APB2 нельзя подсунуть частоту APB1.
+`start(psc, car)` забирает остановленный `Timer` и отдаёт запущенный
+`CountDownTimer`, поэтому `wait()` не существует у незапущенного таймера;
+`stop()` возвращает периферию обратно. `start` пишет оба делителя, загружает их
+из теневых регистров через `UPG` и гасит порождённое им событие обновления, так
+что первый `wait()` отсчитывает полный интервал. `wait()` блокирует до одного
+переполнения и оставляет таймер бежать. Доступ к регистрам заперт в `Instance`,
+поэтому `Deref` до регистрового блока не нужен. Интервал пока задаётся голыми
+`PSC`/`CAR`; PWM, input capture и прерывания не реализованы.
 
 ### Пример
 
@@ -456,7 +485,7 @@ cargo build --release --no-default-features --features gd32e230x4
 ### Roadmap
 
 - [ ] DMA: циклический режим и `M2M`.
-- [ ] Таймеры / PWM.
+- [ ] Таймеры: интервал вместо голых `PSC`/`CAR`, PWM, input capture.
 - [ ] I²C.
 - [ ] Работа на прерываниях (инфраструктура NVIC — затронет и USART/SPI).
 - [ ] SPI: half-duplex / однопроводные режимы (`BDEN`/`BDOEN`/`RO`).

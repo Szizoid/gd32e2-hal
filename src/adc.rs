@@ -109,7 +109,7 @@ impl Adc {
         <pac::Adc as Reset>::reset(rcu);
         adc.ctl1().modify(|_, w| w.adcon().enabled());
         cortex_m::asm::delay(
-            (CALIBRATION_DELAY_CYCLES * clocks.hclk().0).div_ceil(clocks.ck_adc().0),
+            (CALIBRATION_DELAY_CYCLES * clocks.hclk().to_Hz()).div_ceil(clocks.ck_adc().to_Hz()),
         );
         adc.ctl1().modify(|_, w| w.rstclb().start());
         adc.ctl1().modify(|_, w| w.clb().start());
@@ -145,7 +145,7 @@ impl Adc {
     }
     // Cycles239_5 / ck_adc >= 17.1 us, with both sides scaled by 10 to stay integer.
     fn sample_time_sufficient(&self) -> bool {
-        TEMP_MIN_SAMPTIME_US_X10 * self.clocks.ck_adc().0 as u64
+        TEMP_MIN_SAMPTIME_US_X10 * self.clocks.ck_adc().to_Hz() as u64
             <= MAX_SAMPTIME_CYCLES_X10 * US_PER_S
     }
     fn set_internal_sample_time(&self, channel: u8, time: SampTime) {

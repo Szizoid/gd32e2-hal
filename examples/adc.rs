@@ -40,7 +40,7 @@ fn main() -> ! {
 
     let adc = Adc::new(&mut rcu, dp.adc, clocks);
 
-    defmt::info!("ADC test, CK_ADC = {} Hz", clocks.ck_adc().0);
+    defmt::info!("ADC test, CK_ADC = {} Hz", clocks.ck_adc().to_Hz());
 
     loop {
         let vdda = adc.read_vref();

@@ -232,7 +232,7 @@ fn configure<USARTX>(
 {
     USARTX::enable(rcu);
     USARTX::reset(rcu);
-    let pclk = USARTX::clock(clocks).0;
+    let pclk = USARTX::clock(clocks).to_Hz();
     // round(pclk / baud) in integers: adding half the divisor before truncating rounds.
     let usartdiv = (pclk + baud / 2) / baud;
     usart.baud().write(|w| unsafe {

@@ -167,6 +167,8 @@ pub struct Clocks {
     sysclk: Hertz,
     usart0: Hertz,
     ck_adc: Hertz,
+    pclk1_tim: Hertz,
+    pclk2_tim: Hertz,
 }
 
 impl Clocks {
@@ -193,6 +195,20 @@ impl Clocks {
     /// Clock feeding the ADC. Zero if [`CFGR::adc_sel`] was never called.
     pub fn ck_adc(&self) -> Hertz {
         self.ck_adc
+    }
+    /// Clock feeding the timers on APB1 (TIMER2, TIMER5, TIMER13).
+    ///
+    /// Equal to [`pclk1`](Self::pclk1) only when the APB1 prescaler is
+    /// [`ApbPsc::Div1`]; on every other divider the timers are fed twice the
+    /// bus clock, so the bus clock cannot be used in a timer period formula.
+    pub fn pclk1_tim(&self) -> Hertz {
+        self.pclk1_tim
+    }
+    /// Clock feeding the timers on APB2 (TIMER0, TIMER14, TIMER15, TIMER16).
+    ///
+    /// Same doubling rule as [`pclk1_tim`](Self::pclk1_tim).
+    pub fn pclk2_tim(&self) -> Hertz {
+        self.pclk2_tim
     }
 }
 
@@ -413,12 +429,20 @@ impl CFGR {
             }
         });
         Clocks {
-            hclk: Hertz(hclk),
-            pclk1: Hertz(pclk1),
-            pclk2: Hertz(pclk2),
-            sysclk: Hertz(sysclk),
-            usart0: Hertz(usart0),
-            ck_adc: Hertz(ck_adc),
+            hclk: Hertz::from_raw(hclk),
+            pclk1: Hertz::from_raw(pclk1),
+            pclk2: Hertz::from_raw(pclk2),
+            sysclk: Hertz::from_raw(sysclk),
+            usart0: Hertz::from_raw(usart0),
+            ck_adc: Hertz::from_raw(ck_adc),
+            pclk1_tim: Hertz::from_raw(match apb1_psc {
+                ApbPsc::Div1 => hclk,              // == pclk1
+                _ => hclk / (apb1_psc as u32 / 2), // == pclk1 * 2
+            }),
+            pclk2_tim: Hertz::from_raw(match apb2_psc {
+                ApbPsc::Div1 => hclk,              // == pclk2
+                _ => hclk / (apb2_psc as u32 / 2), // == pclk2 * 2
+            }),
         }
     }
 }
@@ -583,9 +607,16 @@ bus_en! {
     pac::Dma => ahben, dmaen,
     pac::Usart1 => apb1en, usart1en,
     pac::Spi1 => apb1en, spi1en,
+    pac::Timer2 => apb1en, timer2en,
+    pac::Timer5 => apb1en, timer5en,
+    pac::Timer13 => apb1en, timer13en,
     pac::Usart0 => apb2en, usart0en,
     pac::Adc => apb2en, adcen,
     pac::Spi0 => apb2en, spi0en,
+    pac::Timer0 => apb2en, timer0en,
+    pac::Timer14 => apb2en, timer14en,
+    pac::Timer15 => apb2en, timer15en,
+    pac::Timer16 => apb2en, timer16en,
 }
 
 bus_rst! {
@@ -594,7 +625,14 @@ bus_rst! {
     pac::Gpiof => ahbrst, pfrst,
     pac::Usart1 => apb1rst, usart1rst,
     pac::Spi1 => apb1rst, spi1rst,
+    pac::Timer2 => apb1rst, timer2rst,
+    pac::Timer5 => apb1rst, timer5rst,
+    pac::Timer13 => apb1rst, timer13rst,
     pac::Usart0 => apb2rst, usart0rst,
     pac::Adc => apb2rst, adcrst,
     pac::Spi0 => apb2rst, spi0rst,
+    pac::Timer0 => apb2rst, timer0rst,
+    pac::Timer14 => apb2rst, timer14rst,
+    pac::Timer15 => apb2rst, timer15rst,
+    pac::Timer16 => apb2rst, timer16rst,
 }

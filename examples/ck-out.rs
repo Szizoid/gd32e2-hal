@@ -41,12 +41,15 @@ fn main() -> ! {
     // The PLL can be tapped too, with its own divide-by-1/2 before CK_OUT, e.g.:
     let _alt_src = CkOutSrc::Pll(PllDiv::Div2);
 
-    defmt::info!("sysclk = {} Hz", clocks.sysclk().0);
-    defmt::info!("hclk   = {} Hz", clocks.hclk().0);
-    defmt::info!("pclk1  = {} Hz", clocks.pclk1().0);
-    defmt::info!("pclk2  = {} Hz", clocks.pclk2().0);
-    defmt::info!("usart0 = {} Hz", clocks.usart0().0);
-    defmt::info!("CK_OUT on PA8 = sysclk/4 = {} Hz", clocks.sysclk().0 / 4);
+    defmt::info!("sysclk = {} Hz", clocks.sysclk().to_Hz());
+    defmt::info!("hclk   = {} Hz", clocks.hclk().to_Hz());
+    defmt::info!("pclk1  = {} Hz", clocks.pclk1().to_Hz());
+    defmt::info!("pclk2  = {} Hz", clocks.pclk2().to_Hz());
+    defmt::info!("usart0 = {} Hz", clocks.usart0().to_Hz());
+    defmt::info!(
+        "CK_OUT on PA8 = sysclk/4 = {} Hz",
+        clocks.sysclk().to_Hz() / 4
+    );
 
     loop {}
 }
