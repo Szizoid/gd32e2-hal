@@ -88,10 +88,12 @@ Blocking inherent API on the `Byte` width: `write_byte` / `write_bytes` /
 `read_byte` / `read_bytes`, plus `flush` (waits for `TC`, not `TBE`).
 Transmission has no error conditions, so the sending half returns no `Result`.
 `read_bytes` blocks for the first byte, then takes only what is already waiting.
-Trait layers on the same width: `embedded-hal-nb` `Read<u8>` / `Write<u8>` and
-`embedded-io` `Read` / `Write`, the latter supplying `read_exact` / `write_all` /
-`write_fmt` as trait defaults. `flush` exists in all three layers; the inherent
-one wins method-call syntax, the others are reached by path. Pure 9-bit words via
+`read_ready` / `write_ready` poll `RBNE` / `TBE` without blocking. Trait layers
+on the same width: `embedded-hal-nb` `Read<u8>` / `Write<u8>` and `embedded-io`
+`Read` / `Write` / `ReadReady` / `WriteReady`, the latter crate supplying
+`read_exact` / `write_all` / `write_fmt` as trait defaults. `flush`,
+`read_ready` and `write_ready` exist in both layers; the inherent ones win
+method-call syntax, the trait ones are reached by path. Pure 9-bit words via
 `new_word` / `write_word` / `write_words` / `read_word` / `read_words` on the
 `Word` typestate (`UsartConfig9`). RX errors are `usart::Error` (`Overrun` /
 `Noise` / `Framing` / `Parity`), cleared through `USART_INTC`; portable
@@ -228,10 +230,9 @@ cargo build --release --no-default-features --features gd32e230x4
 - [ ] Package / pin-count variants — a second axis, independent of x4/x6/x8:
       which pins are bonded out at all (`PC13`–`PC15`, `PF6`/`PF7` exist on
       QFN48 but not on this QFN32).
-- [ ] `embedded-io`: `ReadReady` / `WriteReady` for the USART (`Read` / `Write`
-      are done). Other trait crates follow their peripherals: `DelayNs` with the
-      timers, `i2c::I2c` with I²C, `SetDutyCycle` with PWM, `embedded-dma` for
-      the DMA buffers.
+- [ ] Trait crates follow their peripherals: `DelayNs` with the timers,
+      `i2c::I2c` with I²C, `SetDutyCycle` with PWM, `embedded-dma` for the DMA
+      buffers.
 - [ ] Extract the HAL into its own standalone crate/repo (not just `examples/` —
       splitting the library out entirely). No rush to publish on crates.io; local
       + GitHub is enough for now.
@@ -323,10 +324,12 @@ x8 — надмножество x6; там, где строка помечена
 `write_bytes` / `read_byte` / `read_bytes` плюс `flush` (ждёт `TC`, а не `TBE`).
 У передачи нет условий ошибки, поэтому передающая половина не возвращает
 `Result`. `read_bytes` блокируется до первого байта, дальше забирает только уже
-пришедшее. Трейтовые слои на той же ширине: `embedded-hal-nb` `Read<u8>` /
-`Write<u8>` и `embedded-io` `Read` / `Write`; второй даёт `read_exact` /
-`write_all` / `write_fmt` дефолтами трейта. `flush` есть во всех трёх слоях —
-точечную запись выигрывает инхерентный, остальные доступны по пути. Чистый
+пришедшее. `read_ready` / `write_ready` опрашивают `RBNE` / `TBE` без
+блокировки. Трейтовые слои на той же ширине: `embedded-hal-nb` `Read<u8>` /
+`Write<u8>` и `embedded-io` `Read` / `Write` / `ReadReady` / `WriteReady`; второй
+крейт даёт `read_exact` / `write_all` / `write_fmt` дефолтами трейта. `flush`,
+`read_ready` и `write_ready` есть в обоих слоях — точечную запись выигрывает
+инхерентный, трейтовый доступен по пути. Чистый
 9-битный режим — `new_word` / `write_word` / `write_words` / `read_word` /
 `read_words` на typestate `Word` (`UsartConfig9`). Ошибки приёма — `usart::Error`
 (`Overrun` / `Noise` / `Framing` / `Parity`), сбрасываются через `USART_INTC`;
@@ -465,10 +468,8 @@ cargo build --release --no-default-features --features gd32e230x4
 - [ ] Варианты корпуса / числа ног — вторая ось, независимая от x4/x6/x8: какие
       ноги вообще разварены (`PC13`–`PC15`, `PF6`/`PF7` есть на QFN48, но не на
       нашем QFN32).
-- [ ] `embedded-io`: `ReadReady` / `WriteReady` для USART (`Read` / `Write`
-      сделаны). Остальные трейт-крейты идут за своей периферией: `DelayNs` с
-      таймерами, `i2c::I2c` с I²C, `SetDutyCycle` с PWM, `embedded-dma` для
-      буферов DMA.
+- [ ] Трейт-крейты идут за своей периферией: `DelayNs` с таймерами, `i2c::I2c`
+      с I²C, `SetDutyCycle` с PWM, `embedded-dma` для буферов DMA.
 - [ ] Вынос HAL в полностью отдельный крейт/репозиторий (не просто `examples/` —
       разделение самой библиотеки). Публиковать на crates.io пока не спешим;
       достаточно локально и на GitHub.

@@ -363,8 +363,30 @@ where
         error
     }
 
+    fn rbne(&self) -> bool {
+        self.usart.stat().read().rbne().bit_is_set()
+    }
+
+    fn tbe(&self) -> bool {
+        self.usart.stat().read().tbe().bit_is_set()
+    }
+
     fn wait_tc(&self) {
         while self.usart.stat().read().tc().bit_is_clear() {}
+    }
+
+    /// Returns whether a received word is waiting to be read.
+    ///
+    /// Only guarantees that the *next* single read will not block; a buffered
+    /// read may still block once it has taken what was already there.
+    pub fn read_ready(&self) -> bool {
+        self.rbne()
+    }
+    /// Returns whether the transmit buffer can accept a word right now.
+    ///
+    /// Only guarantees that the *next* single write will not block.
+    pub fn write_ready(&self) -> bool {
+        self.tbe()
     }
 
     /// Blocks until everything handed to the peripheral has left the wire.
@@ -406,7 +428,7 @@ where
     /// Returning does not mean the byte has left the wire — for that, see
     /// [`flush`](Usart::flush).
     pub fn write_byte(&self, byte: u8) {
-        while self.usart.stat().read().tbe().bit_is_clear() {}
+        while !self.tbe() {}
         self.usart.tdata().write(|w| unsafe { w.bits(byte as u32) });
     }
     /// Sends every byte of `buf`, blocking until the last one is handed over.
@@ -424,7 +446,7 @@ where
     /// A line error consumes the offending frame and is reported instead of the
     /// data, so a damaged byte is never mistaken for a good one.
     pub fn read_byte(&self) -> Result<u8, Error> {
-        while self.usart.stat().read().rbne().bit_is_clear() {}
+        while !self.rbne() {}
         if let Some(e) = self.take_error() {
             Err(e)
         } else {
@@ -445,8 +467,8 @@ where
             return Ok(0);
         }
         let mut index = 0;
-        while self.usart.stat().read().rbne().bit_is_clear() {}
-        while index < buf.len() && self.usart.stat().read().rbne().bit_is_set() {
+        while !self.rbne() {}
+        while index < buf.len() && self.rbne() {
             buf[index] = self.read_byte()?;
             index += 1;
         }
@@ -502,7 +524,7 @@ where
     ///
     /// Bits above the ninth are discarded.
     pub fn write_word(&self, word: u16) {
-        while self.usart.stat().read().tbe().bit_is_clear() {}
+        while !self.tbe() {}
         self.usart
             .tdata()
             .write(|w| unsafe { w.bits(word as u32 & DATA_9BIT_MASK) });
@@ -519,7 +541,7 @@ where
     }
     /// Receives one 9-bit word, blocking until one arrives.
     pub fn read_word(&self) -> Result<u16, Error> {
-        while self.usart.stat().read().rbne().bit_is_clear() {}
+        while !self.rbne() {}
         if let Some(e) = self.take_error() {
             Err(e)
         } else {
@@ -535,8 +557,8 @@ where
             return Ok(0);
         }
         let mut index = 0;
-        while self.usart.stat().read().rbne().bit_is_clear() {}
-        while index < buf.len() && self.usart.stat().read().rbne().bit_is_set() {
+        while !self.rbne() {}
+        while index < buf.len() && self.rbne() {
             buf[index] = self.read_word()?;
             index += 1;
         }
@@ -589,7 +611,7 @@ where
     USARTX: Deref<Target = pac::usart0::RegisterBlock>,
 {
     fn read(&mut self) -> nb::Result<u8, Self::Error> {
-        if self.usart.stat().read().rbne().bit_is_clear() {
+        if !self.rbne() {
             return Err(nb::Error::WouldBlock);
         }
         if let Some(e) = self.take_error() {
@@ -614,7 +636,7 @@ where
     USARTX: Deref<Target = pac::usart0::RegisterBlock>,
 {
     fn write(&mut self, byte: u8) -> nb::Result<(), Self::Error> {
-        if self.usart.stat().read().tbe().bit_is_clear() {
+        if !self.tbe() {
             Err(nb::Error::WouldBlock)
         } else {
             self.usart.tdata().write(|w| unsafe { w.bits(byte as u32) });
@@ -646,5 +668,23 @@ where
     fn flush(&mut self) -> Result<(), Self::Error> {
         self.wait_tc();
         Ok(())
+    }
+}
+
+impl<USARTX, TX, RX> embedded_io::ReadReady for Usart<USARTX, TX, RX, Byte>
+where
+    USARTX: Deref<Target = pac::usart0::RegisterBlock>,
+{
+    fn read_ready(&mut self) -> Result<bool, Self::Error> {
+        Ok(self.rbne())
+    }
+}
+
+impl<USARTX, TX, RX> embedded_io::WriteReady for Usart<USARTX, TX, RX, Byte>
+where
+    USARTX: Deref<Target = pac::usart0::RegisterBlock>,
+{
+    fn write_ready(&mut self) -> Result<bool, Self::Error> {
+        Ok(self.tbe())
     }
 }
