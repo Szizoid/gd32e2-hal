@@ -10,7 +10,46 @@
 
 use crate::pac;
 use crate::rcu::{Clocks, Enable, Rcu, Reset};
-use crate::time::Hertz;
+use crate::time::{Duration, Hertz};
+
+/// Counts one prescaler or counter cycle can span, both fields being 16-bit.
+const MAX_COUNT: u32 = 1 << 16;
+
+/// Splits a tick count into the `PSC` and `CAR` values whose cycle spans it.
+///
+/// The prescaler is kept as small as the counter width allows, leaving the
+/// counter as much of the interval as possible: its step is the resolution
+/// everything built on the core inherits. The division truncates, so the
+/// realised interval is at most one prescaler cycle short of the requested one.
+///
+/// A zero tick count is raised to one — the shortest interval the hardware can
+/// express, since a counter cycle is at least one tick.
+fn dividers(ticks: u32) -> (u16, u16) {
+    let ticks = ticks.max(1);
+    let psc = ticks.div_ceil(MAX_COUNT);
+    let car = ticks / psc;
+    ((psc - 1) as u16, (car - 1) as u16)
+}
+
+/// Converts an interval of any scale into ticks of `clock`.
+///
+/// A `Duration` is a plain count whose unit is `NOM / DENOM` seconds, so the
+/// interval in seconds is `as_ticks() * NOM / DENOM` and the tick count follows
+/// by multiplying with the frequency. The division comes last: taking `NOM /
+/// DENOM` first would floor to zero on every scale finer than a second.
+///
+/// Saturates instead of wrapping, both in the product and on the way down to
+/// `u32`. Anything past `u32::MAX` ticks is beyond what the dividers can span
+/// anyway — under a minute at 72 MHz — so the result is the longest interval the
+/// hardware can express.
+fn interval_to_ticks<const NOM: u64, const DENOM: u64>(
+    interval: Duration<u32, NOM, DENOM>,
+    clock: Hertz,
+) -> u32 {
+    let raw_time = u64::from(interval.as_ticks());
+    let raw_freq = u64::from(clock.to_Hz());
+    (raw_time.saturating_mul(raw_freq).saturating_mul(NOM) / DENOM).min(u32::MAX.into()) as u32
+}
 
 /// A timer peripheral, tying it to the bus that clocks it.
 ///
@@ -120,6 +159,24 @@ where
             timer: self.timer,
             clk: self.clk,
         }
+    }
+
+    /// Starts the counter, which then rolls over once per `interval`.
+    ///
+    /// The interval is taken in whatever scale the caller wrote it in — `5.secs()`,
+    /// `500.millis()`, `100.micros()` all work, with no conversion at the call
+    /// site. The dividers are derived from it against this timer's own clock,
+    /// truncating: the realised interval is at most one prescaler cycle short.
+    ///
+    /// Intervals past what the 16-bit dividers can span (just under a minute at
+    /// 72 MHz) saturate to the longest the hardware can produce, and a zero
+    /// interval becomes a single tick.
+    pub fn start_interval<const NOM: u64, const DENOM: u64>(
+        self,
+        interval: Duration<u32, NOM, DENOM>,
+    ) -> CountDownTimer<TIMERX> {
+        let (psc, car) = dividers(interval_to_ticks(interval, self.clk));
+        self.start(psc, car)
     }
 
     /// Returns the peripheral.
