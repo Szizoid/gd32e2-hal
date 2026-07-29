@@ -230,3 +230,17 @@ impl Adc {
         }
     }
 }
+
+/// Entry point on the raw peripheral, mirroring [`GpioExt`](crate::gpio::GpioExt).
+pub trait AdcExt {
+    /// Consumes the peripheral and returns it clocked, reset and calibrated.
+    ///
+    /// Same thing [`Adc::new`] does, reached from the peripheral instead.
+    fn constrain(self, rcu: &mut Rcu, clocks: Clocks) -> Adc;
+}
+
+impl AdcExt for pac::Adc {
+    fn constrain(self, rcu: &mut Rcu, clocks: Clocks) -> Adc {
+        Adc::new(rcu, self, clocks)
+    }
+}

@@ -101,10 +101,11 @@ method-call syntax, the trait ones are reached by path. Pure 9-bit words via
 `ErrorKind`s come from the `serial::Error` and `embedded_io::Error` impls.
 `release()` returns the peripheral and both pins.
 
-**ADC** (`src/adc.rs`) — `Adc::new(rcu, adc, clocks)` runs the manual's
-calibration sequence (`ADCON`, a 14-`CK_ADC`-cycle delay converted to core
-cycles, `RSTCLB`/`CLB`). `read<PIN: Channel>(&pin, SampTime) -> u16` performs a
-single blocking, software-triggered conversion. `Channel` is implemented only
+**ADC** (`src/adc.rs`) — `Adc::new(rcu, adc, clocks)`, or `dp.adc.constrain(...)`
+through `AdcExt`, runs the manual's calibration sequence (`ADCON`, a
+14-`CK_ADC`-cycle delay converted to core cycles, `RSTCLB`/`CLB`).
+`read<PIN: Channel>(&pin, SampTime) -> u16` performs a single blocking,
+software-triggered conversion. `Channel` is implemented only
 for `Pin<P, N, Analog>`, so a pin must actually have gone through
 `into_analog()`. Internal channels: `read_vref() -> i32` returns the real `VDDA`
 in mV (derived from the factory `VREFINT_CAL` in flash, falling back to the
@@ -160,8 +161,10 @@ register block is needed. `start_interval(5.secs())` takes a `fugit` duration in
 whatever scale the caller wrote it in — the scale is a const generic on the
 method, so `millis` and `micros` need no conversion at the call site — and
 derives the dividers against this timer's own clock, in `u64` and saturating.
-`start(psc, car)` remains for the raw pair. PWM, input capture and interrupts
-are not implemented.
+`start(psc, car)` remains for the raw pair. `Timer::new(rcu, timer, clocks)` and
+`dp.timer5.constrain(...)` through `TimerExt` are the two entry points, the trait
+being one blanket impl over `Instance`. PWM, input capture and interrupts are not
+implemented.
 
 ### Usage
 
@@ -356,8 +359,8 @@ x8 — надмножество x6; там, где строка помечена
 переносимые `ErrorKind` дают impl'ы `serial::Error` и `embedded_io::Error`.
 `release()` возвращает периферию и оба пина.
 
-**ADC** (`src/adc.rs`) — `Adc::new(rcu, adc, clocks)` выполняет процедуру
-калибровки из мануала (`ADCON`, задержка 14 тактов `CK_ADC` в пересчёте на такты
+**ADC** (`src/adc.rs`) — `Adc::new(rcu, adc, clocks)`, либо `dp.adc.constrain(...)`
+через `AdcExt`, выполняет процедуру калибровки из мануала (`ADCON`, задержка 14 тактов `CK_ADC` в пересчёте на такты
 ядра, `RSTCLB`/`CLB`). `read<PIN: Channel>(&pin, SampTime) -> u16` — одиночное
 блокирующее преобразование по софт-триггеру. `Channel` реализован только для
 `Pin<P, N, Analog>`, поэтому пин обязан реально пройти через `into_analog()`.
@@ -416,7 +419,9 @@ x8 — надмножество x6; там, где строка помечена
 принимает длительность `fugit` в той шкале, в которой её написал вызывающий —
 шкала приезжает const-генериком метода, поэтому `millis` и `micros` не требуют
 конверсии на месте вызова, — и выводит делители от собственного такта таймера, в
-`u64` и с насыщением. `start(psc, car)` остаётся для сырой пары. PWM, input
+`u64` и с насыщением. `start(psc, car)` остаётся для сырой пары. Точек входа две —
+`Timer::new(rcu, timer, clocks)` и `dp.timer5.constrain(...)` через `TimerExt`,
+который сделан одним blanket-impl'ом поверх `Instance`. PWM, input
 capture и прерывания не реализованы.
 
 ### Пример

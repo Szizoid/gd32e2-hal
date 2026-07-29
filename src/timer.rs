@@ -5,7 +5,9 @@
 //! capture, triggering other peripherals — is built on top of that core.
 //!
 //! ```ignore
-//! let timer = Timer::new(&mut rcu, dp.timer5, clocks);
+//! let timer = dp.timer5.constrain(&mut rcu, clocks);
+//! let timer = timer.start_interval(500.millis());
+//! timer.wait();
 //! ```
 
 use crate::pac;
@@ -224,5 +226,19 @@ where
     /// Halts the counter and returns the peripheral, skipping the stopped form.
     pub fn release(self) -> TIMERX {
         self.stop().timer
+    }
+}
+
+/// Entry point on the raw peripheral, mirroring `GpioExt` and `DmaExt`.
+pub trait TimerExt: Sized {
+    /// Consumes the peripheral and returns it clocked, reset and stopped.
+    ///
+    /// Same thing [`Timer::new`] does, reached from the peripheral instead.
+    fn constrain(self, rcu: &mut Rcu, clocks: Clocks) -> Timer<Self>;
+}
+
+impl<TIMERX: Instance> TimerExt for TIMERX {
+    fn constrain(self, rcu: &mut Rcu, clocks: Clocks) -> Timer<Self> {
+        Timer::new(rcu, self, clocks)
     }
 }

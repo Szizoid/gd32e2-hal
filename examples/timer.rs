@@ -4,8 +4,8 @@
 //! blocks on it, so the elapsed count printed on each pass is also a check that
 //! the period is real: the log lines should appear 5 seconds apart.
 //!
-//! Covers: `Timer::new`, `Timer::start_interval` taking a `fugit` duration, and
-//! the blocking `CountDownTimer::wait`.
+//! Covers: `TimerExt::constrain`, `Timer::start_interval` taking a `fugit`
+//! duration, and the blocking `CountDownTimer::wait`.
 
 #![no_std]
 #![no_main]
@@ -17,7 +17,7 @@ use panic_halt as _;
 use gd32e2_hal::pac;
 use gd32e2_hal::rcu::{CFGR, PllFreq, RcuExt};
 use gd32e2_hal::time::{ExtU32, SecsDuration};
-use gd32e2_hal::timer::Timer;
+use gd32e2_hal::timer::TimerExt;
 
 #[entry]
 fn main() -> ! {
@@ -28,7 +28,7 @@ fn main() -> ! {
         .freeze(&mut rcu, &mut dp.fmc);
 
     let period: SecsDuration = 5u32.secs();
-    let timer = Timer::new(&mut rcu, dp.timer5, clocks);
+    let timer = dp.timer5.constrain(&mut rcu, clocks);
     let timer = timer.start_interval(period);
 
     let raw_period = period.as_secs();
