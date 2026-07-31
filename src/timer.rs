@@ -86,8 +86,12 @@ pub trait Instance: Enable + Reset {
     fn clk(clocks: &Clocks) -> Hertz;
     /// Writes the prescaler, which reaches the counter on the next update event.
     fn set_psc(&self, psc: u16);
+    /// Reads back the prescaler dividing the clock into counter ticks.
+    fn read_psc(&self) -> u16;
     /// Writes the auto-reload value the counter rolls over at.
     fn set_car(&self, car: u16);
+    /// Reads back the auto-reload value the counter rolls over at.
+    fn read_car(&self) -> u16;
     /// Reads the counter, which advances on its own while the timer runs.
     fn read_cnt(&self) -> u16;
     /// Raises an update event in software, loading the shadowed dividers.
@@ -110,6 +114,9 @@ macro_rules! timer_instance {
                 fn set_psc(&self, psc: u16) {
                     self.psc().write(|w| w.psc().bits(psc));
                 }
+                fn read_psc(&self) -> u16 {
+                    self.psc().read().psc().bits()
+                }
                 // The `CAR` writer is unsafe on TIMER2 only, where the SVD leaves
                 // the field unconstrained, and safe on the other six. One macro
                 // body serves all of them, so the block is always written and the
@@ -119,6 +126,9 @@ macro_rules! timer_instance {
                 #[allow(unused_unsafe)]
                 fn set_car(&self, car: u16) {
                     self.car().write(|w| unsafe { w.car().bits(car) });
+                }
+                fn read_car(&self) -> u16 {
+                    self.car().read().car().bits()
                 }
                 fn read_cnt(&self) -> u16 {
                     self.cnt().read().cnt().bits()
@@ -239,6 +249,25 @@ impl<TIMERX: Instance> CountDownTimer<TIMERX> {
     /// of the clock feeding the timer.
     pub fn cnt(&self) -> u16 {
         self.timer.read_cnt()
+    }
+    /// Returns the value the counter rolls over at, in timer ticks.
+    ///
+    /// Read back from the hardware rather than remembered, so it holds whether
+    /// the interval came from [`start_interval`](Timer::start_interval) or from
+    /// a raw [`start`](Timer::start). One full interval is `car() + 1` ticks,
+    /// which is why `cnt()` reaching this value is the last tick before a
+    /// rollover, not the rollover itself.
+    pub fn car(&self) -> u16 {
+        self.timer.read_car()
+    }
+    /// Returns the prescaler the counter is running on.
+    ///
+    /// One counter tick lasts `psc() + 1` cycles of the clock feeding the
+    /// timer, which is what turns a [`cnt`](Self::cnt) reading into time.
+    /// Read back from the hardware, so it holds for a raw
+    /// [`start`](Timer::start) as well.
+    pub fn psc(&self) -> u16 {
+        self.timer.read_psc()
     }
 
     /// Blocks until the counter rolls over, then clears the update flag.
