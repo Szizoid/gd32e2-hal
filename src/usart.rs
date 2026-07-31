@@ -362,15 +362,12 @@ where
 
         error
     }
-
     fn rbne(&self) -> bool {
         self.usart.stat().read().rbne().bit_is_set()
     }
-
     fn tbe(&self) -> bool {
         self.usart.stat().read().tbe().bit_is_set()
     }
-
     fn wait_tc(&self) {
         while self.usart.stat().read().tc().bit_is_clear() {}
     }
@@ -388,7 +385,6 @@ where
     pub fn write_ready(&self) -> bool {
         self.tbe()
     }
-
     /// Blocks until everything handed to the peripheral has left the wire.
     ///
     /// Waits for `TC`, not `TBE`: the latter only reports that `TDATA` was

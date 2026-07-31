@@ -10,9 +10,11 @@
 //! timer.wait();
 //! ```
 
+use embedded_hal::delay::DelayNs;
+
 use crate::pac;
 use crate::rcu::{Clocks, Enable, Rcu, Reset};
-use crate::time::{Duration, Hertz};
+use crate::time::{Duration, Hertz, NanosDuration};
 
 /// Counts one prescaler or counter cycle can span, both fields being 16-bit.
 const MAX_COUNT: u32 = 1 << 16;
@@ -51,6 +53,28 @@ fn interval_to_ticks<const NOM: u64, const DENOM: u64>(
     let raw_time = u64::from(interval.as_ticks());
     let raw_freq = u64::from(clock.to_Hz());
     (raw_time.saturating_mul(raw_freq).saturating_mul(NOM) / DENOM).min(u32::MAX.into()) as u32
+}
+
+/// Loads the dividers and sets the counter running.
+///
+/// Both are written before the counter runs: `UPG` loads them out of their
+/// shadow registers, and the update event it raises is consumed here so the
+/// first wait afterwards sees a real rollover.
+fn start_counter<TIMERX: Instance>(timer: &TIMERX, psc: u16, car: u16) {
+    timer.set_psc(psc);
+    timer.set_car(car);
+    timer.gen_update();
+    timer.clear_upif();
+    timer.set_cen(true);
+}
+
+/// Blocks until the counter rolls over, then clears the flag it raised.
+///
+/// The counter is left as it was: hardware never clears `UPIF` itself, so the
+/// clear here is what makes the next wait measure a fresh cycle.
+fn wait_update<TIMERX: Instance>(timer: &TIMERX) {
+    while !timer.upif() {}
+    timer.clear_upif();
 }
 
 /// A timer peripheral, tying it to the bus that clocks it.
@@ -131,10 +155,7 @@ pub struct Timer<TIMERX> {
     clk: Hertz,
 }
 
-impl<TIMERX> Timer<TIMERX>
-where
-    TIMERX: Instance,
-{
+impl<TIMERX: Instance> Timer<TIMERX> {
     /// Clocks the peripheral, resets it, and records the clock feeding it.
     pub fn new(rcu: &mut Rcu, timer: TIMERX, clocks: Clocks) -> Timer<TIMERX> {
         TIMERX::enable(rcu);
@@ -144,19 +165,21 @@ where
             clk: TIMERX::clk(&clocks),
         }
     }
+    /// Returns the peripheral.
+    ///
+    /// The clock is left enabled and no reset is performed — a later `new()`
+    /// does both anyway.
+    pub fn release(self) -> TIMERX {
+        self.timer
+    }
 
     /// Starts the counter, which then rolls over every `car + 1` ticks of
     /// `clk / (psc + 1)`.
     ///
-    /// Both dividers are written before the counter runs: `UPG` loads them out
-    /// of their shadow registers, and the update event it raises is consumed
-    /// here so the first wait on the running timer sees a real rollover.
+    /// The dividers reach the counter before it runs, so the first
+    /// [`wait`](CountDownTimer::wait) already measures the full interval.
     pub fn start(self, psc: u16, car: u16) -> CountDownTimer<TIMERX> {
-        self.timer.set_psc(psc);
-        self.timer.set_car(car);
-        self.timer.gen_update();
-        self.timer.clear_upif();
-        self.timer.set_cen(true);
+        start_counter(&self.timer, psc, car);
         CountDownTimer {
             timer: self.timer,
             clk: self.clk,
@@ -181,12 +204,15 @@ where
         self.start(psc, car)
     }
 
-    /// Returns the peripheral.
+    /// Hands the timer over to blocking delays.
     ///
-    /// The clock is left enabled and no reset is performed — a later `new()`
-    /// does both anyway.
-    pub fn release(self) -> TIMERX {
-        self.timer
+    /// The counter carries no interval of its own afterwards: every
+    /// [`delay`](Delay::delay) sets up its own and tears it down again.
+    pub fn into_delay(self) -> Delay<TIMERX> {
+        Delay {
+            timer: self.timer,
+            clk: self.clk,
+        }
     }
 }
 
@@ -199,18 +225,15 @@ pub struct CountDownTimer<TIMERX> {
     clk: Hertz,
 }
 
-impl<TIMERX> CountDownTimer<TIMERX>
-where
-    TIMERX: Instance,
-{
+impl<TIMERX: Instance> CountDownTimer<TIMERX> {
     /// Blocks until the counter rolls over, then clears the update flag.
     ///
     /// Leaves the timer running, so calling this in a loop yields one full
     /// interval per call.
     pub fn wait(&self) {
-        while !self.timer.upif() {}
-        self.timer.clear_upif();
+        wait_update(&self.timer);
     }
+
     /// Halts the counter and hands the timer back in its stopped form.
     ///
     /// The counter keeps its current value; a later [`start`](Timer::start)
@@ -222,10 +245,63 @@ where
             clk: self.clk,
         }
     }
-
     /// Halts the counter and returns the peripheral, skipping the stopped form.
     pub fn release(self) -> TIMERX {
         self.stop().timer
+    }
+}
+
+/// A timer given over to blocking delays.
+///
+/// Unlike [`CountDownTimer`] this type promises no interval at all: the value
+/// only says which timer the delays run on. Each call configures the dividers,
+/// waits, and stops the counter again, so nothing survives between calls and a
+/// delay can be asked for any length at any time.
+pub struct Delay<TIMERX> {
+    timer: TIMERX,
+    clk: Hertz,
+}
+
+impl<TIMERX: Instance> Delay<TIMERX> {
+    /// Blocks for `interval`, in whatever scale the caller wrote it in.
+    ///
+    /// Rounding and the saturation ceiling are the same as in
+    /// [`Timer::start_interval`], the dividers being derived the same way.
+    pub fn delay<const NOM: u64, const DENOM: u64>(&mut self, interval: Duration<u32, NOM, DENOM>) {
+        let (psc, car) = dividers(interval_to_ticks(interval, self.clk));
+        start_counter(&self.timer, psc, car);
+        wait_update(&self.timer);
+        self.timer.set_cen(false);
+    }
+
+    /// Takes the timer back out of delay duty, stopped and ready to be started.
+    pub fn into_timer(self) -> Timer<TIMERX> {
+        Timer {
+            timer: self.timer,
+            clk: self.clk,
+        }
+    }
+
+    /// Returns the peripheral.
+    ///
+    /// The clock is left enabled and no reset is performed — a later `new()`
+    /// does both anyway.
+    pub fn release(self) -> TIMERX {
+        self.timer
+    }
+}
+
+/// Blocking delays for portable drivers, delegating to [`Delay::delay`].
+///
+/// The resolution is one timer tick — around 20 ns at 48 MHz — so a request
+/// finer than that is served as a single tick rather than not at all. The
+/// trait's `delay_us` and `delay_ms` are its own defaults, which split long
+/// waits into chunks of at most `u32::MAX` nanoseconds; a chunk that size is
+/// well inside what the dividers can span, so the saturation ceiling of
+/// [`Timer::start_interval`] is never reached through this trait.
+impl<TIMERX: Instance> DelayNs for Delay<TIMERX> {
+    fn delay_ns(&mut self, ns: u32) {
+        self.delay(NanosDuration::from_nanos(ns));
     }
 }
 
