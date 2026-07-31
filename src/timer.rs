@@ -88,6 +88,8 @@ pub trait Instance: Enable + Reset {
     fn set_psc(&self, psc: u16);
     /// Writes the auto-reload value the counter rolls over at.
     fn set_car(&self, car: u16);
+    /// Reads the counter, which advances on its own while the timer runs.
+    fn read_cnt(&self) -> u16;
     /// Raises an update event in software, loading the shadowed dividers.
     fn gen_update(&self);
     /// Runs or halts the counter.
@@ -117,6 +119,9 @@ macro_rules! timer_instance {
                 #[allow(unused_unsafe)]
                 fn set_car(&self, car: u16) {
                     self.car().write(|w| unsafe { w.car().bits(car) });
+                }
+                fn read_cnt(&self) -> u16 {
+                    self.cnt().read().cnt().bits()
                 }
                 fn gen_update(&self) {
                     self.swevg().write(|w| w.upg().set_bit());
@@ -226,6 +231,16 @@ pub struct CountDownTimer<TIMERX> {
 }
 
 impl<TIMERX: Instance> CountDownTimer<TIMERX> {
+    /// Returns the current counter value, in timer ticks.
+    ///
+    /// The counter runs from zero up to the reload value and starts over, so
+    /// the reading only tells where inside the current interval the timer is,
+    /// not how many intervals have passed. One tick lasts `(psc + 1)` cycles
+    /// of the clock feeding the timer.
+    pub fn cnt(&self) -> u16 {
+        self.timer.read_cnt()
+    }
+
     /// Blocks until the counter rolls over, then clears the update flag.
     ///
     /// Leaves the timer running, so calling this in a loop yields one full

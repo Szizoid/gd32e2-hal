@@ -157,7 +157,8 @@ doesn't exist on a timer that was never started; `stop()` takes the peripheral
 back the other way. `start` writes both dividers, loads them out of their shadow
 registers with `UPG` and consumes the update event that raises, so the first
 `wait()` measures a full interval. `wait()` blocks for one rollover and leaves
-the timer running. Register access is confined to `Instance`, so no `Deref` to a
+the timer running; `cnt()` reads the counter in ticks, one tick being `psc + 1`
+cycles of the timer's clock. Register access is confined to `Instance`, so no `Deref` to a
 register block is needed. `start_interval(5.secs())` takes a `fugit` duration in
 whatever scale the caller wrote it in — the scale is a const generic on the
 method, so `millis` and `micros` need no conversion at the call site — and
@@ -419,7 +420,8 @@ x8 — надмножество x6; там, где строка помечена
 `stop()` возвращает периферию обратно. `start` пишет оба делителя, загружает их
 из теневых регистров через `UPG` и гасит порождённое им событие обновления, так
 что первый `wait()` отсчитывает полный интервал. `wait()` блокирует до одного
-переполнения и оставляет таймер бежать. Доступ к регистрам заперт в `Instance`,
+переполнения и оставляет таймер бежать; `cnt()` читает счётчик в тиках, один тик
+— `psc + 1` тактов такта таймера. Доступ к регистрам заперт в `Instance`,
 поэтому `Deref` до регистрового блока не нужен. `start_interval(5.secs())`
 принимает длительность `fugit` в той шкале, в которой её написал вызывающий —
 шкала приезжает const-генериком метода, поэтому `millis` и `micros` не требуют
