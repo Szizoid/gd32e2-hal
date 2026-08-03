@@ -1,12 +1,11 @@
+/.zed
 /target
+/docs/*.pdf
 /others-hal
 **/*.bk
 **/*.rs.bk
 **/*.bak
 **/*.rs.bak
-*.bin
-*.hex
-CLAUDE.md
+memory.x
 
-# Reference manuals — large binaries, kept local only (see docs/README.md)
-/docs/*.pdf
+CLAUDE.md

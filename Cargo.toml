@@ -1,9 +1,19 @@
 [package]
 name = "gd32e2-hal"
-version = "0.10.0"
+version = "0.10.1"
 edition = "2024"
 authors = ["Szizoid"]
 description = "HAL for the GD32E23x series (Cortex-M23), currently the GD32E230"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Szizoid/gd32e2-hal"
+keywords = ["gd32", "gd32e230", "cortex-m", "hal", "embedded-hal"]
+categories = ["embedded", "hardware-support", "no-std", "no-std::no-alloc"]
+exclude = [".cargo", ".gitignore", "docs", "memory.x.example", "rust-toolchain.toml"]
+
+[package.metadata.docs.rs]
+default-target = "thumbv8m.base-none-eabi"
+targets = []
+features = ["defmt"]
 
 # Chip variant within the GD32E230x series. These gate the alternate-function
 # map: the same pin+AF maps to different peripherals depending on the variant

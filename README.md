@@ -229,6 +229,13 @@ if let Ok(byte) = usart0.read_byte() {
 
 ### Building
 
+The examples link against a `memory.x` that is git-ignored, since its lengths
+depend on the part. Copy the template once, before the first build:
+
+```sh
+cp memory.x.example memory.x
+```
+
 ```sh
 cargo build --release          # library only
 cargo be usart-echo            # compile-check one example, needs no probe
@@ -259,8 +266,10 @@ The default feature targets the `GD32E230K8U6` (x8); for another variant:
 cargo build --release --no-default-features --features gd32e230x4
 ```
 
-> On Windows without Visual Studio the host uses the GNU toolchain (see
-> `rust-toolchain.toml`), so the MSVC linker isn't required.
+> `rust-toolchain.toml` pins the channel and installs the target. On Windows
+> without Visual Studio the host toolchain has to be GNU, otherwise build
+> scripts fail for want of the MSVC linker:
+> `rustup default stable-x86_64-pc-windows-gnu`.
 
 ### Roadmap
 
@@ -279,8 +288,17 @@ cargo build --release --no-default-features --features gd32e230x4
 - [ ] Trait crates follow their peripherals: `i2c::I2c` with I²C,
       `embedded-dma` for the DMA buffers.
 - [ ] Extract the HAL into its own standalone crate/repo (not just `examples/` —
-      splitting the library out entirely). No rush to publish on crates.io; local
-      + GitHub is enough for now.
+      splitting the library out entirely).
+
+### License
+
+Dual-licensed, at your option:
+
+- Apache License 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT ([LICENSE-MIT](LICENSE-MIT))
+
+Any contribution submitted for inclusion in this work is licensed the same way,
+without additional terms, unless stated otherwise (Apache-2.0, section 5).
 
 ---
 
@@ -510,6 +528,13 @@ if let Ok(byte) = usart0.read_byte() {
 
 ### Сборка
 
+Примеры линкуются с `memory.x`; он в `.gitignore`, потому что размеры зависят от
+варианта чипа. Один раз перед первой сборкой скопировать шаблон:
+
+```sh
+cp memory.x.example memory.x
+```
+
 ```sh
 cargo build --release          # только библиотека
 cargo be usart-echo            # проверить сборку одного примера, зонд не нужен
@@ -540,8 +565,9 @@ probe-rs read  --chip GD32E230K8 b32 0x48000014 1   # например, GPIOA_OC
 cargo build --release --no-default-features --features gd32e230x4
 ```
 
-> На Windows без Visual Studio host переключён на GNU-toolchain (см.
-> `rust-toolchain.toml`), чтобы не требовался MSVC-линкер.
+> `rust-toolchain.toml` фиксирует канал и ставит нужный таргет. На Windows без
+> Visual Studio host-toolchain должен быть GNU, иначе build-скрипты падают без
+> MSVC-линкера: `rustup default stable-x86_64-pc-windows-gnu`.
 
 ### Roadmap
 
@@ -561,5 +587,14 @@ cargo build --release --no-default-features --features gd32e230x4
 - [ ] Трейт-крейты идут за своей периферией: `i2c::I2c` с I²C, `embedded-dma`
       для буферов DMA.
 - [ ] Вынос HAL в полностью отдельный крейт/репозиторий (не просто `examples/` —
-      разделение самой библиотеки). Публиковать на crates.io пока не спешим;
-      достаточно локально и на GitHub.
+      разделение самой библиотеки).
+
+### Лицензия
+
+Двойное лицензирование, на выбор пользователя:
+
+- Apache License 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT ([LICENSE-MIT](LICENSE-MIT))
+
+Вклад, присланный в проект, лицензируется так же, без дополнительных условий,
+если явно не оговорено иное (Apache-2.0, раздел 5).
