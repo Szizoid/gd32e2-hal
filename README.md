@@ -11,10 +11,10 @@ Rust from scratch on top of the [`gd32e2`](https://crates.io/crates/gd32e2) PAC.
 
 > ⚠️ **Work in progress.** Written by hand, incrementally; the API is unstable.
 > The package is a library (`src/lib.rs` → `adc`, `dma`, `gpio`, `rcu`, `spi`,
-> `time`, `timer`, `usart`) plus on-hardware test binaries in `examples/`; all 12
+> `time`, `timer`, `usart`) plus on-hardware test binaries in `examples/`; all 13
 > examples have been flashed and verified on the board — RCU, GPIO, USART (8/9-bit
 > and parity), SPI0/SPI1, ADC, a one-shot DMA transfer, TIMER, blocking delays,
-> RTT.
+> PWM, RTT.
 
 ### Principles
 
@@ -171,8 +171,25 @@ type, `Delay`, which promises no interval of its own: `delay(interval)` takes an
 `fugit` scale, sets up the dividers, blocks and stops the counter again, so a
 period set elsewhere cannot be overwritten by a delay. `embedded-hal`'s `DelayNs`
 is implemented on it, with `delay_us` / `delay_ms` as the trait's own defaults;
-resolution is one timer tick. PWM, input capture and interrupts are not
-implemented.
+resolution is one timer tick. `elapsed()` converts the counter into a duration of
+any `fugit` scale, in `u64` and saturating.
+
+`into_pwm(psc, car)` / `into_pwm_interval(interval)` move the timer to a fourth
+type, `Pwm`, which owns the period and hands out channels. `channel(pin)` takes a
+pin and returns a `PwmChannel`: the channel number comes from the pin through
+`PwmPin<TIMERX, C>`, implemented only for the pin and alternate function the
+silicon routes there, and the channel operations live in `PwmOps<C>`, implemented
+only for channels a given timer has — `TIMER5` has none, `TIMER13` has one. The
+pin moves into the channel and comes back from `release()`. A channel carries its
+own handle to the peripheral, taken through the `unsafe` `Instance::steal()`, and
+touches only its own compare register; several pins reaching one channel yield
+several channels writing it. `enable()` / `disable()`, `set_duty(cv)` and
+`max_duty()` are the inherent layer, `embedded-hal`'s `SetDutyCycle` sits on top.
+`set_period` / `set_period_interval` change the frequency for every channel at
+once; duties keep their tick value, not their share. `enable_output()` exists only
+on the timers with a `CCHP` register (`TIMER0`, `TIMER14`, `TIMER15`, `TIMER16`),
+whose outputs stay silent until `POEN` is raised. Complementary outputs, break
+inputs, dead time, input capture and interrupts are not implemented.
 
 ### Usage
 
@@ -248,7 +265,7 @@ cargo build --release --no-default-features --features gd32e230x4
 ### Roadmap
 
 - [ ] DMA: circular mode and `M2M`.
-- [ ] Timers: PWM, input capture.
+- [ ] Timers: input capture; complementary outputs, break and dead time.
 - [ ] I²C.
 - [ ] Interrupt-driven operation (NVIC infrastructure — also affects USART/SPI).
 - [ ] SPI: half-duplex / single-wire modes (`BDEN`/`BDOEN`/`RO`).
@@ -260,7 +277,7 @@ cargo build --release --no-default-features --features gd32e230x4
       which pins are bonded out at all (`PC13`–`PC15`, `PF6`/`PF7` exist on
       QFN48 but not on this QFN32).
 - [ ] Trait crates follow their peripherals: `i2c::I2c` with I²C,
-      `SetDutyCycle` with PWM, `embedded-dma` for the DMA buffers.
+      `embedded-dma` for the DMA buffers.
 - [ ] Extract the HAL into its own standalone crate/repo (not just `examples/` —
       splitting the library out entirely). No rush to publish on crates.io; local
       + GitHub is enough for now.
@@ -274,9 +291,9 @@ HAL для микроконтроллера **GD32E230K8U6** (Cortex-M23), на�
 
 > ⚠️ **Работа в процессе.** Пишется вручную и постепенно; API нестабилен. Пакет —
 > библиотека (`src/lib.rs` → `adc`, `dma`, `gpio`, `rcu`, `spi`, `time`, `timer`,
-> `usart`) плюс тестовые бинарники на железо в `examples/`; все 12 примеров прошиты
+> `usart`) плюс тестовые бинарники на железо в `examples/`; все 13 примеров прошиты
 > и проверены на плате — RCU, GPIO, USART (8/9-бит и чётность), SPI0/SPI1, ADC,
-> разовая передача по DMA, TIMER, блокирующие задержки, RTT.
+> разовая передача по DMA, TIMER, блокирующие задержки, PWM, RTT.
 
 ### Принципы
 
@@ -435,8 +452,25 @@ x8 — надмножество x6; там, где строка помечена
 `delay(interval)` принимает любую шкалу `fugit`, настраивает делители, блокирует
 и снова останавливает счётчик, поэтому задержкой нельзя затереть период,
 заданный где-то ещё. На нём реализован `DelayNs` из `embedded-hal`, `delay_us` /
-`delay_ms` приходят дефолтами трейта; разрешение — один тик таймера. PWM, input
-capture и прерывания не реализованы.
+`delay_ms` приходят дефолтами трейта; разрешение — один тик таймера. `elapsed()`
+переводит счётчик в длительность любой шкалы `fugit`, в `u64` и с насыщением.
+
+`into_pwm(psc, car)` / `into_pwm_interval(interval)` переводят таймер в четвёртый
+тип, `Pwm`, который владеет периодом и раздаёт каналы. `channel(pin)` принимает
+ногу и возвращает `PwmChannel`: номер канала приезжает из ноги через
+`PwmPin<TIMERX, C>`, реализованный только для той ноги и того номера AF, куда
+канал ведёт в железе, а операции над каналом живут в `PwmOps<C>`, реализованном
+только для каналов, которые у таймера есть — у `TIMER5` их нет, у `TIMER13` один.
+Нога уезжает в канал и возвращается из `release()`. Канал держит собственный
+хэндл периферии, взятый через `unsafe` `Instance::steal()`, и трогает только свой
+регистр сравнения; несколько ног, ведущих на один канал, дают несколько каналов,
+пишущих в него. `enable()` / `disable()`, `set_duty(cv)` и `max_duty()` — это
+инхерентный слой, сверху лежит `SetDutyCycle` из `embedded-hal`. `set_period` /
+`set_period_interval` меняют частоту сразу всем каналам; скважность сохраняется в
+тиках, а не в долях. `enable_output()` существует только у таймеров с регистром
+`CCHP` (`TIMER0`, `TIMER14`, `TIMER15`, `TIMER16`), выходы которых молчат, пока не
+поднят `POEN`. Комплементарные выходы, break, dead time, input capture и
+прерывания не реализованы.
 
 ### Пример
 
@@ -512,7 +546,7 @@ cargo build --release --no-default-features --features gd32e230x4
 ### Roadmap
 
 - [ ] DMA: циклический режим и `M2M`.
-- [ ] Таймеры: PWM, input capture.
+- [ ] Таймеры: input capture; комплементарные выходы, break, dead time.
 - [ ] I²C.
 - [ ] Работа на прерываниях (инфраструктура NVIC — затронет и USART/SPI).
 - [ ] SPI: half-duplex / однопроводные режимы (`BDEN`/`BDOEN`/`RO`).
@@ -524,8 +558,8 @@ cargo build --release --no-default-features --features gd32e230x4
 - [ ] Варианты корпуса / числа ног — вторая ось, независимая от x4/x6/x8: какие
       ноги вообще разварены (`PC13`–`PC15`, `PF6`/`PF7` есть на QFN48, но не на
       нашем QFN32).
-- [ ] Трейт-крейты идут за своей периферией: `i2c::I2c` с I²C, `SetDutyCycle`
-      с PWM, `embedded-dma` для буферов DMA.
+- [ ] Трейт-крейты идут за своей периферией: `i2c::I2c` с I²C, `embedded-dma`
+      для буферов DMA.
 - [ ] Вынос HAL в полностью отдельный крейт/репозиторий (не просто `examples/` —
       разделение самой библиотеки). Публиковать на crates.io пока не спешим;
       достаточно локально и на GitHub.

@@ -10,8 +10,12 @@
 //! timer.wait();
 //! ```
 
-use embedded_hal::delay::DelayNs;
+use core::convert::Infallible;
 
+use embedded_hal::delay::DelayNs;
+use embedded_hal::pwm::{ErrorType, SetDutyCycle};
+
+use crate::gpio::{Alternate, Pin};
 use crate::pac;
 use crate::rcu::{Clocks, Enable, Rcu, Reset};
 use crate::time::{Duration, Hertz, NanosDuration};
@@ -102,6 +106,16 @@ pub trait Instance: Enable + Reset {
     fn upif(&self) -> bool;
     /// Clears the update flag.
     fn clear_upif(&self);
+    /// Produces a second handle to the same peripheral.
+    ///
+    /// # Safety
+    ///
+    /// Ownership of a peripheral is what the whole HAL builds its typestate on:
+    /// one handle means one configuration in flight. A second handle sidesteps
+    /// that, and keeping the two from contradicting each other is on the caller
+    /// — either by handing them disjoint registers, or by never reconfiguring
+    /// the peripheral through both.
+    unsafe fn steal(&self) -> Self;
 }
 
 macro_rules! timer_instance {
@@ -144,6 +158,9 @@ macro_rules! timer_instance {
                 }
                 fn clear_upif(&self) {
                     self.intf().write(|w| w.upif().clear());
+                }
+                unsafe fn steal(&self) -> Self{
+                    unsafe { Self::steal() }
                 }
             }
         )+
@@ -200,7 +217,6 @@ impl<TIMERX: Instance> Timer<TIMERX> {
             clk: self.clk,
         }
     }
-
     /// Starts the counter, which then rolls over once per `interval`.
     ///
     /// The interval is taken in whatever scale the caller wrote it in — `5.secs()`,
@@ -218,7 +234,6 @@ impl<TIMERX: Instance> Timer<TIMERX> {
         let (psc, car) = dividers(interval_to_ticks(interval, self.clk));
         self.start(psc, car)
     }
-
     /// Hands the timer over to blocking delays.
     ///
     /// The counter carries no interval of its own afterwards: every
@@ -228,6 +243,31 @@ impl<TIMERX: Instance> Timer<TIMERX> {
             timer: self.timer,
             clk: self.clk,
         }
+    }
+    /// Hands the timer over to PWM and starts it on the given period.
+    ///
+    /// The period is the counter cycle every channel of this timer shares, and
+    /// `car + 1` is also the duty resolution the channels get: a larger reload
+    /// buys finer steps at a lower frequency.
+    pub fn into_pwm(self, psc: u16, car: u16) -> Pwm<TIMERX> {
+        start_counter(&self.timer, psc, car);
+        Pwm {
+            timer: self.timer,
+            clk: self.clk,
+        }
+    }
+    /// Hands the timer over to PWM, taking the period as a duration.
+    ///
+    /// Splits the period between the dividers the same way
+    /// [`start_interval`](Self::start_interval) does, keeping the reload as
+    /// large as it can — which here is what leaves the duty as many steps as
+    /// possible.
+    pub fn into_pwm_interval<const NOM: u64, const DENOM: u64>(
+        self,
+        interval: Duration<u32, NOM, DENOM>,
+    ) -> Pwm<TIMERX> {
+        let (psc, car) = dividers(interval_to_ticks(interval, self.clk));
+        self.into_pwm(psc, car)
     }
 }
 
@@ -268,6 +308,29 @@ impl<TIMERX: Instance> CountDownTimer<TIMERX> {
     /// [`start`](Timer::start) as well.
     pub fn psc(&self) -> u16 {
         self.timer.read_psc()
+    }
+    /// Returns how far into the current interval the counter is, as a duration.
+    ///
+    /// Reads [`cnt`](Self::cnt) and turns it into time, so the result restarts
+    /// from zero at every rollover and never exceeds one interval. Intervals
+    /// themselves are not counted: what has passed since the timer started is
+    /// the caller's to track.
+    ///
+    /// The scale comes from the binding, the same way it is given to
+    /// [`start_interval`](Timer::start_interval): `let t: MillisDuration =
+    /// timer.elapsed();`. Pick it to match the interval — a scale coarser than
+    /// one tick floors to zero, and a scale so fine that the full interval no
+    /// longer fits `u32` saturates instead of wrapping.
+    ///
+    /// Resolution is one timer tick, `psc() + 1` cycles of the timer clock.
+    pub fn elapsed<const NOM: u64, const DENOM: u64>(&self) -> Duration<u32, NOM, DENOM> {
+        let cnt = u64::from(self.cnt());
+        let psc = u64::from(self.psc());
+        let clk = u64::from(self.clk.to_Hz());
+        Duration::<u32, NOM, DENOM>::from_ticks(
+            (cnt.saturating_mul(psc + 1).saturating_mul(DENOM) / (clk.saturating_mul(NOM)))
+                .min(u32::MAX.into()) as u32,
+        )
     }
 
     /// Blocks until the counter rolls over, then clears the update flag.
@@ -335,6 +398,94 @@ impl<TIMERX: Instance> Delay<TIMERX> {
     }
 }
 
+/// A timer running as the period behind one or more PWM channels.
+///
+/// Owns the counter the channels compare against, which is what keeps the
+/// period in one place: channels carry their own duty, and the frequency they
+/// all run at is set here, once, on the way in.
+pub struct Pwm<TIMERX> {
+    timer: TIMERX,
+    clk: Hertz,
+}
+
+impl<TIMERX: Instance> Pwm<TIMERX> {
+    /// Configures one channel of this timer and hands it out on the given pin.
+    ///
+    /// Which channel it is follows from the pin: the silicon routes each pin to
+    /// exactly one channel of one timer, so a pin that reaches this timer at all
+    /// leaves no choice to make. The channel comes out configured but not
+    /// enabled, and with no duty set yet.
+    ///
+    /// The pin moves in and stays there for as long as the channel lives, which
+    /// is what keeps it from being reconfigured out from under a running output.
+    ///
+    /// Several pins can reach the same channel — `TIMER2` channel 0 answers on
+    /// both `PA6` and `PB4` — and handing over each of them yields two channels
+    /// writing one compare register. Both pins then carry the same signal, which
+    /// is occasionally the point; the duty of one, however, is the duty of the
+    /// other, whichever wrote last.
+    pub fn channel<PIN, const C: u8>(&self, pin: PIN) -> PwmChannel<TIMERX, PIN, C>
+    where
+        PIN: PwmPin<TIMERX, C>,
+        TIMERX: PwmOps<C>,
+    {
+        self.timer.apply_pwm_mode();
+        PwmChannel {
+            // Each channel reaches its own compare register and its own bits of
+            // the shared ones, so the handles this hands out never configure the
+            // same thing twice — the obligation `steal` places on the caller.
+            timer: unsafe { self.timer.steal() },
+            pin,
+        }
+    }
+
+    /// Changes the period without disturbing the running counter.
+    ///
+    /// Channels already handed out keep the duty they were given **in ticks**,
+    /// so a new reload silently moves what fraction of the period that is: half
+    /// of a thousand ticks is all of five hundred. Set the duties again after
+    /// changing the period, or read the new [`max_duty`](PwmChannel::max_duty)
+    /// and scale them.
+    ///
+    /// The prescaler reaches the counter at the next update event, so the
+    /// cycle in flight when this is called still runs on the old one.
+    pub fn set_period(&self, psc: u16, car: u16) {
+        self.timer.set_psc(psc);
+        self.timer.set_car(car);
+    }
+    /// Changes the period, taking it as a duration.
+    ///
+    /// Splits it between the dividers exactly as
+    /// [`into_pwm_interval`](Timer::into_pwm_interval) does, keeping the reload
+    /// as large as it fits so the duty keeps as many steps as possible.
+    pub fn set_period_interval<const NOM: u64, const DENOM: u64>(
+        &self,
+        interval: Duration<u32, NOM, DENOM>,
+    ) {
+        let (psc, car) = dividers(interval_to_ticks(interval, self.clk));
+        self.set_period(psc, car);
+    }
+}
+
+impl<TIMERX> Pwm<TIMERX>
+where
+    TIMERX: PrimaryOutput,
+{
+    /// Lets the channels reach their pins.
+    ///
+    /// Timers carrying a `CCHP` register keep their outputs behind this one
+    /// switch, and it starts off: a channel of such a timer stays silent no
+    /// matter how it is configured until this is called. The timers without the
+    /// register have no such gate and need nothing.
+    pub fn enable_output(&self) {
+        self.timer.set_poen(true);
+    }
+    /// Cuts every channel off from its pin at once, keeping them configured.
+    pub fn disable_output(&self) {
+        self.timer.set_poen(false);
+    }
+}
+
 /// Blocking delays for portable drivers, delegating to [`Delay::delay`].
 ///
 /// The resolution is one timer tick — around 20 ns at 48 MHz — so a request
@@ -360,5 +511,219 @@ pub trait TimerExt: Sized {
 impl<TIMERX: Instance> TimerExt for TIMERX {
     fn constrain(self, rcu: &mut Rcu, clocks: Clocks) -> Timer<Self> {
         Timer::new(rcu, self, clocks)
+    }
+}
+
+/// Register operations on compare channel `C` of a timer.
+///
+/// Implemented once per timer and channel that exist together, so a channel the
+/// hardware does not have cannot be named: `TIMER13` carries channel 0 alone,
+/// `TIMER5` has no channels at all. Channel registers differ from one channel to
+/// the next, which is why the number lives in the type rather than in an
+/// argument.
+pub trait PwmOps<const C: u8>: Instance {
+    /// Configures the channel as a PWM output and readies it for a duty value.
+    ///
+    /// Covers the whole group of one-time fields at once — direction, compare
+    /// mode and polarity — since a channel set to PWM mode while still pointed
+    /// at its input drives nothing, and the two are only correct together.
+    fn apply_pwm_mode(&self);
+    /// Writes the compare value the channel switches its output at.
+    ///
+    /// The output stays active while the counter is below this value, so one
+    /// full period is `car() + 1` and duty is the ratio between the two.
+    fn set_chxcv(&self, cv: u16);
+    /// Enables or disables the channel output, leaving its setup in place.
+    fn set_chxen(&self, on: bool);
+}
+
+macro_rules! pwm {
+    {$($Timer:ty => [
+        $(
+            ($Ch:expr, ($chctl_reg:ident, $chms:ident, $chcomctl:ident, $chcomsen:ident), ($chcv:ident, $chval:ident), $chen:ident, $chp:ident)$(,)?
+        )+]$(,)?)+
+    } => {
+        $($(impl PwmOps<$Ch> for $Timer {
+            fn apply_pwm_mode(&self) {
+                self.chctl2().modify(|_, w| w.$chp().not_inverted());
+                self.$chctl_reg().modify(|_, w| {
+                    w.$chms()
+                        .output()
+                        .$chcomctl()
+                        .pwm_mode0()
+                        .$chcomsen()
+                        .enabled()
+                });
+            }
+            #[allow(unused_unsafe)]
+            fn set_chxcv(&self, cv: u16) {
+                self.$chcv().write(|w| unsafe { w.$chval().bits(cv) });
+            }
+            fn set_chxen(&self, on: bool) {
+                self.chctl2().modify(|_, w| match on {
+                    true => w.$chen().enabled(),
+                    false => w.$chen().disabled(),
+                })
+            }
+        })+)+
+    };
+}
+
+pwm! {
+    pac::Timer0 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0en, ch0p),
+        (1, (chctl0_output, ch1ms, ch1comctl, ch1comsen), (ch1cv, ch1val), ch1en, ch1p),
+        (2, (chctl1_output, ch2ms, ch2comctl, ch2comsen), (ch2cv, ch2val), ch2en, ch2p),
+        (3, (chctl1_output, ch3ms, ch3comctl, ch3comsen), (ch3cv, ch3val), ch3en, ch3p)],
+    pac::Timer2 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0en, ch0p),
+        (1, (chctl0_output, ch1ms, ch1comctl, ch1comsen), (ch1cv, ch1val), ch1en, ch1p),
+        (2, (chctl1_output, ch2ms, ch2comctl, ch2comsen), (ch2cv, ch2val), ch2en, ch2p),
+        (3, (chctl1_output, ch3ms, ch3comctl, ch3comsen), (ch3cv, ch3val), ch3en, ch3p)],
+    pac::Timer13 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0en, ch0p)],
+    pac::Timer14 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0en, ch0p),
+        (1, (chctl0_output, ch1ms, ch1comctl, ch1comsen), (ch1cv, ch1val), ch1en, ch1p)],
+    pac::Timer15 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0en, ch0p)],
+    pac::Timer16 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0en, ch0p)]
+}
+
+/// The output switch shared by every channel of a timer that has one.
+///
+/// Only the timers carrying a `CCHP` register implement this: `TIMER0`,
+/// `TIMER14`, `TIMER15` and `TIMER16`. It sits above the per-channel enables —
+/// with it off, the channels stay configured and the counter keeps running
+/// while the pins show nothing.
+pub trait PrimaryOutput: Instance {
+    /// Enables or disables the outputs of all channels at once.
+    fn set_poen(&self, on: bool);
+}
+
+macro_rules! poen {
+    ($($Timer:ty$(,)?)+) => {
+        $(impl PrimaryOutput for $Timer {
+            fn set_poen(&self, on: bool) {
+                self.cchp().modify(|_, w| match on {
+                    true => w.poen().enabled(),
+                    false => w.poen().disabled(),
+                });
+            }
+        })+
+    };
+}
+
+poen!(pac::Timer0, pac::Timer14, pac::Timer15, pac::Timer16);
+
+/// Marks a pin the silicon routes to channel `C` of `TIMERX`, in the right
+/// alternate function.
+pub trait PwmPin<TIMERX, const C: u8> {}
+
+macro_rules! pwm_pins {
+    ( $( $TIMERX:ty: $( $C:literal: [ $($p:literal $n:literal : $af:literal),* $(,)? ] )* ),* $(,)? ) => {
+        $($($( impl PwmPin<$TIMERX, $C> for Pin<$p, $n, Alternate<$af>> {} )*)*)*
+    };
+}
+
+// Complementary outputs (`CHx_ON`), break inputs and `ETI` share these same
+// pins at other alternate functions; only the plain compare outputs are listed.
+pwm_pins! {
+    pac::Timer0:
+        0: [ 'A' 8:2 ]
+        1: [ 'A' 9:2 ]
+        2: [ 'A' 10:2 ]
+        3: [ 'A' 11:2 ],
+    pac::Timer2:
+        0: [ 'A' 6:1, 'B' 4:1 ]
+        1: [ 'A' 7:1, 'B' 5:1 ]
+        2: [ 'B' 0:1 ]
+        3: [ 'B' 1:1 ],
+    pac::Timer13:
+        0: [ 'A' 4:4, 'A' 7:4, 'B' 1:2 ],
+    pac::Timer15:
+        0: [ 'A' 6:5, 'B' 8:2 ],
+    pac::Timer16:
+        0: [ 'A' 7:5, 'B' 9:2 ],
+}
+
+#[cfg(feature = "gd32e230x8")]
+pwm_pins! {
+    pac::Timer14:
+        0: [ 'A' 2:0, 'B' 14:1 ]
+        1: [ 'A' 3:0, 'B' 15:1 ],
+}
+
+/// One PWM output of a timer, configured and ready to take a duty value.
+///
+/// Channels of the same timer are independent in everything but the period:
+/// `PSC` and `CAR` belong to the counter they share, so changing the frequency
+/// changes it for all of them at once. Duty is the channel's own.
+///
+/// Each channel carries its own handle to the peripheral, which is what lets
+/// four of them exist while the timer is a single value. Writing a duty touches
+/// only that channel's compare register, but the enables of all channels live in
+/// one register: enabling a channel while another is being enabled elsewhere —
+/// from an interrupt, say — can lose one of the two writes.
+pub struct PwmChannel<TIMERX, PIN, const C: u8> {
+    timer: TIMERX,
+    pin: PIN,
+}
+
+impl<TIMERX: PwmOps<C>, PIN: PwmPin<TIMERX, C>, const C: u8> PwmChannel<TIMERX, PIN, C> {
+    /// Drives the pin from the comparison, keeping the duty already set.
+    pub fn enable(&self) {
+        self.timer.set_chxen(true);
+    }
+    /// Stops driving the pin, leaving the channel configured.
+    pub fn disable(&self) {
+        self.timer.set_chxen(false);
+    }
+
+    /// Sets the duty, in timer ticks of the period.
+    ///
+    /// The output is active for `cv` ticks out of [`max_duty`](Self::max_duty),
+    /// so zero is a permanently inactive pin and anything from `max_duty` up is
+    /// a permanently active one. The new value reaches the output at the next
+    /// rollover, not mid-period.
+    pub fn set_duty(&self, cv: u16) {
+        self.timer.set_chxcv(cv);
+    }
+    /// Returns the duty that corresponds to a fully active output.
+    ///
+    /// This is the period the counter is running on, `car() + 1` ticks, and it
+    /// is also the resolution: a period of 100 ticks leaves 100 distinct duties.
+    /// A period spanning the whole counter reports one tick short, being the
+    /// only value that does not fit `u16`.
+    pub fn max_duty(&self) -> u16 {
+        self.timer.read_car().saturating_add(1)
+    }
+
+    /// Gives the pin back, dropping the channel.
+    ///
+    /// The output is left exactly as it was — still enabled, still driving its
+    /// duty. Call [`disable`](Self::disable) first if the pin is wanted quiet.
+    pub fn release(self) -> PIN {
+        self.pin
+    }
+}
+
+/// Writing a duty cannot fail: the value goes straight into a compare register
+/// the hardware always accepts.
+impl<TIMERX: PwmOps<C>, PIN: PwmPin<TIMERX, C>, const C: u8> ErrorType
+    for PwmChannel<TIMERX, PIN, C>
+{
+    type Error = Infallible;
+}
+
+/// Duty control for portable drivers, delegating to [`PwmChannel::set_duty`].
+///
+/// The trait's `set_duty_cycle_percent`, `_fraction`, `_fully_on` and
+/// `_fully_off` are its own defaults built on these two, and scale against the
+/// period the timer currently runs on.
+impl<TIMERX: PwmOps<C>, PIN: PwmPin<TIMERX, C>, const C: u8> SetDutyCycle
+    for PwmChannel<TIMERX, PIN, C>
+{
+    fn max_duty_cycle(&self) -> u16 {
+        self.max_duty()
+    }
+    fn set_duty_cycle(&mut self, duty: u16) -> Result<(), Self::Error> {
+        self.set_duty(duty);
+        Ok(())
     }
 }
