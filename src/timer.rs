@@ -59,6 +59,27 @@ fn interval_to_ticks<const NOM: u64, const DENOM: u64>(
     (raw_time.saturating_mul(raw_freq).saturating_mul(NOM) / DENOM).min(u32::MAX.into()) as u32
 }
 
+/// Converts a tick count of `clock`, divided by `psc`, into a duration.
+///
+/// The inverse of [`interval_to_ticks`], and saturating for the same reasons:
+/// one tick is `psc + 1` cycles of the clock, so the duration in seconds is
+/// `ticks * (psc + 1) / clock`, and the scale turns that into `DENOM / NOM` of
+/// its own units. The division comes last, in `u64`, or every scale finer than
+/// a second would floor to zero.
+fn ticks_to_interval<const NOM: u64, const DENOM: u64>(
+    ticks: u16,
+    psc: u16,
+    clock: Hertz,
+) -> Duration<u32, NOM, DENOM> {
+    let ticks = u64::from(ticks);
+    let psc = u64::from(psc);
+    let clock = u64::from(clock.to_Hz());
+    Duration::<u32, NOM, DENOM>::from_ticks(
+        (ticks.saturating_mul(psc + 1).saturating_mul(DENOM) / clock.saturating_mul(NOM))
+            .min(u32::MAX.into()) as u32,
+    )
+}
+
 /// Loads the dividers and sets the counter running.
 ///
 /// Both are written before the counter runs: `UPG` loads them out of their
@@ -77,7 +98,7 @@ fn start_counter<TIMERX: Instance>(timer: &TIMERX, psc: u16, car: u16) {
 /// The counter is left as it was: hardware never clears `UPIF` itself, so the
 /// clear here is what makes the next wait measure a fresh cycle.
 fn wait_update<TIMERX: Instance>(timer: &TIMERX) {
-    while !timer.upif() {}
+    while !timer.read_upif() {}
     timer.clear_upif();
 }
 
@@ -103,7 +124,7 @@ pub trait Instance: Enable + Reset {
     /// Runs or halts the counter.
     fn set_cen(&self, on: bool);
     /// Update flag — set by hardware on every rollover, never cleared by it.
-    fn upif(&self) -> bool;
+    fn read_upif(&self) -> bool;
     /// Clears the update flag.
     fn clear_upif(&self);
     /// Produces a second handle to the same peripheral.
@@ -153,11 +174,15 @@ macro_rules! timer_instance {
                 fn set_cen(&self, on: bool) {
                     self.ctl0().modify(|_, w| w.cen().bit(on));
                 }
-                fn upif(&self) -> bool {
+                fn read_upif(&self) -> bool {
                     self.intf().read().upif().bit_is_set()
                 }
+                // `INTF` is a flag register where zero clears and one leaves
+                // alone, and its reset value is zero — so `write` would clear
+                // every flag it does not name. `modify` writes the neighbours
+                // back as the ones they were read as, leaving them untouched.
                 fn clear_upif(&self) {
-                    self.intf().write(|w| w.upif().clear());
+                    self.intf().modify(|_, w| w.upif().clear());
                 }
                 unsafe fn steal(&self) -> Self{
                     unsafe { Self::steal() }
@@ -269,6 +294,20 @@ impl<TIMERX: Instance> Timer<TIMERX> {
         let (psc, car) = dividers(interval_to_ticks(interval, self.clk));
         self.into_pwm(psc, car)
     }
+    /// Sets the counter free running and hands out the input capture role.
+    ///
+    /// Only the prescaler is a choice here: it alone sets what one tick costs,
+    /// trading resolution against the longest interval that still fits between
+    /// two rollovers. The reload value is not a choice at all — capture reads
+    /// the counter as a clock rather than a period, so it is pinned to the
+    /// maximum and never reaches the caller.
+    pub fn into_capture(self, psc: u16) -> Capture<TIMERX> {
+        start_counter(&self.timer, psc, u16::MAX);
+        Capture {
+            timer: self.timer,
+            clk: self.clk,
+        }
+    }
 }
 
 /// A running timer, counting down the interval [`Timer::start`] was given.
@@ -324,13 +363,7 @@ impl<TIMERX: Instance> CountDownTimer<TIMERX> {
     ///
     /// Resolution is one timer tick, `psc() + 1` cycles of the timer clock.
     pub fn elapsed<const NOM: u64, const DENOM: u64>(&self) -> Duration<u32, NOM, DENOM> {
-        let cnt = u64::from(self.cnt());
-        let psc = u64::from(self.psc());
-        let clk = u64::from(self.clk.to_Hz());
-        Duration::<u32, NOM, DENOM>::from_ticks(
-            (cnt.saturating_mul(psc + 1).saturating_mul(DENOM) / (clk.saturating_mul(NOM)))
-                .min(u32::MAX.into()) as u32,
-        )
+        ticks_to_interval(self.cnt(), self.psc(), self.clk)
     }
 
     /// Blocks until the counter rolls over, then clears the update flag.
@@ -426,7 +459,7 @@ impl<TIMERX: Instance> Pwm<TIMERX> {
     /// other, whichever wrote last.
     pub fn channel<PIN, const C: u8>(&self, pin: PIN) -> PwmChannel<TIMERX, PIN, C>
     where
-        PIN: PwmPin<TIMERX, C>,
+        PIN: ChannelPin<TIMERX, C>,
         TIMERX: PwmOps<C>,
     {
         self.timer.apply_pwm_mode();
@@ -465,6 +498,24 @@ impl<TIMERX: Instance> Pwm<TIMERX> {
         let (psc, car) = dividers(interval_to_ticks(interval, self.clk));
         self.set_period(psc, car);
     }
+
+    /// Halts the counter and takes the timer back out of PWM duty.
+    ///
+    /// Channels already handed out keep their stolen handles and their pins, so
+    /// they outlive this and go on reaching the registers. Their outputs hold
+    /// whatever level they were at when the counter stopped, since the pins stay
+    /// driven by the channels rather than reverting.
+    pub fn into_timer(self) -> Timer<TIMERX> {
+        self.timer.set_cen(false);
+        Timer {
+            timer: self.timer,
+            clk: self.clk,
+        }
+    }
+    /// Halts the counter and returns the peripheral, skipping the stopped form.
+    pub fn release(self) -> TIMERX {
+        self.into_timer().timer
+    }
 }
 
 impl<TIMERX> Pwm<TIMERX>
@@ -483,6 +534,67 @@ where
     /// Cuts every channel off from its pin at once, keeping them configured.
     pub fn disable_output(&self) {
         self.timer.set_poen(false);
+    }
+}
+
+/// A free running timer whose channels timestamp edges on their pins.
+///
+/// The counter is the time base and nothing else: it runs to `u16::MAX` and
+/// wraps, while each channel latches the count at the moment its edge arrives.
+/// Intervals come out as differences between those latched values, so the role
+/// carries no period of its own — unlike [`CountDownTimer`], where the period
+/// is the whole invariant.
+pub struct Capture<TIMERX> {
+    timer: TIMERX,
+    clk: Hertz,
+}
+
+impl<TIMERX: Instance> Capture<TIMERX> {
+    /// Points one channel of this timer at the given pin and hands it out.
+    ///
+    /// Which channel it is follows from the pin, exactly as it does for
+    /// [`Pwm::channel`]: the silicon routes each pin to one channel of one
+    /// timer, so nothing is left to choose. The channel comes out configured
+    /// but not enabled, and latches nothing until it is.
+    ///
+    /// The edge is taken here rather than left for later so that a channel is
+    /// never half configured; [`select_edge`](CaptureChannel::select_edge)
+    /// changes it afterwards.
+    ///
+    /// The pin moves in and stays there for as long as the channel lives, which
+    /// is what keeps it from being reconfigured out from under a live capture.
+    pub fn channel<PIN, const C: u8>(&self, pin: PIN, edge: Edge) -> CaptureChannel<TIMERX, PIN, C>
+    where
+        PIN: ChannelPin<TIMERX, C>,
+        TIMERX: CaptureOps<C>,
+    {
+        self.timer.apply_capture_mode();
+        self.timer.select_edge(edge);
+        CaptureChannel {
+            // Each channel reaches its own capture register and its own bits of
+            // the shared ones, so the handles this hands out never configure the
+            // same thing twice — the obligation `steal` places on the caller.
+            timer: unsafe { self.timer.steal() },
+            pin,
+            clk: self.clk,
+        }
+    }
+
+    /// Halts the counter and takes the timer back out of capture duty.
+    ///
+    /// Channels already handed out keep their stolen handles and their pins, so
+    /// they outlive this and go on reaching the registers — they simply stop
+    /// latching anything once the counter is halted.
+    pub fn into_timer(self) -> Timer<TIMERX> {
+        self.timer.set_cen(false);
+        Timer {
+            timer: self.timer,
+            clk: self.clk,
+        }
+    }
+    /// Halts the counter and returns the peripheral, skipping the stopped form.
+    pub fn release(self) -> TIMERX {
+        self.into_timer().timer
     }
 }
 
@@ -514,14 +626,46 @@ impl<TIMERX: Instance> TimerExt for TIMERX {
     }
 }
 
+/// The switch turning channel `C` on, whichever direction it points.
+///
+/// `CHxEN` is one field serving both roles — it releases the output on a
+/// compare channel and arms the latch on a capture one — so it sits above them
+/// rather than being spelled twice. Implemented once per timer and channel that
+/// exist together, which is what makes a channel the hardware does not have
+/// impossible to name: `TIMER13` carries channel 0 alone, `TIMER5` has no
+/// channels at all.
+pub trait ChannelEnable<const C: u8>: Instance {
+    /// Enables or disables the channel, leaving its setup in place.
+    fn set_chxen(&self, on: bool);
+}
+
+macro_rules! channel_enable {
+    {$($Timer:ty => [$(($Ch:expr, $chen:ident)$(,)?)+]$(,)?)+} => {
+        $($(impl ChannelEnable<$Ch> for $Timer {
+            fn set_chxen(&self, on: bool) {
+                self.chctl2().modify(|_, w| match on {
+                    true => w.$chen().enabled(),
+                    false => w.$chen().disabled(),
+                })
+            }
+        })+)+
+    };
+}
+
+channel_enable! {
+    pac::Timer0 => [(0, ch0en), (1, ch1en), (2, ch2en), (3, ch3en)],
+    pac::Timer2 => [(0, ch0en), (1, ch1en), (2, ch2en), (3, ch3en)],
+    pac::Timer13 => [(0, ch0en)],
+    pac::Timer14 => [(0, ch0en), (1, ch1en)],
+    pac::Timer15 => [(0, ch0en)],
+    pac::Timer16 => [(0, ch0en)]
+}
+
 /// Register operations on compare channel `C` of a timer.
 ///
-/// Implemented once per timer and channel that exist together, so a channel the
-/// hardware does not have cannot be named: `TIMER13` carries channel 0 alone,
-/// `TIMER5` has no channels at all. Channel registers differ from one channel to
-/// the next, which is why the number lives in the type rather than in an
-/// argument.
-pub trait PwmOps<const C: u8>: Instance {
+/// Channel registers differ from one channel to the next, which is why the
+/// number lives in the type rather than in an argument.
+pub trait PwmOps<const C: u8>: ChannelEnable<C> {
     /// Configures the channel as a PWM output and readies it for a duty value.
     ///
     /// Covers the whole group of one-time fields at once — direction, compare
@@ -533,14 +677,12 @@ pub trait PwmOps<const C: u8>: Instance {
     /// The output stays active while the counter is below this value, so one
     /// full period is `car() + 1` and duty is the ratio between the two.
     fn set_chxcv(&self, cv: u16);
-    /// Enables or disables the channel output, leaving its setup in place.
-    fn set_chxen(&self, on: bool);
 }
 
 macro_rules! pwm {
     {$($Timer:ty => [
         $(
-            ($Ch:expr, ($chctl_reg:ident, $chms:ident, $chcomctl:ident, $chcomsen:ident), ($chcv:ident, $chval:ident), $chen:ident, $chp:ident)$(,)?
+            ($Ch:expr, ($chctl_reg:ident, $chms:ident, $chcomctl:ident, $chcomsen:ident), ($chcv:ident, $chval:ident), $chp:ident)$(,)?
         )+]$(,)?)+
     } => {
         $($(impl PwmOps<$Ch> for $Timer {
@@ -559,30 +701,24 @@ macro_rules! pwm {
             fn set_chxcv(&self, cv: u16) {
                 self.$chcv().write(|w| unsafe { w.$chval().bits(cv) });
             }
-            fn set_chxen(&self, on: bool) {
-                self.chctl2().modify(|_, w| match on {
-                    true => w.$chen().enabled(),
-                    false => w.$chen().disabled(),
-                })
-            }
         })+)+
     };
 }
 
 pwm! {
-    pac::Timer0 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0en, ch0p),
-        (1, (chctl0_output, ch1ms, ch1comctl, ch1comsen), (ch1cv, ch1val), ch1en, ch1p),
-        (2, (chctl1_output, ch2ms, ch2comctl, ch2comsen), (ch2cv, ch2val), ch2en, ch2p),
-        (3, (chctl1_output, ch3ms, ch3comctl, ch3comsen), (ch3cv, ch3val), ch3en, ch3p)],
-    pac::Timer2 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0en, ch0p),
-        (1, (chctl0_output, ch1ms, ch1comctl, ch1comsen), (ch1cv, ch1val), ch1en, ch1p),
-        (2, (chctl1_output, ch2ms, ch2comctl, ch2comsen), (ch2cv, ch2val), ch2en, ch2p),
-        (3, (chctl1_output, ch3ms, ch3comctl, ch3comsen), (ch3cv, ch3val), ch3en, ch3p)],
-    pac::Timer13 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0en, ch0p)],
-    pac::Timer14 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0en, ch0p),
-        (1, (chctl0_output, ch1ms, ch1comctl, ch1comsen), (ch1cv, ch1val), ch1en, ch1p)],
-    pac::Timer15 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0en, ch0p)],
-    pac::Timer16 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0en, ch0p)]
+    pac::Timer0 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0p),
+        (1, (chctl0_output, ch1ms, ch1comctl, ch1comsen), (ch1cv, ch1val), ch1p),
+        (2, (chctl1_output, ch2ms, ch2comctl, ch2comsen), (ch2cv, ch2val), ch2p),
+        (3, (chctl1_output, ch3ms, ch3comctl, ch3comsen), (ch3cv, ch3val), ch3p)],
+    pac::Timer2 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0p),
+        (1, (chctl0_output, ch1ms, ch1comctl, ch1comsen), (ch1cv, ch1val), ch1p),
+        (2, (chctl1_output, ch2ms, ch2comctl, ch2comsen), (ch2cv, ch2val), ch2p),
+        (3, (chctl1_output, ch3ms, ch3comctl, ch3comsen), (ch3cv, ch3val), ch3p)],
+    pac::Timer13 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0p)],
+    pac::Timer14 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0p),
+        (1, (chctl0_output, ch1ms, ch1comctl, ch1comsen), (ch1cv, ch1val), ch1p)],
+    pac::Timer15 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0p)],
+    pac::Timer16 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0p)]
 }
 
 /// The output switch shared by every channel of a timer that has one.
@@ -613,17 +749,17 @@ poen!(pac::Timer0, pac::Timer14, pac::Timer15, pac::Timer16);
 
 /// Marks a pin the silicon routes to channel `C` of `TIMERX`, in the right
 /// alternate function.
-pub trait PwmPin<TIMERX, const C: u8> {}
+pub trait ChannelPin<TIMERX, const C: u8> {}
 
-macro_rules! pwm_pins {
+macro_rules! channel_pins {
     ( $( $TIMERX:ty: $( $C:literal: [ $($p:literal $n:literal : $af:literal),* $(,)? ] )* ),* $(,)? ) => {
-        $($($( impl PwmPin<$TIMERX, $C> for Pin<$p, $n, Alternate<$af>> {} )*)*)*
+        $($($( impl ChannelPin<$TIMERX, $C> for Pin<$p, $n, Alternate<$af>> {} )*)*)*
     };
 }
 
 // Complementary outputs (`CHx_ON`), break inputs and `ETI` share these same
 // pins at other alternate functions; only the plain compare outputs are listed.
-pwm_pins! {
+channel_pins! {
     pac::Timer0:
         0: [ 'A' 8:2 ]
         1: [ 'A' 9:2 ]
@@ -643,7 +779,7 @@ pwm_pins! {
 }
 
 #[cfg(feature = "gd32e230x8")]
-pwm_pins! {
+channel_pins! {
     pac::Timer14:
         0: [ 'A' 2:0, 'B' 14:1 ]
         1: [ 'A' 3:0, 'B' 15:1 ],
@@ -665,7 +801,7 @@ pub struct PwmChannel<TIMERX, PIN, const C: u8> {
     pin: PIN,
 }
 
-impl<TIMERX: PwmOps<C>, PIN: PwmPin<TIMERX, C>, const C: u8> PwmChannel<TIMERX, PIN, C> {
+impl<TIMERX: PwmOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8> PwmChannel<TIMERX, PIN, C> {
     /// Drives the pin from the comparison, keeping the duty already set.
     pub fn enable(&self) {
         self.timer.set_chxen(true);
@@ -703,9 +839,126 @@ impl<TIMERX: PwmOps<C>, PIN: PwmPin<TIMERX, C>, const C: u8> PwmChannel<TIMERX, 
     }
 }
 
+/// What can go wrong while reading a capture.
+///
+/// Its own type rather than a bare `Option`: a missing capture and a lost one
+/// are different answers, and only the second means the value in hand is not
+/// the one that was asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[non_exhaustive]
+pub enum Error {
+    /// An edge landed on a value that had not been read yet (`CHxOF`).
+    ///
+    /// The capture register holds the newer timestamp and the older one is gone,
+    /// so an interval measured across this is wrong rather than merely late.
+    Overcapture,
+}
+
+/// One capture input of a timer, configured and ready to be armed.
+///
+/// Channels of the same timer are independent in everything but the time base:
+/// `PSC` belongs to the counter they share, so what one tick is worth is the
+/// same for all of them. The edge and the latched value are the channel's own.
+///
+/// Each channel carries its own handle to the peripheral, which is what lets
+/// four of them exist while the timer is a single value. Latching touches only
+/// that channel's capture register, but the enables of all channels live in one
+/// register: enabling a channel while another is being enabled elsewhere — from
+/// an interrupt, say — can lose one of the two writes.
+pub struct CaptureChannel<TIMERX, PIN, const C: u8> {
+    timer: TIMERX,
+    pin: PIN,
+    clk: Hertz,
+}
+
+impl<TIMERX: CaptureOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8>
+    CaptureChannel<TIMERX, PIN, C>
+{
+    /// Arms the channel, from here on latching the counter on every edge.
+    pub fn enable(&self) {
+        self.timer.set_chxen(true);
+    }
+    /// Stops latching, leaving the channel configured and its last value intact.
+    pub fn disable(&self) {
+        self.timer.set_chxen(false);
+    }
+
+    /// Changes which edge the channel latches on.
+    ///
+    /// Takes effect on the pin as it is called, so an edge arriving during the
+    /// switch belongs to whichever setting won the race. Measurements spanning
+    /// the change should be discarded rather than reasoned about.
+    pub fn select_edge(&self, edge: Edge) {
+        self.timer.select_edge(edge);
+    }
+
+    /// Takes the timestamp of the last edge, if one has arrived.
+    ///
+    /// Returns [`WouldBlock`](nb::Error::WouldBlock) while no edge has been
+    /// latched since the previous read, so this can be polled and, wrapped in
+    /// [`nb::block!`], waited on. Both flags are cleared on the way out, which
+    /// is what makes the next call speak about the next edge.
+    ///
+    /// The value is the counter at the moment of the edge, not an interval —
+    /// intervals come from feeding two of these to
+    /// [`interval`](Self::interval).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Overcapture`] when a further edge arrived before this read: the
+    /// timestamp handed back belongs to the later edge and the earlier one is
+    /// lost. The channel keeps running, so the following read is sound again.
+    pub fn read(&self) -> nb::Result<u16, Error> {
+        if !self.timer.read_chxif() {
+            return Err(nb::Error::WouldBlock);
+        }
+        let cv = self.timer.read_chxcv();
+        let lost = self.timer.read_chxof();
+        // Hardware only ever raises these flags, so both have to be taken down
+        // here — left standing, `CHxIF` would report the same edge for ever.
+        self.timer.clear_chxif();
+        match lost {
+            true => {
+                self.timer.clear_chxof();
+                Err(nb::Error::Other(Error::Overcapture))
+            }
+            false => Ok(cv),
+        }
+    }
+
+    /// Converts the span between two timestamps into a duration.
+    ///
+    /// Takes them in the order they were captured and counts forward from the
+    /// first, so a counter rollover in between costs nothing — the subtraction
+    /// wraps exactly as the counter does, the reload being the full width of the
+    /// register. Spans longer than one full counter cycle are indistinguishable
+    /// from short ones and come back wrong; keep the prescaler large enough that
+    /// the signal fits.
+    ///
+    /// The scale comes from the binding, as in
+    /// [`elapsed`](CountDownTimer::elapsed): `let t: MicrosDuration =
+    /// channel.interval(first, second);`.
+    pub fn interval<const NOM: u64, const DENOM: u64>(
+        &self,
+        from: u16,
+        to: u16,
+    ) -> Duration<u32, NOM, DENOM> {
+        ticks_to_interval(to.wrapping_sub(from), self.timer.read_psc(), self.clk)
+    }
+
+    /// Gives the pin back, dropping the channel.
+    ///
+    /// The channel is left exactly as it was — still armed if it was armed.
+    /// Call [`disable`](Self::disable) first if it should stop latching.
+    pub fn release(self) -> PIN {
+        self.pin
+    }
+}
+
 /// Writing a duty cannot fail: the value goes straight into a compare register
 /// the hardware always accepts.
-impl<TIMERX: PwmOps<C>, PIN: PwmPin<TIMERX, C>, const C: u8> ErrorType
+impl<TIMERX: PwmOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8> ErrorType
     for PwmChannel<TIMERX, PIN, C>
 {
     type Error = Infallible;
@@ -716,7 +969,7 @@ impl<TIMERX: PwmOps<C>, PIN: PwmPin<TIMERX, C>, const C: u8> ErrorType
 /// The trait's `set_duty_cycle_percent`, `_fraction`, `_fully_on` and
 /// `_fully_off` are its own defaults built on these two, and scale against the
 /// period the timer currently runs on.
-impl<TIMERX: PwmOps<C>, PIN: PwmPin<TIMERX, C>, const C: u8> SetDutyCycle
+impl<TIMERX: PwmOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8> SetDutyCycle
     for PwmChannel<TIMERX, PIN, C>
 {
     fn max_duty_cycle(&self) -> u16 {
@@ -726,4 +979,113 @@ impl<TIMERX: PwmOps<C>, PIN: PwmPin<TIMERX, C>, const C: u8> SetDutyCycle
         self.set_duty(duty);
         Ok(())
     }
+}
+
+/// Which edge on the pin makes a channel take its snapshot.
+///
+/// A runtime value rather than a typestate: the edge changes what the hardware
+/// reacts to on the wire, but no method signature depends on it.
+///
+/// Discriminants are the `CHxP` register encoding. Capturing on both edges is
+/// not offered because the hardware has no such setting — the encoding that
+/// would express it is reserved on every timer of this part.
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[allow(missing_docs)]
+pub enum Edge {
+    Rising,
+    Falling,
+}
+
+/// The input capture half of one channel, numbered by `C` like [`PwmOps`].
+///
+/// Mirrors the output side: the channel points its pin at the counter instead
+/// of the other way round, and every register difference between timers and
+/// between channels stays inside the implementations.
+pub trait CaptureOps<const C: u8>: ChannelEnable<C> {
+    /// Points the channel at its pin and readies it to latch the counter.
+    ///
+    /// Covers the one-time fields as a group — direction plus the input filter
+    /// and the capture prescaler — for the same reason the output side does: a
+    /// channel left pointing at its comparator captures nothing, and the fields
+    /// are only correct together.
+    fn apply_capture_mode(&self);
+    /// Chooses the edge the channel takes its snapshot on.
+    fn select_edge(&self, edge: Edge);
+    /// Reads the counter value the last edge latched.
+    ///
+    /// Says nothing about whether an edge ever arrived: the register holds
+    /// whatever it held before, so the value only means something once
+    /// [`read_chxif`](CaptureOps::read_chxif) has confirmed a capture.
+    fn read_chxcv(&self) -> u16;
+    /// Capture flag — set by hardware on every capture, never cleared by it.
+    fn read_chxif(&self) -> bool;
+    /// Clears the capture flag.
+    fn clear_chxif(&self);
+    /// Overcapture flag — set when an edge lands on a value not yet read.
+    fn read_chxof(&self) -> bool;
+    /// Clears the overcapture flag.
+    fn clear_chxof(&self);
+}
+
+macro_rules! capture {
+    {$($Timer:ty => [
+        $(
+            ($Ch:expr, ($chctl_reg:ident, $chms:ident, $ci:ident, $capflt:ident, $cappsc:ident), ($chcv:ident, $chval:ident), ($chp:ident $(, $chnp:ident)?), $chif:ident, $chof:ident$(,)?)$(,)?
+        )+]$(,)?)+
+    } => {
+        $($(impl CaptureOps<$Ch> for $Timer {
+            fn apply_capture_mode(&self) {
+                // `CHxNP` is only present on the channels that have a
+                // complementary output — channel 3 has neither, and there the
+                // bit the table pairs with `CHxP` is simply hardwired to zero.
+                $(self.chctl2().modify(|_, w| w.$chnp().not_inverted());)?
+                self.$chctl_reg().modify(|_, w| {
+                    w.$chms()
+                        .$ci()
+                        .$capflt()
+                        .no_filter()
+                        .$cappsc()
+                        .div1()
+                })
+            }
+            fn select_edge(&self, edge: Edge) {
+                self.chctl2().modify(|_, w| match edge {
+                    Edge::Rising => w.$chp().not_inverted(),
+                    Edge::Falling => w.$chp().inverted()
+                })
+            }
+            fn read_chxcv(&self) -> u16 {
+                self.$chcv().read().$chval().bits()
+            }
+            fn read_chxif(&self) -> bool {
+                self.intf().read().$chif().bit_is_set()
+            }
+            fn clear_chxif(&self) {
+                self.intf().modify(|_, w| w.$chif().clear())
+            }
+            fn read_chxof(&self) -> bool {
+                self.intf().read().$chof().bit_is_set()
+            }
+            fn clear_chxof(&self) {
+                self.intf().modify(|_, w| w.$chof().clear())
+            }
+        })+)+
+    };
+}
+
+capture! {
+    pac::Timer0 => [(0, (chctl0_input, ch0ms, ci0, ch0capflt, ch0cappsc), (ch0cv, ch0val), (ch0p, ch0np), ch0if, ch0of),
+        (1, (chctl0_input, ch1ms, ci0, ch1capflt, ch1cappsc), (ch1cv, ch1val), (ch1p, ch1np), ch1if, ch1of),
+        (2, (chctl1_input, ch2ms, ci0, ch2capflt, ch2cappsc), (ch2cv, ch2val), (ch2p, ch2np), ch2if, ch2of),
+        (3, (chctl1_input, ch3ms, ci0, ch3capflt, ch3cappsc), (ch3cv, ch3val), (ch3p), ch3if, ch3of)],
+    pac::Timer2 => [(0, (chctl0_input, ch0ms, ci0, ch0capflt, ch0cappsc), (ch0cv, ch0val), (ch0p, ch0np), ch0if, ch0of),
+        (1, (chctl0_input, ch1ms, ci0, ch1capflt, ch1cappsc), (ch1cv, ch1val), (ch1p, ch1np), ch1if, ch1of),
+        (2, (chctl1_input, ch2ms, ci0, ch2capflt, ch2cappsc), (ch2cv, ch2val), (ch2p, ch2np), ch2if, ch2of),
+        (3, (chctl1_input, ch3ms, ci0, ch3capflt, ch3cappsc), (ch3cv, ch3val), (ch3p), ch3if, ch3of)],
+    pac::Timer13 => [(0, (chctl0_input, ch0ms, ci0, ch0capflt, ch0cappsc), (ch0cv, ch0val), (ch0p, ch0np), ch0if, ch0of)],
+    pac::Timer14 => [(0, (chctl0_input, ch0ms, ci0, ch0capflt, ch0cappsc), (ch0cv, ch0val), (ch0p, ch0np), ch0if, ch0of),
+        (1, (chctl0_input, ch1ms, ci0, ch1capflt, ch1cappsc), (ch1cv, ch1val), (ch1p, ch1np), ch1if, ch1of)],
+    pac::Timer15 => [(0, (chctl0_input, ch0ms, ci0, ch0capflt, ch0cappsc), (ch0cv, ch0val), (ch0p, ch0np), ch0if, ch0of)],
+    pac::Timer16 => [(0, (chctl0_input, ch0ms, ci0, ch0capflt, ch0cappsc), (ch0cv, ch0val), (ch0p, ch0np), ch0if, ch0of)]
 }

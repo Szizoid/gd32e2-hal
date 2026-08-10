@@ -11,10 +11,10 @@ Rust from scratch on top of the [`gd32e2`](https://crates.io/crates/gd32e2) PAC.
 
 > ⚠️ **Work in progress.** Written by hand, incrementally; the API is unstable.
 > The package is a library (`src/lib.rs` → `adc`, `dma`, `gpio`, `rcu`, `spi`,
-> `time`, `timer`, `usart`) plus on-hardware test binaries in `examples/`; all 13
+> `time`, `timer`, `usart`) plus on-hardware test binaries in `examples/`; all 14
 > examples have been flashed and verified on the board — RCU, GPIO, USART (8/9-bit
 > and parity), SPI0/SPI1, ADC, a one-shot DMA transfer, TIMER, blocking delays,
-> PWM, RTT.
+> PWM, input capture, RTT.
 
 ### Principles
 
@@ -177,7 +177,7 @@ any `fugit` scale, in `u64` and saturating.
 `into_pwm(psc, car)` / `into_pwm_interval(interval)` move the timer to a fourth
 type, `Pwm`, which owns the period and hands out channels. `channel(pin)` takes a
 pin and returns a `PwmChannel`: the channel number comes from the pin through
-`PwmPin<TIMERX, C>`, implemented only for the pin and alternate function the
+`ChannelPin<TIMERX, C>`, implemented only for the pin and alternate function the
 silicon routes there, and the channel operations live in `PwmOps<C>`, implemented
 only for channels a given timer has — `TIMER5` has none, `TIMER13` has one. The
 pin moves into the channel and comes back from `release()`. A channel carries its
@@ -188,8 +188,21 @@ several channels writing it. `enable()` / `disable()`, `set_duty(cv)` and
 `set_period` / `set_period_interval` change the frequency for every channel at
 once; duties keep their tick value, not their share. `enable_output()` exists only
 on the timers with a `CCHP` register (`TIMER0`, `TIMER14`, `TIMER15`, `TIMER16`),
-whose outputs stay silent until `POEN` is raised. Complementary outputs, break
-inputs, dead time, input capture and interrupts are not implemented.
+whose outputs stay silent until `POEN` is raised.
+
+`into_capture(psc)` moves the timer to a fifth type, `Capture`, whose counter
+free runs at the full `u16` range: only the prescaler is a choice, the reload
+being pinned. `channel(pin, edge)` returns a `CaptureChannel`, bound by the same
+`ChannelPin<TIMERX, C>` map as PWM, with the channel operations in
+`CaptureOps<C>`; `ChannelEnable<C>` carries `CHxEN`, shared by both roles.
+`Edge` is `Rising` or `Falling` — capturing on both is not offered, the encoding
+being reserved on this part. `read()` returns `nb::Result<u16, Error>`:
+`WouldBlock` until an edge is latched, `Error::Overcapture` when an edge
+overwrote a timestamp not yet read. `interval(from, to)` converts the span
+between two timestamps into a duration of any `fugit` scale, wrapping with the
+counter. `select_edge` changes the edge on a live channel. `into_timer()` /
+`release()` leave the role on `Pwm` and `Capture` alike. Complementary outputs,
+break inputs, dead time and interrupts are not implemented.
 
 ### Usage
 
@@ -274,7 +287,7 @@ cargo build --release --no-default-features --features gd32e230x4
 ### Roadmap
 
 - [ ] DMA: circular mode and `M2M`.
-- [ ] Timers: input capture; complementary outputs, break and dead time.
+- [ ] Timers: complementary outputs, break and dead time.
 - [ ] I²C.
 - [ ] Interrupt-driven operation (NVIC infrastructure — also affects USART/SPI).
 - [ ] SPI: half-duplex / single-wire modes (`BDEN`/`BDOEN`/`RO`).
@@ -309,9 +322,9 @@ HAL для микроконтроллера **GD32E230K8U6** (Cortex-M23), на�
 
 > ⚠️ **Работа в процессе.** Пишется вручную и постепенно; API нестабилен. Пакет —
 > библиотека (`src/lib.rs` → `adc`, `dma`, `gpio`, `rcu`, `spi`, `time`, `timer`,
-> `usart`) плюс тестовые бинарники на железо в `examples/`; все 13 примеров прошиты
+> `usart`) плюс тестовые бинарники на железо в `examples/`; все 14 примеров прошиты
 > и проверены на плате — RCU, GPIO, USART (8/9-бит и чётность), SPI0/SPI1, ADC,
-> разовая передача по DMA, TIMER, блокирующие задержки, PWM, RTT.
+> разовая передача по DMA, TIMER, блокирующие задержки, PWM, input capture, RTT.
 
 ### Принципы
 
@@ -476,7 +489,7 @@ x8 — надмножество x6; там, где строка помечена
 `into_pwm(psc, car)` / `into_pwm_interval(interval)` переводят таймер в четвёртый
 тип, `Pwm`, который владеет периодом и раздаёт каналы. `channel(pin)` принимает
 ногу и возвращает `PwmChannel`: номер канала приезжает из ноги через
-`PwmPin<TIMERX, C>`, реализованный только для той ноги и того номера AF, куда
+`ChannelPin<TIMERX, C>`, реализованный только для той ноги и того номера AF, куда
 канал ведёт в железе, а операции над каналом живут в `PwmOps<C>`, реализованном
 только для каналов, которые у таймера есть — у `TIMER5` их нет, у `TIMER13` один.
 Нога уезжает в канал и возвращается из `release()`. Канал держит собственный
@@ -487,8 +500,21 @@ x8 — надмножество x6; там, где строка помечена
 `set_period_interval` меняют частоту сразу всем каналам; скважность сохраняется в
 тиках, а не в долях. `enable_output()` существует только у таймеров с регистром
 `CCHP` (`TIMER0`, `TIMER14`, `TIMER15`, `TIMER16`), выходы которых молчат, пока не
-поднят `POEN`. Комплементарные выходы, break, dead time, input capture и
-прерывания не реализованы.
+поднят `POEN`.
+
+`into_capture(psc)` переводит таймер в пятый тип, `Capture`, счётчик которого
+свободно бежит на полном диапазоне `u16`: выбором остаётся только делитель,
+период пришпилен. `channel(pin, edge)` возвращает `CaptureChannel` и гейтится той
+же картой `ChannelPin<TIMERX, C>`, что и PWM, операции канала лежат в
+`CaptureOps<C>`; `CHxEN` вынесен в `ChannelEnable<C>`, общий для обеих ролей.
+`Edge` — это `Rising` или `Falling`, захвата по обоим фронтам нет: кодировка на
+этом чипе зарезервирована. `read()` возвращает `nb::Result<u16, Error>`:
+`WouldBlock`, пока фронт не защёлкнут, и `Error::Overcapture`, когда фронт
+затёр непрочитанную отметку. `interval(from, to)` переводит промежуток между
+двумя отметками в длительность любой шкалы `fugit`, заворачиваясь вместе со
+счётчиком. `select_edge` меняет фронт на живом канале. `into_timer()` /
+`release()` выводят из роли и `Pwm`, и `Capture`. Комплементарные выходы, break,
+dead time и прерывания не реализованы.
 
 ### Пример
 
@@ -572,7 +598,7 @@ cargo build --release --no-default-features --features gd32e230x4
 ### Roadmap
 
 - [ ] DMA: циклический режим и `M2M`.
-- [ ] Таймеры: input capture; комплементарные выходы, break, dead time.
+- [ ] Таймеры: комплементарные выходы, break, dead time.
 - [ ] I²C.
 - [ ] Работа на прерываниях (инфраструктура NVIC — затронет и USART/SPI).
 - [ ] SPI: half-duplex / однопроводные режимы (`BDEN`/`BDOEN`/`RO`).
