@@ -49,7 +49,7 @@ and error types. Off by default; also enables `embedded-hal/defmt-03`.
 **GPIO** (`src/gpio.rs`) — const-generic `Pin<P, N, MODE>` (a ZST: port and pin
 number live in the type). Modes as typestate: `Input`, `Analog`,
 `Output<PushPull>` / `Output<OpenDrain>`, `Alternate<AF>`, `Debugger`
-(`PA13`/`PA14`, escaped only via `unsafe activate()`), and `Locked<MODE>`
+(`PA13`/`PA14`, escaped via the `activate_into_*()` family), and `Locked<MODE>`
 (terminal — the hardware stays locked until reset, so there is no `unlock`).
 `dp.gpioa.split(&mut rcu)` (`GpioExt`) enables the port clock and hands out pins.
 Transitions: `into_input` / `into_output` / `into_push_pull_output` /
@@ -359,7 +359,7 @@ x8 — надмножество x6; там, где строка помечена
 **GPIO** (`src/gpio.rs`) — const-generic `Pin<P, N, MODE>` (ZST: порт и номер
 ноги живут в типе). Режимы как typestate: `Input`, `Analog`,
 `Output<PushPull>` / `Output<OpenDrain>`, `Alternate<AF>`, `Debugger`
-(`PA13`/`PA14`, выход только через `unsafe activate()`) и `Locked<MODE>`
+(`PA13`/`PA14`, выход через семейство `activate_into_*()`) и `Locked<MODE>`
 (терминальный — железо остаётся залоченным до сброса, поэтому `unlock` нет).
 `dp.gpioa.split(&mut rcu)` (`GpioExt`) включает такт порта и раздаёт пины.
 Переходы: `into_input` / `into_output` / `into_push_pull_output` /

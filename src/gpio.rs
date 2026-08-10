@@ -17,7 +17,8 @@
 //!
 //! Two modes are special. `PA13`/`PA14` start as [`Debugger`] rather than as
 //! inputs, because after reset they really are wired to SWD; using them for
-//! anything else takes an `unsafe` step that acknowledges losing debug access.
+//! anything else goes through a separate `activate_into_*()` family, named so
+//! that giving up debug access cannot happen by accident.
 //! And [`Pin::lock`] freezes a pin's configuration until the next chip reset,
 //! which the type reflects as [`Locked`] — with no way back, since the hardware
 //! has none either.
@@ -55,8 +56,8 @@ pub struct Alternate<const AF: u8>;
 /// Mode: serial-wire debug, the reset state of `PA13`/`PA14`.
 ///
 /// Deliberately not [`Input`]: those pins are genuinely driving SWD out of reset.
-/// Leaving this state requires [`Pin::activate`], which is `unsafe` because it
-/// gives up debug access.
+/// The mode is not [`Active`], so the ordinary `into_*` do not reach it — leaving
+/// it goes through [`Pin::activate`] or one of its `activate_into_*` siblings.
 pub struct Debugger;
 /// Mode: configuration frozen until the next chip reset, wrapping the mode it
 /// was locked in.
@@ -220,16 +221,58 @@ pub trait HasLock {}
 impl<const N: u8, MODE> HasLock for Pin<'A', N, MODE> {}
 impl<const N: u8, MODE> HasLock for Pin<'B', N, MODE> {}
 
+/// Ways out of [`Debugger`], each giving up debug access on this pin.
+///
+/// Every one of them writes the mode itself rather than merely relabelling the
+/// type, so the pin never sits in a state its type misdescribes. The `activate_`
+/// prefix is the whole point: an SWD pin cannot be reconfigured by accident
+/// through the ordinary `into_*`, which [`Debugger`] does not reach.
+///
+/// Losing SWD is not a memory-safety matter, so none of this is `unsafe` — the
+/// cost is a board that stops answering the probe until the next reset, which
+/// the name is there to announce.
 impl<const P: char, const N: u8> Pin<P, N, Debugger> {
-    /// Releases an SWD pin for general-purpose use, giving up debug access.
+    /// Releases the pin as a digital input.
+    pub fn activate_into_input(self) -> Pin<P, N, Input> {
+        self.set_mode(CTL_INPUT);
+        Pin { _mode: PhantomData }
+    }
+    /// Releases the pin as an input; shorthand for
+    /// [`activate_into_input`](Self::activate_into_input).
+    pub fn activate(self) -> Pin<P, N, Input> {
+        self.activate_into_input()
+    }
+    /// Releases the pin as a push-pull output.
+    pub fn activate_into_push_pull_output(self) -> Pin<P, N, Output<PushPull>> {
+        self.set_mode(CTL_OUTPUT);
+        self.set_omode(OMODE_PUSH_PULL);
+        Pin { _mode: PhantomData }
+    }
+    /// Releases the pin as an open-drain output.
+    pub fn activate_into_open_drain_output(self) -> Pin<P, N, Output<OpenDrain>> {
+        self.set_mode(CTL_OUTPUT);
+        self.set_omode(OMODE_OPEN_DRAIN);
+        Pin { _mode: PhantomData }
+    }
+    /// Releases the pin as an output; shorthand for the push-pull variant.
+    pub fn activate_into_output(self) -> Pin<P, N, Output<PushPull>> {
+        self.activate_into_push_pull_output()
+    }
+    /// Releases the pin as an analog input, as required by the ADC.
+    pub fn activate_into_analog(self) -> Pin<P, N, Analog> {
+        self.set_mode(CTL_ANALOG);
+        Pin { _mode: PhantomData }
+    }
+    /// Releases the pin to a peripheral through alternate function `AF`.
     ///
-    /// # Safety
-    ///
-    /// This only relabels the type from `Debugger` to `Input` — it performs no
-    /// register write. The pin remains physically in SWD mode until a
-    /// subsequent `into_*()` call reconfigures `CTL`. The caller must follow up
-    /// with one, or the type will no longer match the hardware state.
-    pub unsafe fn activate(self) -> Pin<P, N, Input> {
+    /// Gated by [`ValidAf`] exactly as
+    /// [`into_alternate`](Pin::into_alternate) is.
+    pub fn activate_into_alternate<const AF: u8>(self) -> Pin<P, N, Alternate<AF>>
+    where
+        Self: ValidAf<AF>,
+    {
+        self.set_mode(CTL_AF);
+        self.set_af(AF as u32);
         Pin { _mode: PhantomData }
     }
 }
@@ -267,10 +310,11 @@ impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
     }
 }
 
-impl<const P: char, const N: u8, MODE> Pin<P, N, MODE>
-where
-    MODE: Active,
-{
+// The register writers sit in the unbounded block, not with the `into_*` that
+// call them: `Debugger` is deliberately not `Active`, yet leaving that mode is
+// itself a mode write, and a method in the bounded block cannot be reached from
+// one outside it.
+impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
     fn set_mode(&self, mode: u32) {
         let offset = N * 2;
         self.reg()
@@ -336,7 +380,12 @@ where
             }
         });
     }
+}
 
+impl<const P: char, const N: u8, MODE> Pin<P, N, MODE>
+where
+    MODE: Active,
+{
     /// Reconfigures the pin as a digital input.
     pub fn into_input(self) -> Pin<P, N, Input> {
         self.set_mode(CTL_INPUT);

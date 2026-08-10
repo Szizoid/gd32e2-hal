@@ -176,7 +176,7 @@ dependencies = [
 
 [[package]]
 name = "gd32e2-hal"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
