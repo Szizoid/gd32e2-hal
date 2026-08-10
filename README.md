@@ -151,7 +151,9 @@ than silently never being requested, and the associated `Word` derives
 supertrait also gates the request line (`DENT`/`DENR`, `DMATEN`/`DMAREN`, ADC
 `DMA`) — raised on start, dropped before the peripheral goes back to its owner —
 so the drivers themselves know nothing about DMA. `remaining()` and `is_error()`
-inspect a running transfer. Circular mode and `M2M` are deferred.
+inspect a running transfer. Dropping a `Transfer` instead of waiting stops the
+channel and drops the request line; the three owned parts are lost. Circular mode
+and `M2M` are deferred.
 
 **TIMER** (`src/timer.rs`) — the counter core, verified on hardware. All seven
 timers: `Timer::new(rcu, timer, clocks)` clocks and resets the peripheral and
@@ -468,7 +470,9 @@ x8 — надмножество x6; там, где строка помечена
 заодно держит линию запроса (`DENT`/`DENR`, `DMATEN`/`DMAREN`, ADC `DMA`) —
 поднимает на старте и гасит до возврата периферии владельцу, — так что сами
 драйверы про DMA ничего не знают. `remaining()` и `is_error()` показывают
-состояние идущей передачи. Циклический режим и `M2M` отложены.
+состояние идущей передачи. Дроп `Transfer` вместо `wait()` останавливает канал и
+гасит линию запроса; все три владения при этом теряются. Циклический режим и
+`M2M` отложены.
 
 **TIMER** (`src/timer.rs`) — ядро счётчика, проверено на железе. Все семь
 таймеров: `Timer::new(rcu, timer, clocks)` тактирует и сбрасывает периферию и

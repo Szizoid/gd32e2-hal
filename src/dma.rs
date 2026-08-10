@@ -19,6 +19,8 @@
 //! clearing its own flags cannot disturb another's.
 
 use core::marker::PhantomData;
+use core::mem::ManuallyDrop;
+use core::ptr;
 
 use crate::adc::Adc;
 use crate::pac;
@@ -363,7 +365,19 @@ where
 ///
 /// Owns the channel, the peripheral and the buffer for as long as the transfer
 /// runs; [`wait`](Transfer::wait) is the only way to get them back.
-pub struct Transfer<const N: u8, P, BUF> {
+///
+/// Dropping instead of waiting stops the transfer: the request line goes down
+/// and the channel is disabled, so the hardware is not left writing into a
+/// buffer nobody is watching. The three owned parts are lost in that case.
+// The bounds sit on the declaration only because `Drop` demands it — a `Drop`
+// impl may not require more than the type it drops, or values would exist that
+// nothing could drop.
+#[allow(private_bounds)]
+pub struct Transfer<const N: u8, P, BUF>
+where
+    Channel<N>: ChannelOps,
+    P: DmaPeriph<N>,
+{
     channel: Channel<N>,
     periph: P,
     buf: BUF,
@@ -386,7 +400,18 @@ where
         self.periph.disable_dma();
         self.channel.set_enabled(false);
         self.channel.clear_flags();
-        (self.channel, self.periph, self.buf)
+        // The parts are read out rather than moved out, because a type with a
+        // `Drop` impl cannot be taken apart. `ManuallyDrop` is what makes the
+        // duplicated ownership sound: the originals are never dropped, never
+        // used again, and go out of scope with this expression.
+        let transfer = ManuallyDrop::new(self);
+        unsafe {
+            (
+                ptr::read(&transfer.channel),
+                ptr::read(&transfer.periph),
+                ptr::read(&transfer.buf),
+            )
+        }
     }
     /// How many transfers the channel has left, without waiting for it.
     ///
@@ -408,6 +433,25 @@ where
     /// should be able to tell a stalled channel from a failed one.
     pub fn is_error(&self) -> bool {
         self.channel.is_error()
+    }
+}
+
+#[allow(private_bounds)]
+impl<const N: u8, P, BUF> Drop for Transfer<N, P, BUF>
+where
+    Channel<N>: ChannelOps,
+    P: DmaPeriph<N>,
+{
+    /// Stops the transfer where it stands, without waiting for it to finish.
+    ///
+    /// Takes the same steps as the tail of [`wait`](Transfer::wait) but never
+    /// blocks: a running channel is cut off mid-buffer. Correctness never rested
+    /// on this running — the buffer is `'static`, so a channel left writing would
+    /// only be wasteful, and `Drop` is not guaranteed to run in any case.
+    fn drop(&mut self) {
+        self.periph.disable_dma();
+        self.channel.set_enabled(false);
+        self.channel.clear_flags();
     }
 }
 
