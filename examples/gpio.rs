@@ -4,11 +4,16 @@
 //! an input with a pull-up whose level is logged. PA1 is then locked and keeps
 //! toggling, showing a `Locked` pin still drives.
 //!
+//! PA5, PA6 and PB0 are erased and walked over in a loop — a chase pattern
+//! across two ports, which is what erasure buys: their types differ until
+//! `erase()`, and no array can hold them before it.
+//!
 //! Covers: `into_input`/`into_push_pull_output`/`into_open_drain_output`/
-//! `into_analog`, `set_pull`, `set_speed`, `lock`, and the inherent
-//! `set_high`/`toggle`/`is_set_high`/`is_low` accessors. The same pins also
-//! implement `OutputPin`/`StatefulOutputPin`/`InputPin` for portable drivers;
-//! those return `Result` and are reached by importing the trait.
+//! `into_analog`, `set_pull`, `set_speed`, `lock`, `erase`, and the inherent
+//! `set_high`/`toggle`/`is_set_high`/`is_low` accessors on both plain and erased
+//! pins. The same pins also implement `OutputPin`/`StatefulOutputPin`/`InputPin`
+//! for portable drivers; those return `Result` and are reached by importing the
+//! trait.
 
 #![no_std]
 #![no_main]
@@ -32,6 +37,7 @@ fn main() -> ! {
         .freeze(&mut rcu, &mut dp.fmc);
 
     let gpioa = dp.gpioa.split(&mut rcu);
+    let gpiob = dp.gpiob.split(&mut rcu);
 
     // Input with a pull-up.
     let button = gpioa.pa0.into_input();
@@ -58,12 +64,36 @@ fn main() -> ! {
         defmt::info!("led={} button_pressed={}", lit, pressed);
     }
 
+    // Three outputs of two different ports, each a distinct type until erased.
+    // After `erase()` they share one, which is what lets them into an array.
+    let chase = [
+        gpioa.pa5.into_push_pull_output().erase(),
+        gpioa.pa6.into_push_pull_output().erase(),
+        gpiob.pb0.into_push_pull_output().erase(),
+    ];
+    for pin in &chase {
+        pin.set_low();
+    }
+
     // Lock PA1: the configuration is frozen until reset, but a Locked output
     // still drives — `toggle` keeps working.
     let led = led.lock();
 
+    let mut lit = 0;
     loop {
         led.toggle();
+
+        chase[lit].set_low();
+        lit = (lit + 1) % chase.len();
+        chase[lit].set_high();
+        let pin = &chase[lit];
+        defmt::info!(
+            "lit P{}{} driven={}",
+            pin.port(),
+            pin.number(),
+            pin.is_set_high()
+        );
+
         for _ in 0..1_000_000 {
             cortex_m::asm::nop();
         }

@@ -76,6 +76,50 @@ pub struct Pin<const P: char, const N: u8, MODE> {
     _mode: PhantomData<MODE>,
 }
 
+/// Which port an [`ErasedPin`] came from.
+///
+/// Only the ports this package bonds — a pin of any other port cannot be
+/// constructed, so the enum has nothing to say about them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[allow(missing_docs)]
+pub enum Port {
+    A,
+    B,
+    F,
+}
+
+impl Port {
+    /// Converts the type-level port letter into its runtime form.
+    ///
+    /// `const` so that erasing a pin costs nothing: the letter is a constant at
+    /// every call site, and the match folds away with it.
+    const fn from_char(port: char) -> Self {
+        match port {
+            'A' => Port::A,
+            'B' => Port::B,
+            'F' => Port::F,
+            _ => unreachable!(),
+        }
+    }
+}
+
+/// A pin whose identity has moved into runtime values, keeping its mode.
+///
+/// Port and number become fields, which is what lets pins of different ports and
+/// numbers share a type and sit in one array or slice. `MODE` stays a type
+/// parameter, so nothing about what the pin can do is given up: an
+/// `ErasedPin<Input>` still has no `set_high`.
+///
+/// The trade is identity for uniformity, and it only goes one way — the compile
+/// time checks that depend on knowing the exact pin have already been made by
+/// the time a pin is erased.
+pub struct ErasedPin<MODE> {
+    port: Port,
+    number: u8,
+    _mode: PhantomData<MODE>,
+}
+
 /// Internal pull resistor.
 #[derive(Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -277,36 +321,63 @@ impl<const P: char, const N: u8> Pin<P, N, Debugger> {
     }
 }
 
+// State access takes the identity as arguments rather than reading it off a
+// type, so that `Pin` and `ErasedPin` share one body apiece: the first passes
+// constants, the second its fields, and neither calls the other. Configuration
+// helpers stay methods on `Pin` — an erased pin has no use for them.
+fn reg(port: Port) -> &'static pac::gpioa::RegisterBlock {
+    let ptr = match port {
+        Port::A => pac::Gpioa::ptr(),
+        Port::B => pac::Gpiob::ptr() as *const _,
+        Port::F => pac::Gpiof::ptr() as *const _, // AFSEL0/1 and LOCK registers are unavailable
+    };
+    unsafe { &*ptr }
+}
+
+fn read_pin(port: Port, number: u8) -> bool {
+    let bits = reg(port).istat().read().bits();
+    ((bits >> number) & 0b1) == 0b1
+}
+
+fn read_octl(port: Port, number: u8) -> bool {
+    let bits = reg(port).octl().read().bits();
+    ((bits >> number) & 0b1) == 0b1
+}
+
+fn set_bop(port: Port, number: u8) {
+    reg(port).bop().write(|w| unsafe { w.bits(1 << number) });
+}
+
+fn set_bc(port: Port, number: u8) {
+    reg(port).bc().write(|w| unsafe { w.bits(1 << number) });
+}
+
+fn set_tg(port: Port, number: u8) {
+    reg(port).tg().write(|w| unsafe { w.bits(1 << number) });
+}
+
 impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
-    fn reg(&self) -> &pac::gpioa::RegisterBlock {
-        let ptr = match P {
-            'A' => pac::Gpioa::ptr(),
-            'B' => pac::Gpiob::ptr() as *const _,
-            'F' => pac::Gpiof::ptr() as *const _, // AFSEL0/1 and LOCK registers are unavailable
-            _ => unreachable!(),
-        };
-        unsafe { &*ptr }
+    fn reg(&self) -> &'static pac::gpioa::RegisterBlock {
+        reg(Port::from_char(P))
     }
 
     fn read_pin(&self) -> bool {
-        let bits = self.reg().istat().read().bits();
-        ((bits >> N) & 0b1) == 0b1
+        read_pin(Port::from_char(P), N)
     }
 
     fn read_octl(&self) -> bool {
-        let bits = self.reg().octl().read().bits();
-        ((bits >> N) & 0b1) == 0b1
+        read_octl(Port::from_char(P), N)
     }
     fn set_bop(&self) {
-        self.reg().bop().write(|w| unsafe { w.bits(1 << N) });
+        set_bop(Port::from_char(P), N);
     }
 
     fn set_bc(&self) {
-        self.reg().bc().write(|w| unsafe { w.bits(1 << N) });
+        set_bc(Port::from_char(P), N);
     }
 
     fn set_tg(&self) {
-        self.reg().tg().write(|w| unsafe { w.bits(1 << N) });
+        set_tg(Port::from_char(P), N);
     }
 }
 
@@ -447,6 +518,23 @@ where
         }
         Pin { _mode: PhantomData }
     }
+    /// Moves the pin's identity into runtime values, keeping its mode.
+    ///
+    /// Trades knowing which pin this is for a type shared with every other
+    /// erased pin, so that pins can be collected into an array or a slice. The
+    /// configuration is untouched — nothing is written, the pin goes on doing
+    /// what it did.
+    ///
+    /// One way only: recovering `Pin<'A', 5, _>` would mean checking the fields
+    /// at runtime, and a constructor returning `Option` gives back nothing the
+    /// erased pin cannot already do.
+    pub fn erase(self) -> ErasedPin<MODE> {
+        ErasedPin {
+            port: Port::from_char(P),
+            number: N,
+            _mode: PhantomData,
+        }
+    }
 
     /// Selects the internal pull resistor.
     pub fn set_pull(&self, p: Pull) {
@@ -509,6 +597,68 @@ impl<const P: char, const N: u8> Pin<P, N, Output<OpenDrain>> {
     }
 }
 
+impl<MODE> ErasedPin<MODE> {
+    /// Returns which port the pin came from.
+    pub fn port(&self) -> Port {
+        self.port
+    }
+    /// Returns the pin's number within its port.
+    pub fn number(&self) -> u8 {
+        self.number
+    }
+}
+
+impl<OTYPE> ErasedPin<Output<OTYPE>> {
+    /// Drives the pin high.
+    pub fn set_high(&self) {
+        set_bop(self.port, self.number);
+    }
+    /// Drives the pin low.
+    pub fn set_low(&self) {
+        set_bc(self.port, self.number);
+    }
+    /// Flips the pin, atomically against the rest of the port.
+    pub fn toggle(&self) {
+        set_tg(self.port, self.number);
+    }
+    /// Returns whether the pin is *being driven* high.
+    ///
+    /// Reads back `OCTL`, i.e. what was last written, not what the wire is at —
+    /// for the latter on an open-drain pin see [`is_high`](ErasedPin::is_high).
+    pub fn is_set_high(&self) -> bool {
+        read_octl(self.port, self.number)
+    }
+    /// Returns whether the pin is *being driven* low.
+    pub fn is_set_low(&self) -> bool {
+        !read_octl(self.port, self.number)
+    }
+}
+
+impl ErasedPin<Input> {
+    /// Returns whether the input reads high.
+    pub fn is_high(&self) -> bool {
+        read_pin(self.port, self.number)
+    }
+    /// Returns whether the input reads low.
+    pub fn is_low(&self) -> bool {
+        !read_pin(self.port, self.number)
+    }
+}
+
+impl ErasedPin<Output<OpenDrain>> {
+    /// Returns whether the wire reads high.
+    ///
+    /// Open-drain can only pull low, so this reports the actual line level —
+    /// which another device on a shared bus may be holding down against us.
+    pub fn is_high(&self) -> bool {
+        read_pin(self.port, self.number)
+    }
+    /// Returns whether the wire reads low.
+    pub fn is_low(&self) -> bool {
+        !read_pin(self.port, self.number)
+    }
+}
+
 impl<const P: char, const N: u8, OTYPE> ErrorType for Pin<P, N, Output<OTYPE>> {
     type Error = Infallible;
 }
@@ -554,6 +704,54 @@ impl<const P: char, const N: u8> InputPin for Pin<P, N, Output<OpenDrain>> {
     }
     fn is_low(&mut self) -> Result<bool, Self::Error> {
         Ok(!self.read_pin())
+    }
+}
+
+impl<OTYPE> ErrorType for ErasedPin<Output<OTYPE>> {
+    type Error = Infallible;
+}
+impl<OTYPE> OutputPin for ErasedPin<Output<OTYPE>> {
+    fn set_high(&mut self) -> Result<(), Self::Error> {
+        set_bop(self.port, self.number);
+        Ok(())
+    }
+    fn set_low(&mut self) -> Result<(), Self::Error> {
+        set_bc(self.port, self.number);
+        Ok(())
+    }
+}
+
+impl<OTYPE> StatefulOutputPin for ErasedPin<Output<OTYPE>> {
+    fn is_set_high(&mut self) -> Result<bool, Self::Error> {
+        Ok(read_octl(self.port, self.number))
+    }
+    fn is_set_low(&mut self) -> Result<bool, Self::Error> {
+        Ok(!read_octl(self.port, self.number))
+    }
+    fn toggle(&mut self) -> Result<(), Self::Error> {
+        set_tg(self.port, self.number);
+        Ok(())
+    }
+}
+
+impl ErrorType for ErasedPin<Input> {
+    type Error = Infallible;
+}
+impl InputPin for ErasedPin<Input> {
+    fn is_high(&mut self) -> Result<bool, Self::Error> {
+        Ok(read_pin(self.port, self.number))
+    }
+    fn is_low(&mut self) -> Result<bool, Self::Error> {
+        Ok(!read_pin(self.port, self.number))
+    }
+}
+
+impl InputPin for ErasedPin<Output<OpenDrain>> {
+    fn is_high(&mut self) -> Result<bool, Self::Error> {
+        Ok(read_pin(self.port, self.number))
+    }
+    fn is_low(&mut self) -> Result<bool, Self::Error> {
+        Ok(!read_pin(self.port, self.number))
     }
 }
 
