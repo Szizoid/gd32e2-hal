@@ -1,4 +1,3 @@
-/.zed
 /target
 /docs/*.pdf
 /others-hal
@@ -6,7 +5,3 @@
 **/*.rs.bk
 **/*.bak
 **/*.rs.bak
-memory.x
-
-CLAUDE.md
-.claude
