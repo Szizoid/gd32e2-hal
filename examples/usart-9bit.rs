@@ -35,7 +35,7 @@ fn main() -> ! {
     let config = UsartConfig9::default()
         .baud(baud::B115200)
         .oversampling(Oversampling::X16);
-    let usart0 = Usart::new_word(&mut rcu, dp.usart0, tx, rx, clocks, config);
+    let usart0 = Usart::new_word(&mut rcu, dp.usart0, tx, rx, &clocks, config);
 
     defmt::info!("9-bit echo ready, waiting for a word on PA10");
 

@@ -53,8 +53,10 @@ number live in the type). Modes as typestate: `Input`, `Analog`,
 (terminal — the hardware stays locked until reset, so there is no `unlock`).
 `dp.gpioa.split(&mut rcu)` (`GpioExt`) enables the port clock and hands out pins.
 Transitions: `into_input` / `into_output` / `into_push_pull_output` /
-`into_open_drain_output` / `into_analog` / `into_alternate::<AF>()` — the AF
-number is checked at compile time against a per-pin `ValidAf` map. Plus
+`into_open_drain_output` / `into_analog` / `into_alternate::<AF>()` /
+`into_alternate_open_drain::<AF>()` — the AF number is checked at compile time
+against a per-pin `ValidAf` map. `Alternate<AF, OTYPE>` carries the output type
+too (`PushPull` by default), so a driver that needs open-drain lines binds to it. Plus
 `set_pull`, `set_speed`, `lock()` (ports A/B only — port F has no `LOCK`
 register). Pin state is inherent and `Result`-free: `set_high` / `set_low` /
 `toggle` (atomic `TG`) / `is_set_high` / `is_set_low` on outputs, `is_high` /
@@ -370,8 +372,10 @@ x8 — надмножество x6; там, где строка помечена
 (терминальный — железо остаётся залоченным до сброса, поэтому `unlock` нет).
 `dp.gpioa.split(&mut rcu)` (`GpioExt`) включает такт порта и раздаёт пины.
 Переходы: `into_input` / `into_output` / `into_push_pull_output` /
-`into_open_drain_output` / `into_analog` / `into_alternate::<AF>()` — номер AF
-сверяется на компиляции с per-pin картой `ValidAf`. Плюс `set_pull`,
+`into_open_drain_output` / `into_analog` / `into_alternate::<AF>()` /
+`into_alternate_open_drain::<AF>()` — номер AF сверяется на компиляции с per-pin
+картой `ValidAf`. `Alternate<AF, OTYPE>` несёт и тип выхода (`PushPull` по
+умолчанию), поэтому драйвер, которому нужны open-drain линии, требует его типом. Плюс `set_pull`,
 `set_speed`, `lock()` (только порты A/B — у порта F нет регистра `LOCK`).
 Состояние ноги — инхерентное и без `Result`: `set_high` / `set_low` / `toggle`
 (атомарный `TG`) / `is_set_high` / `is_set_low` у выходов, `is_high` / `is_low` у

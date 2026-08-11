@@ -58,6 +58,7 @@ pub use gd32e2::gd32e230 as pac;
 pub mod adc;
 pub mod dma;
 pub mod gpio;
+pub mod i2c;
 pub mod rcu;
 pub mod spi;
 pub mod time;

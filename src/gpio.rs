@@ -51,8 +51,17 @@ pub struct Output<OTYPE> {
 }
 /// Mode: analog, the input mode the ADC requires.
 pub struct Analog;
-/// Mode: alternate function `AF`, routing the pin to a peripheral.
-pub struct Alternate<const AF: u8>;
+/// Mode: alternate function `AF`, routing the pin to a peripheral, driven as
+/// `OTYPE` ([`PushPull`] or [`OpenDrain`]).
+///
+/// The output type stays part of the mode because some peripherals only work
+/// with one of them: I²C drives both of its lines open-drain, and a push-pull
+/// pin there would fight whoever else is pulling the line low. Drivers bind
+/// their pins to the type they need, so the wrong one does not compile.
+/// It defaults to [`PushPull`], which is what every other peripheral wants.
+pub struct Alternate<const AF: u8, OTYPE = PushPull> {
+    _otype: PhantomData<OTYPE>,
+}
 /// Mode: serial-wire debug, the reset state of `PA13`/`PA14`.
 ///
 /// Deliberately not [`Input`]: those pins are genuinely driving SWD out of reset.
@@ -255,7 +264,7 @@ pub trait Active {}
 
 impl Active for Input {}
 impl Active for Analog {}
-impl<const AF: u8> Active for Alternate<AF> {}
+impl<const AF: u8, OTYPE> Active for Alternate<AF, OTYPE> {}
 impl<OTYPE> Active for Output<OTYPE> {}
 
 /// Marks a pin on a port that has a `LOCK` register, gating [`Pin::lock`].
@@ -307,7 +316,8 @@ impl<const P: char, const N: u8> Pin<P, N, Debugger> {
         self.set_mode(CTL_ANALOG);
         Pin { _mode: PhantomData }
     }
-    /// Releases the pin to a peripheral through alternate function `AF`.
+    /// Releases the pin to a peripheral through alternate function `AF`,
+    /// driven push-pull.
     ///
     /// Gated by [`ValidAf`] exactly as
     /// [`into_alternate`](Pin::into_alternate) is.
@@ -315,8 +325,17 @@ impl<const P: char, const N: u8> Pin<P, N, Debugger> {
     where
         Self: ValidAf<AF>,
     {
-        self.set_mode(CTL_AF);
-        self.set_af(AF as u32);
+        self.set_alternate(AF as u32, OMODE_PUSH_PULL);
+        Pin { _mode: PhantomData }
+    }
+    /// Same, but leaves the pin open-drain, as I²C requires.
+    pub fn activate_into_alternate_open_drain<const AF: u8>(
+        self,
+    ) -> Pin<P, N, Alternate<AF, OpenDrain>>
+    where
+        Self: ValidAf<AF>,
+    {
+        self.set_alternate(AF as u32, OMODE_OPEN_DRAIN);
         Pin { _mode: PhantomData }
     }
 }
@@ -423,6 +442,14 @@ impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
             .omode()
             .modify(|r, w| unsafe { w.bits((r.bits() & !(0b1 << offset)) | (bits << offset)) });
     }
+    /// Routes the pin to `af` and drives it as `omode`, the two halves of every
+    /// `*_alternate*` method — the output type is part of the resulting mode, so
+    /// it is written here rather than left at whatever the previous mode used.
+    fn set_alternate(&self, af: u32, omode: u32) {
+        self.set_mode(CTL_AF);
+        self.set_af(af);
+        self.set_omode(omode);
+    }
     fn set_lk(&self, lkk: bool) {
         self.reg().lock().modify(|_, w| {
             let w = match N {
@@ -486,7 +513,8 @@ where
         self.set_mode(CTL_ANALOG);
         Pin { _mode: PhantomData }
     }
-    /// Routes the pin to a peripheral through alternate function `AF`.
+    /// Routes the pin to a peripheral through alternate function `AF`, driven
+    /// push-pull.
     ///
     /// Only numbers this pin actually has will compile — see [`ValidAf`]. The
     /// number stays in the returned type, so a driver can demand the exact
@@ -495,8 +523,18 @@ where
     where
         Self: ValidAf<AF>,
     {
-        self.set_mode(CTL_AF);
-        self.set_af(AF as u32);
+        self.set_alternate(AF as u32, OMODE_PUSH_PULL);
+        Pin { _mode: PhantomData }
+    }
+    /// Same, but leaves the pin open-drain, as I²C requires.
+    ///
+    /// The output type is part of the mode, so a driver that must have it —
+    /// [`I2c`](crate::i2c::I2c) — accepts only pins that went through here.
+    pub fn into_alternate_open_drain<const AF: u8>(self) -> Pin<P, N, Alternate<AF, OpenDrain>>
+    where
+        Self: ValidAf<AF>,
+    {
+        self.set_alternate(AF as u32, OMODE_OPEN_DRAIN);
         Pin { _mode: PhantomData }
     }
     /// Freezes the pin's configuration until the next chip reset.

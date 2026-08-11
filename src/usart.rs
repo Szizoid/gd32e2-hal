@@ -489,7 +489,7 @@ where
         usart: USARTX,
         tx_pin: TX,
         rx_pin: RX,
-        clocks: Clocks,
+        clocks: &Clocks,
         config: UsartConfig,
     ) -> Self {
         configure(rcu, &usart, &clocks, config.baud, config.oversampling);
@@ -577,7 +577,7 @@ where
         usart: USARTX,
         tx_pin: TX,
         rx_pin: RX,
-        clocks: Clocks,
+        clocks: &Clocks,
         config: UsartConfig9,
     ) -> Self {
         configure(rcu, &usart, &clocks, config.baud, config.oversampling);

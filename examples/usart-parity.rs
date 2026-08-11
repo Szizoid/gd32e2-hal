@@ -39,7 +39,7 @@ fn main() -> ! {
         .baud(baud::B9600)
         .oversampling(Oversampling::X8)
         .frame_format(FrameFormat::E8);
-    let mut usart1 = Usart::new(&mut rcu, dp.usart1, tx, rx, clocks, config);
+    let mut usart1 = Usart::new(&mut rcu, dp.usart1, tx, rx, &clocks, config);
 
     defmt::info!("USART1 E8 loopback at 9600 baud (wire PA2 -> PA3)");
 

@@ -153,6 +153,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04ae150b98ef345142101da0a0b4ccfcc577bc8f5b9778b852e9427c667654d3"
 dependencies = [
+ "defmt 1.1.1",
  "gcd",
 ]
 
@@ -176,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "gd32e2-hal"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",

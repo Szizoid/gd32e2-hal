@@ -1,6 +1,6 @@
 [package]
 name = "gd32e2-hal"
-version = "0.14.0"
+version = "0.15.0"
 edition = "2024"
 authors = ["Szizoid"]
 description = "HAL for the GD32E23x series (Cortex-M23), currently the GD32E230"
@@ -30,7 +30,7 @@ gd32e230x8 = []
 
 # Derives defmt::Format on the public enums so they can be logged. Off by
 # default: a user who does not log with defmt should not pull the crate in.
-defmt = ["dep:defmt", "embedded-hal/defmt-03"]
+defmt = ["dep:defmt", "embedded-hal/defmt-03", "fugit/defmt"]
 
 [dependencies]
 # Only ever named inside cfg_attr(feature = "defmt", ...), see [features].

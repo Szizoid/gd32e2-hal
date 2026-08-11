@@ -37,7 +37,7 @@ fn main() -> ! {
         dp.usart0,
         tx_pin,
         rx_pin,
-        clocks,
+        &clocks,
         UsartConfig::default(),
     );
 
