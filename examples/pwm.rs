@@ -21,14 +21,12 @@
 
 use cortex_m_rt::entry;
 use defmt_rtt as _;
-use embedded_hal::pwm::SetDutyCycle;
 use panic_halt as _;
 
-use gd32e2_hal::gpio::GpioExt;
 use gd32e2_hal::pac;
-use gd32e2_hal::rcu::{CFGR, PllFreq, RcuExt};
+use gd32e2_hal::prelude::*;
+use gd32e2_hal::rcu::{CFGR, PllFreq};
 use gd32e2_hal::time::MicrosDuration;
-use gd32e2_hal::timer::TimerExt;
 
 /// Reads taken per measurement, spanning several PWM periods.
 const SAMPLES: u32 = 40_000;

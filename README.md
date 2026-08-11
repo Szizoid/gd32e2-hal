@@ -192,11 +192,15 @@ the counter; `select_edge` changes the edge on a live channel. `into_timer()` /
 `release()` leave the role on `Pwm` and `Capture` alike. Complementary outputs,
 break inputs, dead time and interrupts are not implemented.
 
-**Prelude** (`src/prelude.rs`) — `use gd32e2_hal::prelude::*;` brings in the ext traits
-(`GpioExt`, `RcuExt`, `DmaExt`, `TimerExt`, `AdcExt`), the ecosystem traits whose methods
-the HAL is used through (`embedded-hal`, `embedded-hal-nb`, `embedded-io`), the `fugit`
-suffixes (`500.millis()`, `100.kHz()`) and `nb::block`. Everything is re-exported as `_`,
-so the methods arrive without the names and nothing can collide. Types are not included.
+**Prelude** (`src/prelude.rs`) — split per peripheral: `prelude::gpio` (`GpioExt`,
+`OutputPin` / `InputPin` / `StatefulOutputPin`), `prelude::rcu`, `prelude::dma`,
+`prelude::adc`, `prelude::spi`, `prelude::i2c`, `prelude::timer` (`TimerExt`, `DelayNs`,
+`SetDutyCycle`, `block!`), `prelude::time` (the `fugit` suffixes `500.millis()`,
+`100.kHz()`) and `prelude::usart`, which has `io` and `nb` for the two serial flavours —
+one or the other, since their `read`/`write` land on the same type and two same-named
+traits in scope make the call ambiguous (`E0034`). `use gd32e2_hal::prelude::*;` takes
+everything with `usart::io`; import a submodule instead to narrow it. Traits are
+re-exported as `_`, so the methods arrive without the names; types are not included.
 
 **I²C** (`src/i2c.rs`) — master, blocking, 7-bit addressing, both peripherals;
 **not yet verified on hardware**. `I2c::new(rcu, i2c, sda, scl, &clocks, mode)`
@@ -510,11 +514,15 @@ typestate периферии. Общий супертрейт `DmaPeriph<N>` з�
 `into_timer()` / `release()` выводят из роли и `Pwm`, и `Capture`.
 Комплементарные выходы, break, dead time и прерывания не реализованы.
 
-**Прелюдия** (`src/prelude.rs`) — `use gd32e2_hal::prelude::*;` тянет ext-трейты
-(`GpioExt`, `RcuExt`, `DmaExt`, `TimerExt`, `AdcExt`), трейты экосистемы, чьими методами
-пользуются (`embedded-hal`, `embedded-hal-nb`, `embedded-io`), суффиксы `fugit`
-(`500.millis()`, `100.kHz()`) и `nb::block`. Всё реэкспортировано под `_`: методы
-приезжают, имена нет, конфликтовать нечему. Типы в прелюдию не входят.
+**Прелюдия** (`src/prelude.rs`) — разбита по периферии: `prelude::gpio` (`GpioExt`,
+`OutputPin` / `InputPin` / `StatefulOutputPin`), `prelude::rcu`, `prelude::dma`,
+`prelude::adc`, `prelude::spi`, `prelude::i2c`, `prelude::timer` (`TimerExt`, `DelayNs`,
+`SetDutyCycle`, `block!`), `prelude::time` (суффиксы `fugit`: `500.millis()`,
+`100.kHz()`) и `prelude::usart` с подмодулями `io` и `nb` — один или другой, потому что
+их `read`/`write` живут на одном типе, а два одноимённых трейта в области видимости
+делают вызов неоднозначным (`E0034`). `use gd32e2_hal::prelude::*;` берёт всё вместе с
+`usart::io`; чтобы сузить — импортировать подмодуль. Трейты реэкспортированы под `_`:
+методы приезжают, имена нет. Типы в прелюдию не входят.
 
 **I²C** (`src/i2c.rs`) — мастер, блокирующий, 7-битная адресация, обе периферии;
 **на железе пока не проверен**. `I2c::new(rcu, i2c, sda, scl, &clocks, mode)`

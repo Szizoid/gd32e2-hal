@@ -19,9 +19,9 @@ use defmt_rtt as _;
 use panic_halt as _;
 
 use gd32e2_hal::pac;
-use gd32e2_hal::rcu::{CFGR, PllFreq, RcuExt};
-use gd32e2_hal::time::{ExtU32, MillisDuration, SecsDuration};
-use gd32e2_hal::timer::TimerExt;
+use gd32e2_hal::prelude::*;
+use gd32e2_hal::rcu::{CFGR, PllFreq};
+use gd32e2_hal::time::{MillisDuration, SecsDuration};
 
 /// How many counter readings to log on each pass of the interval.
 const SAMPLES_PER_CYCLE: u8 = 8;

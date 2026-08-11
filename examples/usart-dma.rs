@@ -10,10 +10,10 @@ use cortex_m_rt::entry;
 use defmt_rtt as _;
 use panic_halt as _;
 
-use gd32e2_hal::dma::{DmaExt, Prio};
-use gd32e2_hal::gpio::GpioExt;
+use gd32e2_hal::dma::Prio;
 use gd32e2_hal::pac;
-use gd32e2_hal::rcu::{CFGR, PllFreq, RcuExt};
+use gd32e2_hal::prelude::*;
+use gd32e2_hal::rcu::{CFGR, PllFreq};
 use gd32e2_hal::usart::{Usart, UsartConfig};
 
 /// One second at 48 MHz, so the messages are distinguishable in a terminal.

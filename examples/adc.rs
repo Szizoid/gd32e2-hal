@@ -16,9 +16,9 @@ use defmt_rtt as _;
 use panic_halt as _;
 
 use gd32e2_hal::adc::{Adc, SampTime};
-use gd32e2_hal::gpio::GpioExt;
 use gd32e2_hal::pac;
-use gd32e2_hal::rcu::{AdcPsc, AdcSel, CFGR, Irc28mDiv, PllFreq, RcuExt};
+use gd32e2_hal::prelude::*;
+use gd32e2_hal::rcu::{AdcPsc, AdcSel, CFGR, Irc28mDiv, PllFreq};
 
 #[entry]
 fn main() -> ! {

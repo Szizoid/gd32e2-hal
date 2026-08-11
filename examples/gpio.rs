@@ -22,9 +22,10 @@ use cortex_m_rt::entry;
 use defmt_rtt as _;
 use panic_halt as _;
 
-use gd32e2_hal::gpio::{GpioExt, Pull, Speed};
+use gd32e2_hal::gpio::{Pull, Speed};
 use gd32e2_hal::pac;
-use gd32e2_hal::rcu::{CFGR, PllFreq, RcuExt};
+use gd32e2_hal::prelude::*;
+use gd32e2_hal::rcu::{CFGR, PllFreq};
 
 #[entry]
 fn main() -> ! {

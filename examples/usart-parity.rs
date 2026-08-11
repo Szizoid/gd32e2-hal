@@ -14,12 +14,15 @@
 
 use cortex_m_rt::entry;
 use defmt_rtt as _;
-use embedded_hal_nb::serial::{Read, Write};
 use panic_halt as _;
 
-use gd32e2_hal::gpio::GpioExt;
 use gd32e2_hal::pac;
-use gd32e2_hal::rcu::{CFGR, PllFreq, RcuExt};
+// Per-peripheral imports rather than the whole prelude: the serial traits come
+// from `usart::nb`, and the glob would bring in `usart::io`'s same-named ones.
+use gd32e2_hal::prelude::gpio::*;
+use gd32e2_hal::prelude::rcu::*;
+use gd32e2_hal::prelude::usart::nb::*;
+use gd32e2_hal::rcu::{CFGR, PllFreq};
 use gd32e2_hal::usart::{FrameFormat, Oversampling, Usart, UsartConfig, baud};
 
 #[entry]
@@ -45,11 +48,11 @@ fn main() -> ! {
 
     // Send a few bytes and read each back through the loopback wire.
     for b in *b"HAL" {
-        let _ = nb::block!(usart1.write(b));
+        let _ = block!(usart1.write(b));
         // Spelled out because `Usart` also has an inherent, blocking `flush`,
-        // which would win plain method-call syntax; this is the `nb` one.
-        let _ = nb::block!(embedded_hal_nb::serial::Write::flush(&mut usart1));
-        match nb::block!(usart1.read()) {
+        // which wins plain method-call syntax; this is the `nb` one.
+        let _ = block!(embedded_hal_nb::serial::Write::flush(&mut usart1));
+        match block!(usart1.read()) {
             Ok(echo) if echo == b => defmt::info!("sent {=u8:a}, got it back", b),
             Ok(echo) => defmt::warn!("sent {=u8:#04x}, got {=u8:#04x}", b, echo),
             // A parity error is the interesting case here.
