@@ -4,10 +4,9 @@
 //! NSS (chip select is an ordinary GPIO the caller toggles). Frames are 8 or 16
 //! bits wide, selected by a typestate parameter.
 //!
-//! Every SPI operation is a simultaneous *exchange*: a word leaves on MOSI while
-//! another arrives on MISO. There is no read-only or write-only transfer at the
-//! hardware level, so [`SpiBus::read`] sends zeros and [`SpiBus::write`] discards
-//! what comes back.
+//! Every operation is a simultaneous *exchange* — a word leaves on MOSI while
+//! another arrives on MISO — so [`SpiBus::read`] sends zeros and
+//! [`SpiBus::write`] discards what comes back.
 //!
 //! ```ignore
 //! let sck = parts.pa5.into_alternate::<0>();
@@ -159,9 +158,7 @@ pub struct Word;
 /// An error the peripheral flagged in `STAT`.
 ///
 /// Its own type rather than [`ErrorKind`], which has no variant for a CRC
-/// mismatch and would have to report it as `Other` — indistinguishable from
-/// anything else unclassified. The portable classification is still one
-/// [`kind`] call away.
+/// mismatch; [`kind`] gives the portable classification.
 ///
 /// [`kind`]: embedded_hal::spi::Error::kind
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -196,17 +193,15 @@ impl embedded_hal::spi::Error for Error {
 /// A peripheral that [`Spi`] can drive.
 ///
 /// SPI0 and SPI1 have distinct register block types whose bits do not line up —
-/// frame width is `FF16` in `CTL0` on SPI0, but `DZ` in `CTL1` on SPI1, where
-/// that bit position means something else entirely. A generic bound over a
-/// shared register block is therefore impossible, so this trait abstracts the
-/// peripheral at the *operation* level instead: every register access lives in
-/// the implementations, and [`Spi`] itself never touches a register.
+/// frame width is `FF16` in `CTL0` on SPI0 but `DZ` in `CTL1` on SPI1, where that
+/// position means something else. No generic bound over a shared block is
+/// possible, so this trait abstracts the peripheral at the *operation* level:
+/// every register access lives in the impls, and [`Spi`] touches none.
 pub trait Instance: Enable + Reset {
     /// Writes the full master configuration, leaving the peripheral enabled.
     ///
-    /// `wide` selects the frame width: `false` for 8-bit, `true` for 16-bit.
-    /// Implementations are responsible for whatever else follows from the width
-    /// (on SPI1, the FIFO access size must match it or reception stalls).
+    /// `wide` selects the frame width, and the impl handles what follows from it
+    /// (on SPI1 the FIFO access size must match, or reception stalls).
     fn apply_config(&self, config: SpiConfig, wide: bool);
     /// Transmit buffer empty — ready to accept the next word.
     fn tbe(&self) -> bool;
@@ -369,9 +364,9 @@ where
 {
     /// Enables the peripheral's clock, resets it and configures 8-bit master mode.
     ///
-    /// The pins must already be in the alternate function this SPI uses; the
-    /// bounds reject any other pin at compile time. They are moved in and handed
-    /// back by [`release`](Spi::release).
+    /// The pins must already be in this SPI's alternate function; the bounds
+    /// reject anything else at compile time. [`release`](Spi::release) hands them
+    /// back.
     pub fn new(
         rcu: &mut Rcu,
         spi: SPIX,

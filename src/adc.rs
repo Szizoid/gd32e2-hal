@@ -184,13 +184,12 @@ impl Adc {
     }
     /// Reads the internal temperature sensor, in tenths of a degree Celsius.
     ///
-    /// Scaled against the real supply voltage from [`read_vref`](Self::read_vref)
-    /// rather than a nominal 3.3 V, and computed in fixed point — the sensor's
-    /// slope is not a whole number of mV per degree.
+    /// Scaled against the real supply from [`read_vref`](Self::read_vref) rather
+    /// than a nominal 3.3 V, in fixed point.
     ///
     /// Returns `None` when `CK_ADC` runs too fast for the sensor's minimum
-    /// sampling time: even the longest [`SampTime`] is a fixed number of cycles,
-    /// so above roughly 14 MHz it no longer spans the required 17.1 µs.
+    /// sampling time: [`SampTime`] is counted in cycles, so above roughly 14 MHz
+    /// even the longest no longer spans the required 17.1 µs.
     pub fn read_temperature(&self) -> Option<i32> {
         if !self.sample_time_sufficient() {
             return None;
@@ -207,15 +206,12 @@ impl Adc {
     }
     /// Measures the actual analog supply voltage `VDDA`, in millivolts.
     ///
-    /// The internal reference is a fixed voltage, so its raw code moves only
-    /// because `VDDA` — which is also the ADC's reference — has moved. Comparing
-    /// that code against the factory calibration value stored in flash therefore
-    /// yields the real supply, which is what the other readings should be scaled
-    /// against.
+    /// The internal reference is fixed, so its raw code moves only because `VDDA`
+    /// — the ADC's own reference — moved; comparing it against the factory
+    /// calibration in flash gives the real supply.
     ///
-    /// If that calibration is blank (`0xFFFF` — erased or never programmed, seen
-    /// on some parts), it falls back to the typical VREFINT of ~1.2 V, which is
-    /// less accurate but keeps the reading sane instead of wildly wrong.
+    /// If that calibration is blank (`0xFFFF`, seen on some parts), falls back to
+    /// the typical VREFINT of ~1.2 V: less accurate, but not wildly wrong.
     pub fn read_vref(&self) -> i32 {
         let vrefint_cal = unsafe { core::ptr::read_volatile(VREFINT_CAL_ADDR) };
         let raw = self.with_internal(|s| {

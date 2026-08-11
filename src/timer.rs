@@ -25,13 +25,9 @@ const MAX_COUNT: u32 = 1 << 16;
 
 /// Splits a tick count into the `PSC` and `CAR` values whose cycle spans it.
 ///
-/// The prescaler is kept as small as the counter width allows, leaving the
-/// counter as much of the interval as possible: its step is the resolution
-/// everything built on the core inherits. The division truncates, so the
-/// realised interval is at most one prescaler cycle short of the requested one.
-///
-/// A zero tick count is raised to one — the shortest interval the hardware can
-/// express, since a counter cycle is at least one tick.
+/// The prescaler is kept as small as the counter width allows, since the
+/// counter's step is the resolution everything inherits. Truncating division, so
+/// the interval is at most one prescaler cycle short. Zero is raised to one.
 fn dividers(ticks: u32) -> (u16, u16) {
     let ticks = ticks.max(1);
     let psc = ticks.div_ceil(MAX_COUNT);
@@ -41,15 +37,10 @@ fn dividers(ticks: u32) -> (u16, u16) {
 
 /// Converts an interval of any scale into ticks of `clock`.
 ///
-/// A `Duration` is a plain count whose unit is `NOM / DENOM` seconds, so the
-/// interval in seconds is `as_ticks() * NOM / DENOM` and the tick count follows
-/// by multiplying with the frequency. The division comes last: taking `NOM /
-/// DENOM` first would floor to zero on every scale finer than a second.
-///
-/// Saturates instead of wrapping, both in the product and on the way down to
-/// `u32`. Anything past `u32::MAX` ticks is beyond what the dividers can span
-/// anyway — under a minute at 72 MHz — so the result is the longest interval the
-/// hardware can express.
+/// One `Duration` tick is `NOM / DENOM` seconds, so ticks are
+/// `as_ticks() * NOM * clock / DENOM`. The division comes last, or every scale
+/// finer than a second floors to zero. Saturating throughout: past `u32::MAX`
+/// ticks is beyond what the dividers span anyway.
 fn interval_to_ticks<const NOM: u64, const DENOM: u64>(
     interval: Duration<u32, NOM, DENOM>,
     clock: Hertz,
@@ -61,11 +52,9 @@ fn interval_to_ticks<const NOM: u64, const DENOM: u64>(
 
 /// Converts a tick count of `clock`, divided by `psc`, into a duration.
 ///
-/// The inverse of [`interval_to_ticks`], and saturating for the same reasons:
-/// one tick is `psc + 1` cycles of the clock, so the duration in seconds is
-/// `ticks * (psc + 1) / clock`, and the scale turns that into `DENOM / NOM` of
-/// its own units. The division comes last, in `u64`, or every scale finer than
-/// a second would floor to zero.
+/// The inverse of [`interval_to_ticks`]: one tick is `psc + 1` clock cycles, so
+/// the duration is `ticks * (psc + 1) * DENOM / (clock * NOM)`. Division last,
+/// in `u64`, saturating.
 fn ticks_to_interval<const NOM: u64, const DENOM: u64>(
     ticks: u16,
     psc: u16,
@@ -82,9 +71,8 @@ fn ticks_to_interval<const NOM: u64, const DENOM: u64>(
 
 /// Loads the dividers and sets the counter running.
 ///
-/// Both are written before the counter runs: `UPG` loads them out of their
-/// shadow registers, and the update event it raises is consumed here so the
-/// first wait afterwards sees a real rollover.
+/// `UPG` loads them out of their shadow registers; the update event it raises is
+/// consumed here, so the first wait afterwards sees a real rollover.
 fn start_counter<TIMERX: Instance>(timer: &TIMERX, psc: u16, car: u16) {
     timer.set_psc(psc);
     timer.set_car(car);
@@ -93,10 +81,8 @@ fn start_counter<TIMERX: Instance>(timer: &TIMERX, psc: u16, car: u16) {
     timer.set_cen(true);
 }
 
-/// Blocks until the counter rolls over, then clears the flag it raised.
-///
-/// The counter is left as it was: hardware never clears `UPIF` itself, so the
-/// clear here is what makes the next wait measure a fresh cycle.
+/// Blocks until the counter rolls over, then clears the flag it raised —
+/// hardware never clears `UPIF` itself, so the next wait measures a fresh cycle.
 fn wait_update<TIMERX: Instance>(timer: &TIMERX) {
     while !timer.read_upif() {}
     timer.clear_upif();
@@ -131,11 +117,9 @@ pub trait Instance: Enable + Reset {
     ///
     /// # Safety
     ///
-    /// Ownership of a peripheral is what the whole HAL builds its typestate on:
-    /// one handle means one configuration in flight. A second handle sidesteps
-    /// that, and keeping the two from contradicting each other is on the caller
-    /// — either by handing them disjoint registers, or by never reconfiguring
-    /// the peripheral through both.
+    /// The HAL's typestate rests on one handle meaning one configuration in
+    /// flight. Keeping two handles from contradicting each other is on the
+    /// caller — disjoint registers, or no reconfiguration through both.
     unsafe fn steal(&self) -> Self;
 }
 
@@ -152,12 +136,9 @@ macro_rules! timer_instance {
                 fn read_psc(&self) -> u16 {
                     self.psc().read().psc().bits()
                 }
-                // The `CAR` writer is unsafe on TIMER2 only, where the SVD leaves
-                // the field unconstrained, and safe on the other six. One macro
-                // body serves all of them, so the block is always written and the
-                // lint is silenced for the six that do not need it. Nothing is
-                // actually being asserted here: every `u16` is a legal reload
-                // value in counting mode, zero included.
+                // The `CAR` writer is unsafe on TIMER2 only (unconstrained field
+                // in the SVD), safe on the other six; one macro body serves all.
+                // Every `u16` is a legal reload value in counting mode.
                 #[allow(unused_unsafe)]
                 fn set_car(&self, car: u16) {
                     self.car().write(|w| unsafe { w.car().bits(car) });
@@ -177,10 +158,8 @@ macro_rules! timer_instance {
                 fn read_upif(&self) -> bool {
                     self.intf().read().upif().bit_is_set()
                 }
-                // `INTF` is a flag register where zero clears and one leaves
-                // alone, and its reset value is zero — so `write` would clear
-                // every flag it does not name. `modify` writes the neighbours
-                // back as the ones they were read as, leaving them untouched.
+                // In `INTF` zero clears and one leaves alone, and its reset value
+                // is zero — so `write` would clear every flag it does not name.
                 fn clear_upif(&self) {
                     self.intf().modify(|_, w| w.upif().clear());
                 }
@@ -244,14 +223,10 @@ impl<TIMERX: Instance> Timer<TIMERX> {
     }
     /// Starts the counter, which then rolls over once per `interval`.
     ///
-    /// The interval is taken in whatever scale the caller wrote it in — `5.secs()`,
-    /// `500.millis()`, `100.micros()` all work, with no conversion at the call
-    /// site. The dividers are derived from it against this timer's own clock,
-    /// truncating: the realised interval is at most one prescaler cycle short.
-    ///
-    /// Intervals past what the 16-bit dividers can span (just under a minute at
-    /// 72 MHz) saturate to the longest the hardware can produce, and a zero
-    /// interval becomes a single tick.
+    /// Any scale works with no conversion at the call site — `5.secs()`,
+    /// `500.millis()`, `100.micros()`. Truncating, so the realised interval is at
+    /// most one prescaler cycle short. Intervals past what the 16-bit dividers
+    /// span (just under a minute at 72 MHz) saturate; zero becomes one tick.
     pub fn start_interval<const NOM: u64, const DENOM: u64>(
         self,
         interval: Duration<u32, NOM, DENOM>,
@@ -259,10 +234,8 @@ impl<TIMERX: Instance> Timer<TIMERX> {
         let (psc, car) = dividers(interval_to_ticks(interval, self.clk));
         self.start(psc, car)
     }
-    /// Hands the timer over to blocking delays.
-    ///
-    /// The counter carries no interval of its own afterwards: every
-    /// [`delay`](Delay::delay) sets up its own and tears it down again.
+    /// Hands the timer over to blocking delays; every [`delay`](Delay::delay)
+    /// sets up its own interval and tears it down again.
     pub fn into_delay(self) -> Delay<TIMERX> {
         Delay {
             timer: self.timer,
@@ -271,9 +244,8 @@ impl<TIMERX: Instance> Timer<TIMERX> {
     }
     /// Hands the timer over to PWM and starts it on the given period.
     ///
-    /// The period is the counter cycle every channel of this timer shares, and
-    /// `car + 1` is also the duty resolution the channels get: a larger reload
-    /// buys finer steps at a lower frequency.
+    /// The counter cycle is shared by every channel, and `car + 1` is also their
+    /// duty resolution: a larger reload buys finer steps at a lower frequency.
     pub fn into_pwm(self, psc: u16, car: u16) -> Pwm<TIMERX> {
         start_counter(&self.timer, psc, car);
         Pwm {
@@ -283,10 +255,8 @@ impl<TIMERX: Instance> Timer<TIMERX> {
     }
     /// Hands the timer over to PWM, taking the period as a duration.
     ///
-    /// Splits the period between the dividers the same way
-    /// [`start_interval`](Self::start_interval) does, keeping the reload as
-    /// large as it can — which here is what leaves the duty as many steps as
-    /// possible.
+    /// Splits it like [`start_interval`](Self::start_interval), keeping the
+    /// reload large — here that is what leaves the duty the most steps.
     pub fn into_pwm_interval<const NOM: u64, const DENOM: u64>(
         self,
         interval: Duration<u32, NOM, DENOM>,
@@ -296,11 +266,9 @@ impl<TIMERX: Instance> Timer<TIMERX> {
     }
     /// Sets the counter free running and hands out the input capture role.
     ///
-    /// Only the prescaler is a choice here: it alone sets what one tick costs,
-    /// trading resolution against the longest interval that still fits between
-    /// two rollovers. The reload value is not a choice at all — capture reads
-    /// the counter as a clock rather than a period, so it is pinned to the
-    /// maximum and never reaches the caller.
+    /// Only the prescaler is a choice: it trades resolution against the longest
+    /// interval that still fits between two rollovers. Capture reads the counter
+    /// as a clock rather than a period, so the reload is pinned to the maximum.
     pub fn into_capture(self, psc: u16) -> Capture<TIMERX> {
         start_counter(&self.timer, psc, u16::MAX);
         Capture {
@@ -322,46 +290,33 @@ pub struct CountDownTimer<TIMERX> {
 impl<TIMERX: Instance> CountDownTimer<TIMERX> {
     /// Returns the current counter value, in timer ticks.
     ///
-    /// The counter runs from zero up to the reload value and starts over, so
-    /// the reading only tells where inside the current interval the timer is,
-    /// not how many intervals have passed. One tick lasts `(psc + 1)` cycles
-    /// of the clock feeding the timer.
+    /// Says where inside the current interval the timer is, not how many
+    /// intervals passed. One tick is `psc() + 1` cycles of the timer clock.
     pub fn cnt(&self) -> u16 {
         self.timer.read_cnt()
     }
     /// Returns the value the counter rolls over at, in timer ticks.
     ///
-    /// Read back from the hardware rather than remembered, so it holds whether
-    /// the interval came from [`start_interval`](Timer::start_interval) or from
-    /// a raw [`start`](Timer::start). One full interval is `car() + 1` ticks,
-    /// which is why `cnt()` reaching this value is the last tick before a
-    /// rollover, not the rollover itself.
+    /// Read back from the hardware, so it holds for a raw
+    /// [`start`](Timer::start) too. One interval is `car() + 1` ticks: `cnt()`
+    /// reaching this value is the last tick before a rollover, not the rollover.
     pub fn car(&self) -> u16 {
         self.timer.read_car()
     }
     /// Returns the prescaler the counter is running on.
     ///
-    /// One counter tick lasts `psc() + 1` cycles of the clock feeding the
-    /// timer, which is what turns a [`cnt`](Self::cnt) reading into time.
-    /// Read back from the hardware, so it holds for a raw
-    /// [`start`](Timer::start) as well.
+    /// One tick is `psc() + 1` cycles of the timer clock — what turns a
+    /// [`cnt`](Self::cnt) reading into time. Read back from the hardware.
     pub fn psc(&self) -> u16 {
         self.timer.read_psc()
     }
     /// Returns how far into the current interval the counter is, as a duration.
     ///
-    /// Reads [`cnt`](Self::cnt) and turns it into time, so the result restarts
-    /// from zero at every rollover and never exceeds one interval. Intervals
-    /// themselves are not counted: what has passed since the timer started is
-    /// the caller's to track.
-    ///
-    /// The scale comes from the binding, the same way it is given to
-    /// [`start_interval`](Timer::start_interval): `let t: MillisDuration =
-    /// timer.elapsed();`. Pick it to match the interval — a scale coarser than
-    /// one tick floors to zero, and a scale so fine that the full interval no
-    /// longer fits `u32` saturates instead of wrapping.
-    ///
-    /// Resolution is one timer tick, `psc() + 1` cycles of the timer clock.
+    /// Restarts from zero at every rollover and never exceeds one interval;
+    /// counting intervals is the caller's business. The scale comes from the
+    /// binding (`let t: MillisDuration = timer.elapsed();`) — coarser than one
+    /// tick floors to zero, finer than `u32` spans saturates. Resolution is one
+    /// tick.
     pub fn elapsed<const NOM: u64, const DENOM: u64>(&self) -> Duration<u32, NOM, DENOM> {
         ticks_to_interval(self.cnt(), self.psc(), self.clk)
     }
@@ -393,10 +348,9 @@ impl<TIMERX: Instance> CountDownTimer<TIMERX> {
 
 /// A timer given over to blocking delays.
 ///
-/// Unlike [`CountDownTimer`] this type promises no interval at all: the value
-/// only says which timer the delays run on. Each call configures the dividers,
-/// waits, and stops the counter again, so nothing survives between calls and a
-/// delay can be asked for any length at any time.
+/// Unlike [`CountDownTimer`] it promises no interval: each call configures the
+/// dividers, waits, and stops the counter again, so any length can be asked for
+/// at any time.
 pub struct Delay<TIMERX> {
     timer: TIMERX,
     clk: Hertz,
@@ -433,9 +387,8 @@ impl<TIMERX: Instance> Delay<TIMERX> {
 
 /// A timer running as the period behind one or more PWM channels.
 ///
-/// Owns the counter the channels compare against, which is what keeps the
-/// period in one place: channels carry their own duty, and the frequency they
-/// all run at is set here, once, on the way in.
+/// Owns the counter the channels compare against: channels carry their own duty,
+/// the frequency they all share is set here.
 pub struct Pwm<TIMERX> {
     timer: TIMERX,
     clk: Hertz,
@@ -444,19 +397,13 @@ pub struct Pwm<TIMERX> {
 impl<TIMERX: Instance> Pwm<TIMERX> {
     /// Configures one channel of this timer and hands it out on the given pin.
     ///
-    /// Which channel it is follows from the pin: the silicon routes each pin to
-    /// exactly one channel of one timer, so a pin that reaches this timer at all
-    /// leaves no choice to make. The channel comes out configured but not
-    /// enabled, and with no duty set yet.
+    /// Which channel it is follows from the pin — the silicon routes each pin to
+    /// one channel of one timer. The channel comes out configured but not
+    /// enabled, with no duty set, and holds the pin for as long as it lives.
     ///
-    /// The pin moves in and stays there for as long as the channel lives, which
-    /// is what keeps it from being reconfigured out from under a running output.
-    ///
-    /// Several pins can reach the same channel — `TIMER2` channel 0 answers on
-    /// both `PA6` and `PB4` — and handing over each of them yields two channels
-    /// writing one compare register. Both pins then carry the same signal, which
-    /// is occasionally the point; the duty of one, however, is the duty of the
-    /// other, whichever wrote last.
+    /// Several pins can reach one channel (`TIMER2` channel 0 answers on `PA6`
+    /// and `PB4`), and handing over both yields two channels writing one compare
+    /// register: same signal on both pins, and the last duty written wins.
     pub fn channel<PIN, const C: u8>(&self, pin: PIN) -> PwmChannel<TIMERX, PIN, C>
     where
         PIN: ChannelPin<TIMERX, C>,
@@ -465,8 +412,7 @@ impl<TIMERX: Instance> Pwm<TIMERX> {
         self.timer.apply_pwm_mode();
         PwmChannel {
             // Each channel reaches its own compare register and its own bits of
-            // the shared ones, so the handles this hands out never configure the
-            // same thing twice — the obligation `steal` places on the caller.
+            // the shared ones — the obligation `steal` places on the caller.
             timer: unsafe { self.timer.steal() },
             pin,
         }
@@ -474,23 +420,18 @@ impl<TIMERX: Instance> Pwm<TIMERX> {
 
     /// Changes the period without disturbing the running counter.
     ///
-    /// Channels already handed out keep the duty they were given **in ticks**,
-    /// so a new reload silently moves what fraction of the period that is: half
-    /// of a thousand ticks is all of five hundred. Set the duties again after
-    /// changing the period, or read the new [`max_duty`](PwmChannel::max_duty)
-    /// and scale them.
-    ///
-    /// The prescaler reaches the counter at the next update event, so the
-    /// cycle in flight when this is called still runs on the old one.
+    /// Channels keep the duty they were given **in ticks**, so a new reload moves
+    /// what fraction that is: half of a thousand ticks is all of five hundred.
+    /// Set the duties again, or scale them by the new
+    /// [`max_duty`](PwmChannel::max_duty). The prescaler reaches the counter at
+    /// the next update event, so the cycle in flight runs on the old one.
     pub fn set_period(&self, psc: u16, car: u16) {
         self.timer.set_psc(psc);
         self.timer.set_car(car);
     }
     /// Changes the period, taking it as a duration.
     ///
-    /// Splits it between the dividers exactly as
-    /// [`into_pwm_interval`](Timer::into_pwm_interval) does, keeping the reload
-    /// as large as it fits so the duty keeps as many steps as possible.
+    /// Splits it like [`into_pwm_interval`](Timer::into_pwm_interval).
     pub fn set_period_interval<const NOM: u64, const DENOM: u64>(
         &self,
         interval: Duration<u32, NOM, DENOM>,
@@ -501,10 +442,9 @@ impl<TIMERX: Instance> Pwm<TIMERX> {
 
     /// Halts the counter and takes the timer back out of PWM duty.
     ///
-    /// Channels already handed out keep their stolen handles and their pins, so
-    /// they outlive this and go on reaching the registers. Their outputs hold
-    /// whatever level they were at when the counter stopped, since the pins stay
-    /// driven by the channels rather than reverting.
+    /// Channels keep their stolen handles and pins, so they outlive this and go
+    /// on reaching the registers; their outputs hold the level the counter
+    /// stopped at.
     pub fn into_timer(self) -> Timer<TIMERX> {
         self.timer.set_cen(false);
         Timer {
@@ -524,10 +464,9 @@ where
 {
     /// Lets the channels reach their pins.
     ///
-    /// Timers carrying a `CCHP` register keep their outputs behind this one
-    /// switch, and it starts off: a channel of such a timer stays silent no
-    /// matter how it is configured until this is called. The timers without the
-    /// register have no such gate and need nothing.
+    /// Timers with a `CCHP` register keep their outputs behind this switch, and
+    /// it starts off — such a channel stays silent however it is configured until
+    /// this is called. Timers without the register need nothing.
     pub fn enable_output(&self) {
         self.timer.set_poen(true);
     }
@@ -539,11 +478,9 @@ where
 
 /// A free running timer whose channels timestamp edges on their pins.
 ///
-/// The counter is the time base and nothing else: it runs to `u16::MAX` and
-/// wraps, while each channel latches the count at the moment its edge arrives.
-/// Intervals come out as differences between those latched values, so the role
-/// carries no period of its own — unlike [`CountDownTimer`], where the period
-/// is the whole invariant.
+/// The counter is only a time base: it runs to `u16::MAX` and wraps, while each
+/// channel latches the count when its edge arrives. Intervals are differences
+/// between latched values, so this role carries no period of its own.
 pub struct Capture<TIMERX> {
     timer: TIMERX,
     clk: Hertz,
@@ -552,17 +489,11 @@ pub struct Capture<TIMERX> {
 impl<TIMERX: Instance> Capture<TIMERX> {
     /// Points one channel of this timer at the given pin and hands it out.
     ///
-    /// Which channel it is follows from the pin, exactly as it does for
-    /// [`Pwm::channel`]: the silicon routes each pin to one channel of one
-    /// timer, so nothing is left to choose. The channel comes out configured
-    /// but not enabled, and latches nothing until it is.
-    ///
-    /// The edge is taken here rather than left for later so that a channel is
-    /// never half configured; [`select_edge`](CaptureChannel::select_edge)
-    /// changes it afterwards.
-    ///
-    /// The pin moves in and stays there for as long as the channel lives, which
-    /// is what keeps it from being reconfigured out from under a live capture.
+    /// Which channel it is follows from the pin, as in [`Pwm::channel`]. The
+    /// channel comes out configured but not enabled, latches nothing until it is,
+    /// and holds the pin for as long as it lives. The edge is taken here so a
+    /// channel is never half configured;
+    /// [`select_edge`](CaptureChannel::select_edge) changes it later.
     pub fn channel<PIN, const C: u8>(&self, pin: PIN, edge: Edge) -> CaptureChannel<TIMERX, PIN, C>
     where
         PIN: ChannelPin<TIMERX, C>,
@@ -572,8 +503,7 @@ impl<TIMERX: Instance> Capture<TIMERX> {
         self.timer.select_edge(edge);
         CaptureChannel {
             // Each channel reaches its own capture register and its own bits of
-            // the shared ones, so the handles this hands out never configure the
-            // same thing twice — the obligation `steal` places on the caller.
+            // the shared ones — the obligation `steal` places on the caller.
             timer: unsafe { self.timer.steal() },
             pin,
             clk: self.clk,
@@ -582,9 +512,8 @@ impl<TIMERX: Instance> Capture<TIMERX> {
 
     /// Halts the counter and takes the timer back out of capture duty.
     ///
-    /// Channels already handed out keep their stolen handles and their pins, so
-    /// they outlive this and go on reaching the registers — they simply stop
-    /// latching anything once the counter is halted.
+    /// Channels keep their stolen handles and pins and go on reaching the
+    /// registers; they simply stop latching once the counter is halted.
     pub fn into_timer(self) -> Timer<TIMERX> {
         self.timer.set_cen(false);
         Timer {
@@ -600,12 +529,10 @@ impl<TIMERX: Instance> Capture<TIMERX> {
 
 /// Blocking delays for portable drivers, delegating to [`Delay::delay`].
 ///
-/// The resolution is one timer tick — around 20 ns at 48 MHz — so a request
-/// finer than that is served as a single tick rather than not at all. The
-/// trait's `delay_us` and `delay_ms` are its own defaults, which split long
-/// waits into chunks of at most `u32::MAX` nanoseconds; a chunk that size is
-/// well inside what the dividers can span, so the saturation ceiling of
-/// [`Timer::start_interval`] is never reached through this trait.
+/// Resolution is one timer tick — around 20 ns at 48 MHz — so a finer request is
+/// served as a single tick. `delay_us`/`delay_ms` are the trait's own defaults,
+/// splitting long waits into chunks of at most `u32::MAX` nanoseconds, well
+/// inside what the dividers span.
 impl<TIMERX: Instance> DelayNs for Delay<TIMERX> {
     fn delay_ns(&mut self, ns: u32) {
         self.delay(NanosDuration::from_nanos(ns));
@@ -628,12 +555,10 @@ impl<TIMERX: Instance> TimerExt for TIMERX {
 
 /// The switch turning channel `C` on, whichever direction it points.
 ///
-/// `CHxEN` is one field serving both roles — it releases the output on a
-/// compare channel and arms the latch on a capture one — so it sits above them
-/// rather than being spelled twice. Implemented once per timer and channel that
-/// exist together, which is what makes a channel the hardware does not have
-/// impossible to name: `TIMER13` carries channel 0 alone, `TIMER5` has no
-/// channels at all.
+/// `CHxEN` serves both roles — releases the output on a compare channel, arms
+/// the latch on a capture one — so it sits above them. Implemented only for
+/// timer/channel pairs that exist, so a channel the hardware lacks cannot be
+/// named: `TIMER13` has channel 0 alone, `TIMER5` none at all.
 pub trait ChannelEnable<const C: u8>: Instance {
     /// Enables or disables the channel, leaving its setup in place.
     fn set_chxen(&self, on: bool);
@@ -668,9 +593,8 @@ channel_enable! {
 pub trait PwmOps<const C: u8>: ChannelEnable<C> {
     /// Configures the channel as a PWM output and readies it for a duty value.
     ///
-    /// Covers the whole group of one-time fields at once — direction, compare
-    /// mode and polarity — since a channel set to PWM mode while still pointed
-    /// at its input drives nothing, and the two are only correct together.
+    /// Covers direction, compare mode and polarity at once: a channel in PWM mode
+    /// while still pointed at its input drives nothing.
     fn apply_pwm_mode(&self);
     /// Writes the compare value the channel switches its output at.
     ///
@@ -787,15 +711,13 @@ channel_pins! {
 
 /// One PWM output of a timer, configured and ready to take a duty value.
 ///
-/// Channels of the same timer are independent in everything but the period:
-/// `PSC` and `CAR` belong to the counter they share, so changing the frequency
-/// changes it for all of them at once. Duty is the channel's own.
+/// Channels of one timer share the period (`PSC`/`CAR` belong to their common
+/// counter); duty is the channel's own.
 ///
-/// Each channel carries its own handle to the peripheral, which is what lets
-/// four of them exist while the timer is a single value. Writing a duty touches
-/// only that channel's compare register, but the enables of all channels live in
-/// one register: enabling a channel while another is being enabled elsewhere —
-/// from an interrupt, say — can lose one of the two writes.
+/// Each channel carries its own handle to the peripheral, which is what lets four
+/// of them exist while the timer is a single value. Duties reach separate
+/// registers, but all the enables live in one: enabling a channel while another
+/// is enabled elsewhere — from an interrupt, say — can lose one of the writes.
 pub struct PwmChannel<TIMERX, PIN, const C: u8> {
     timer: TIMERX,
     pin: PIN,
@@ -813,27 +735,25 @@ impl<TIMERX: PwmOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8> PwmChannel<TIME
 
     /// Sets the duty, in timer ticks of the period.
     ///
-    /// The output is active for `cv` ticks out of [`max_duty`](Self::max_duty),
-    /// so zero is a permanently inactive pin and anything from `max_duty` up is
-    /// a permanently active one. The new value reaches the output at the next
-    /// rollover, not mid-period.
+    /// Active for `cv` ticks out of [`max_duty`](Self::max_duty): zero is a
+    /// permanently inactive pin, `max_duty` and above a permanently active one.
+    /// The value reaches the output at the next rollover, not mid-period.
     pub fn set_duty(&self, cv: u16) {
         self.timer.set_chxcv(cv);
     }
     /// Returns the duty that corresponds to a fully active output.
     ///
-    /// This is the period the counter is running on, `car() + 1` ticks, and it
-    /// is also the resolution: a period of 100 ticks leaves 100 distinct duties.
-    /// A period spanning the whole counter reports one tick short, being the
-    /// only value that does not fit `u16`.
+    /// The period the counter runs on, `car() + 1` ticks, which is also the
+    /// resolution. A period spanning the whole counter reports one tick short,
+    /// being the only value that does not fit `u16`.
     pub fn max_duty(&self) -> u16 {
         self.timer.read_car().saturating_add(1)
     }
 
     /// Gives the pin back, dropping the channel.
     ///
-    /// The output is left exactly as it was — still enabled, still driving its
-    /// duty. Call [`disable`](Self::disable) first if the pin is wanted quiet.
+    /// The output is left as it was, still driving its duty; call
+    /// [`disable`](Self::disable) first if the pin is wanted quiet.
     pub fn release(self) -> PIN {
         self.pin
     }
@@ -841,31 +761,28 @@ impl<TIMERX: PwmOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8> PwmChannel<TIME
 
 /// What can go wrong while reading a capture.
 ///
-/// Its own type rather than a bare `Option`: a missing capture and a lost one
-/// are different answers, and only the second means the value in hand is not
-/// the one that was asked for.
+/// Its own type rather than a bare `Option`: a missing capture and a lost one are
+/// different answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
 pub enum Error {
     /// An edge landed on a value that had not been read yet (`CHxOF`).
     ///
-    /// The capture register holds the newer timestamp and the older one is gone,
-    /// so an interval measured across this is wrong rather than merely late.
+    /// The register holds the newer timestamp and the older one is gone, so an
+    /// interval measured across this is wrong rather than merely late.
     Overcapture,
 }
 
 /// One capture input of a timer, configured and ready to be armed.
 ///
-/// Channels of the same timer are independent in everything but the time base:
-/// `PSC` belongs to the counter they share, so what one tick is worth is the
-/// same for all of them. The edge and the latched value are the channel's own.
+/// Channels of one timer share the time base (`PSC` belongs to their common
+/// counter); the edge and the latched value are the channel's own.
 ///
-/// Each channel carries its own handle to the peripheral, which is what lets
-/// four of them exist while the timer is a single value. Latching touches only
-/// that channel's capture register, but the enables of all channels live in one
-/// register: enabling a channel while another is being enabled elsewhere — from
-/// an interrupt, say — can lose one of the two writes.
+/// Each channel carries its own handle to the peripheral, which is what lets four
+/// of them exist while the timer is a single value. Latching reaches separate
+/// registers, but all the enables live in one: enabling a channel while another
+/// is enabled elsewhere — from an interrupt, say — can lose one of the writes.
 pub struct CaptureChannel<TIMERX, PIN, const C: u8> {
     timer: TIMERX,
     pin: PIN,
@@ -886,9 +803,8 @@ impl<TIMERX: CaptureOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8>
 
     /// Changes which edge the channel latches on.
     ///
-    /// Takes effect on the pin as it is called, so an edge arriving during the
-    /// switch belongs to whichever setting won the race. Measurements spanning
-    /// the change should be discarded rather than reasoned about.
+    /// Takes effect immediately, so an edge arriving during the switch belongs to
+    /// whichever setting won the race; discard measurements spanning the change.
     pub fn select_edge(&self, edge: Edge) {
         self.timer.select_edge(edge);
     }
@@ -896,27 +812,24 @@ impl<TIMERX: CaptureOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8>
     /// Takes the timestamp of the last edge, if one has arrived.
     ///
     /// Returns [`WouldBlock`](nb::Error::WouldBlock) while no edge has been
-    /// latched since the previous read, so this can be polled and, wrapped in
-    /// [`nb::block!`], waited on. Both flags are cleared on the way out, which
-    /// is what makes the next call speak about the next edge.
-    ///
-    /// The value is the counter at the moment of the edge, not an interval —
-    /// intervals come from feeding two of these to
-    /// [`interval`](Self::interval).
+    /// latched since the previous read, so it can be polled or waited on with
+    /// [`nb::block!`]. Flags are cleared on the way out. The value is the counter
+    /// at the moment of the edge, not an interval — those come from feeding two
+    /// of these to [`interval`](Self::interval).
     ///
     /// # Errors
     ///
     /// [`Error::Overcapture`] when a further edge arrived before this read: the
-    /// timestamp handed back belongs to the later edge and the earlier one is
-    /// lost. The channel keeps running, so the following read is sound again.
+    /// timestamp belongs to the later edge, the earlier one is lost. The next
+    /// read is sound again.
     pub fn read(&self) -> nb::Result<u16, Error> {
         if !self.timer.read_chxif() {
             return Err(nb::Error::WouldBlock);
         }
         let cv = self.timer.read_chxcv();
         let lost = self.timer.read_chxof();
-        // Hardware only ever raises these flags, so both have to be taken down
-        // here — left standing, `CHxIF` would report the same edge for ever.
+        // Hardware only raises these flags; left standing, `CHxIF` would report
+        // the same edge for ever.
         self.timer.clear_chxif();
         match lost {
             true => {
@@ -929,16 +842,11 @@ impl<TIMERX: CaptureOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8>
 
     /// Converts the span between two timestamps into a duration.
     ///
-    /// Takes them in the order they were captured and counts forward from the
-    /// first, so a counter rollover in between costs nothing — the subtraction
-    /// wraps exactly as the counter does, the reload being the full width of the
-    /// register. Spans longer than one full counter cycle are indistinguishable
-    /// from short ones and come back wrong; keep the prescaler large enough that
-    /// the signal fits.
-    ///
-    /// The scale comes from the binding, as in
-    /// [`elapsed`](CountDownTimer::elapsed): `let t: MicrosDuration =
-    /// channel.interval(first, second);`.
+    /// Takes them in capture order and counts forward from the first, so a
+    /// rollover in between costs nothing — the subtraction wraps exactly as the
+    /// counter does. Spans longer than one counter cycle come back wrong; keep
+    /// the prescaler large enough that the signal fits. The scale comes from the
+    /// binding, as in [`elapsed`](CountDownTimer::elapsed).
     pub fn interval<const NOM: u64, const DENOM: u64>(
         &self,
         from: u16,
@@ -949,8 +857,8 @@ impl<TIMERX: CaptureOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8>
 
     /// Gives the pin back, dropping the channel.
     ///
-    /// The channel is left exactly as it was — still armed if it was armed.
-    /// Call [`disable`](Self::disable) first if it should stop latching.
+    /// Left as it was, still armed if it was armed; call
+    /// [`disable`](Self::disable) first if it should stop latching.
     pub fn release(self) -> PIN {
         self.pin
     }
@@ -966,9 +874,8 @@ impl<TIMERX: PwmOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8> ErrorType
 
 /// Duty control for portable drivers, delegating to [`PwmChannel::set_duty`].
 ///
-/// The trait's `set_duty_cycle_percent`, `_fraction`, `_fully_on` and
-/// `_fully_off` are its own defaults built on these two, and scale against the
-/// period the timer currently runs on.
+/// `set_duty_cycle_percent` and friends are the trait's own defaults over these
+/// two, scaled against the period the timer currently runs on.
 impl<TIMERX: PwmOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8> SetDutyCycle
     for PwmChannel<TIMERX, PIN, C>
 {
@@ -983,12 +890,9 @@ impl<TIMERX: PwmOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8> SetDutyCycle
 
 /// Which edge on the pin makes a channel take its snapshot.
 ///
-/// A runtime value rather than a typestate: the edge changes what the hardware
-/// reacts to on the wire, but no method signature depends on it.
-///
-/// Discriminants are the `CHxP` register encoding. Capturing on both edges is
-/// not offered because the hardware has no such setting — the encoding that
-/// would express it is reserved on every timer of this part.
+/// A runtime value rather than a typestate: no method signature depends on it.
+/// Capturing on both edges is not offered — that encoding is reserved on every
+/// timer of this part.
 #[derive(Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
@@ -999,24 +903,20 @@ pub enum Edge {
 
 /// The input capture half of one channel, numbered by `C` like [`PwmOps`].
 ///
-/// Mirrors the output side: the channel points its pin at the counter instead
-/// of the other way round, and every register difference between timers and
-/// between channels stays inside the implementations.
+/// Mirrors the output side, with the register differences between timers and
+/// channels kept inside the implementations.
 pub trait CaptureOps<const C: u8>: ChannelEnable<C> {
     /// Points the channel at its pin and readies it to latch the counter.
     ///
-    /// Covers the one-time fields as a group — direction plus the input filter
-    /// and the capture prescaler — for the same reason the output side does: a
-    /// channel left pointing at its comparator captures nothing, and the fields
-    /// are only correct together.
+    /// Covers direction, input filter and capture prescaler at once: a channel
+    /// still pointing at its comparator captures nothing.
     fn apply_capture_mode(&self);
     /// Chooses the edge the channel takes its snapshot on.
     fn select_edge(&self, edge: Edge);
     /// Reads the counter value the last edge latched.
     ///
-    /// Says nothing about whether an edge ever arrived: the register holds
-    /// whatever it held before, so the value only means something once
-    /// [`read_chxif`](CaptureOps::read_chxif) has confirmed a capture.
+    /// Says nothing about whether an edge arrived — the value means something
+    /// only once [`read_chxif`](CaptureOps::read_chxif) confirms a capture.
     fn read_chxcv(&self) -> u16;
     /// Capture flag — set by hardware on every capture, never cleared by it.
     fn read_chxif(&self) -> bool;
@@ -1036,9 +936,8 @@ macro_rules! capture {
     } => {
         $($(impl CaptureOps<$Ch> for $Timer {
             fn apply_capture_mode(&self) {
-                // `CHxNP` is only present on the channels that have a
-                // complementary output — channel 3 has neither, and there the
-                // bit the table pairs with `CHxP` is simply hardwired to zero.
+                // `CHxNP` exists only on channels with a complementary output;
+                // channel 3 has neither.
                 $(self.chctl2().modify(|_, w| w.$chnp().not_inverted());)?
                 self.$chctl_reg().modify(|_, w| {
                     w.$chms()

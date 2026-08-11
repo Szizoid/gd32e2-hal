@@ -59,6 +59,7 @@ pub mod adc;
 pub mod dma;
 pub mod gpio;
 pub mod i2c;
+pub mod prelude;
 pub mod rcu;
 pub mod spi;
 pub mod time;

@@ -15,13 +15,11 @@
 //! let tx = parts.pa9.into_alternate::<1>();
 //! ```
 //!
-//! Two modes are special. `PA13`/`PA14` start as [`Debugger`] rather than as
-//! inputs, because after reset they really are wired to SWD; using them for
-//! anything else goes through a separate `activate_into_*()` family, named so
-//! that giving up debug access cannot happen by accident.
-//! And [`Pin::lock`] freezes a pin's configuration until the next chip reset,
-//! which the type reflects as [`Locked`] — with no way back, since the hardware
-//! has none either.
+//! Two modes are special. `PA13`/`PA14` start as [`Debugger`], since after reset
+//! they really are wired to SWD; leaving that goes through the separate
+//! `activate_into_*()` family. [`Pin::lock`] freezes a configuration until the
+//! next chip reset, which the type reflects as [`Locked`] — with no way back,
+//! since the hardware has none either.
 
 use core::convert::Infallible;
 use core::marker::PhantomData;
@@ -54,11 +52,9 @@ pub struct Analog;
 /// Mode: alternate function `AF`, routing the pin to a peripheral, driven as
 /// `OTYPE` ([`PushPull`] or [`OpenDrain`]).
 ///
-/// The output type stays part of the mode because some peripherals only work
-/// with one of them: I²C drives both of its lines open-drain, and a push-pull
-/// pin there would fight whoever else is pulling the line low. Drivers bind
-/// their pins to the type they need, so the wrong one does not compile.
-/// It defaults to [`PushPull`], which is what every other peripheral wants.
+/// The output type is part of the mode because some peripherals accept only one:
+/// I²C needs open-drain lines, and a push-pull pin there fights whoever pulls the
+/// line low. Drivers bind to the type they need. Defaults to [`PushPull`].
 pub struct Alternate<const AF: u8, OTYPE = PushPull> {
     _otype: PhantomData<OTYPE>,
 }
@@ -115,14 +111,10 @@ impl Port {
 
 /// A pin whose identity has moved into runtime values, keeping its mode.
 ///
-/// Port and number become fields, which is what lets pins of different ports and
-/// numbers share a type and sit in one array or slice. `MODE` stays a type
-/// parameter, so nothing about what the pin can do is given up: an
-/// `ErasedPin<Input>` still has no `set_high`.
-///
-/// The trade is identity for uniformity, and it only goes one way — the compile
-/// time checks that depend on knowing the exact pin have already been made by
-/// the time a pin is erased.
+/// Port and number become fields, so pins of different ports share a type and fit
+/// in one array. `MODE` stays a type parameter — an `ErasedPin<Input>` still has
+/// no `set_high`. One-way: the checks that need the exact pin have already run by
+/// the time it is erased.
 pub struct ErasedPin<MODE> {
     port: Port,
     number: u8,
@@ -165,17 +157,15 @@ macro_rules! pin_af {
     };
 }
 
-// AF map from datasheet Table 2-13/2-14 (die-level). The table carries three
-// footnotes marking functions that exist only on some variants of the series:
+// AF map from datasheet Table 2-13/2-14 (die-level), whose footnotes mark
+// functions present on some variants only:
 //   (1) GD32E230x4 only          -> feature `gd32e230x4`
 //   (2) GD32E230x8/6             -> features `gd32e230x6` + `gd32e230x8`
 //   (3) GD32E230x8 only          -> feature `gd32e230x8`
-// Entries whose AF number exists on every variant live in the common block
-// below, even when the *function* behind it differs per variant (e.g. PA2 AF1
-// is USART0_TX on x4 but USART1_TX on x8) — `ValidAf` only gates the number.
-// The AF numbers that exist on some variants only are added by the gated
-// blocks that follow. Which peripheral a pin belongs to is decided separately,
-// by `usart_pins!` / `spi_pins!`, which are gated the same way.
+// AF numbers that exist on every variant live in the common block below, even
+// where the function behind them differs (PA2 AF1 is USART0_TX on x4, USART1_TX
+// on x8) — `ValidAf` gates the number alone. Which peripheral a pin belongs to is
+// decided by `usart_pins!` / `spi_pins!` / `i2c_pins!`, gated the same way.
 pin_af! {
     // ---- Port A ----
     'A' 0  => [1, 7],                // 1:USART0_CTS(1)/USART1_CTS(2) 7:CMP_OUT
@@ -340,10 +330,9 @@ impl<const P: char, const N: u8> Pin<P, N, Debugger> {
     }
 }
 
-// State access takes the identity as arguments rather than reading it off a
-// type, so that `Pin` and `ErasedPin` share one body apiece: the first passes
-// constants, the second its fields, and neither calls the other. Configuration
-// helpers stay methods on `Pin` — an erased pin has no use for them.
+// State access takes the identity as arguments so `Pin` and `ErasedPin` share one
+// body apiece — the first passes constants, the second its fields. Configuration
+// helpers stay methods on `Pin`; an erased pin has no use for them.
 fn reg(port: Port) -> &'static pac::gpioa::RegisterBlock {
     let ptr = match port {
         Port::A => pac::Gpioa::ptr(),
@@ -401,9 +390,8 @@ impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
 }
 
 // The register writers sit in the unbounded block, not with the `into_*` that
-// call them: `Debugger` is deliberately not `Active`, yet leaving that mode is
-// itself a mode write, and a method in the bounded block cannot be reached from
-// one outside it.
+// call them: `Debugger` is not `Active`, yet leaving that mode is itself a mode
+// write, and the bounded block is invisible from outside it.
 impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
     fn set_mode(&self, mode: u32) {
         let offset = N * 2;
@@ -516,9 +504,8 @@ where
     /// Routes the pin to a peripheral through alternate function `AF`, driven
     /// push-pull.
     ///
-    /// Only numbers this pin actually has will compile — see [`ValidAf`]. The
-    /// number stays in the returned type, so a driver can demand the exact
-    /// function it needs.
+    /// Only numbers this pin has will compile — see [`ValidAf`] — and the number
+    /// stays in the returned type, so a driver can demand the exact function.
     pub fn into_alternate<const AF: u8>(self) -> Pin<P, N, Alternate<AF>>
     where
         Self: ValidAf<AF>,
@@ -526,10 +513,8 @@ where
         self.set_alternate(AF as u32, OMODE_PUSH_PULL);
         Pin { _mode: PhantomData }
     }
-    /// Same, but leaves the pin open-drain, as I²C requires.
-    ///
-    /// The output type is part of the mode, so a driver that must have it —
-    /// [`I2c`](crate::i2c::I2c) — accepts only pins that went through here.
+    /// Same, but leaves the pin open-drain: [`I2c`](crate::i2c::I2c) accepts only
+    /// pins that went through here.
     pub fn into_alternate_open_drain<const AF: u8>(self) -> Pin<P, N, Alternate<AF, OpenDrain>>
     where
         Self: ValidAf<AF>,
@@ -539,10 +524,10 @@ where
     }
     /// Freezes the pin's configuration until the next chip reset.
     ///
-    /// Mode, pull, output type, speed and alternate function all stop responding
-    /// to writes. There is no way to undo this, in hardware or in the type: the
-    /// returned [`Locked`] pin can still be read and written, but never
-    /// reconfigured. Only available on ports that have a `LOCK` register.
+    /// Mode, pull, output type, speed and alternate function stop responding to
+    /// writes, with no way back in hardware or in the type: a [`Locked`] pin is
+    /// still read and written, never reconfigured. Ports with a `LOCK` register
+    /// only.
     pub fn lock(self) -> Pin<P, N, Locked<MODE>>
     where
         Self: HasLock,
@@ -558,14 +543,10 @@ where
     }
     /// Moves the pin's identity into runtime values, keeping its mode.
     ///
-    /// Trades knowing which pin this is for a type shared with every other
-    /// erased pin, so that pins can be collected into an array or a slice. The
-    /// configuration is untouched — nothing is written, the pin goes on doing
-    /// what it did.
-    ///
-    /// One way only: recovering `Pin<'A', 5, _>` would mean checking the fields
-    /// at runtime, and a constructor returning `Option` gives back nothing the
-    /// erased pin cannot already do.
+    /// Trades knowing which pin this is for a type shared with every other erased
+    /// pin, so they can be collected into an array. Nothing is written; the
+    /// configuration stands. One way only — recovering `Pin<'A', 5, _>` would be
+    /// a runtime check returning `Option`, which buys nothing.
     pub fn erase(self) -> ErasedPin<MODE> {
         ErasedPin {
             port: Port::from_char(P),
@@ -624,8 +605,8 @@ impl<const P: char, const N: u8> Pin<P, N, Input> {
 impl<const P: char, const N: u8> Pin<P, N, Output<OpenDrain>> {
     /// Returns whether the wire reads high.
     ///
-    /// Open-drain can only pull low, so this reports the actual line level —
-    /// which another device on a shared bus may be holding down against us.
+    /// Open-drain can only pull low, so this is the actual line level, which
+    /// another device on a shared bus may be holding down.
     pub fn is_high(&self) -> bool {
         self.read_pin()
     }
@@ -686,8 +667,8 @@ impl ErasedPin<Input> {
 impl ErasedPin<Output<OpenDrain>> {
     /// Returns whether the wire reads high.
     ///
-    /// Open-drain can only pull low, so this reports the actual line level —
-    /// which another device on a shared bus may be holding down against us.
+    /// Open-drain can only pull low, so this is the actual line level, which
+    /// another device on a shared bus may be holding down.
     pub fn is_high(&self) -> bool {
         read_pin(self.port, self.number)
     }
@@ -892,8 +873,7 @@ pub trait GpioExt {
 
     /// Enables the port's clock and returns its pins.
     ///
-    /// Consumes the port, so its pins can only be obtained once — that is what
-    /// keeps two parts of a program from configuring the same pin.
+    /// Consumes the port, so its pins can only be obtained once.
     fn split(self, rcu: &mut Rcu) -> Self::Parts;
 }
 

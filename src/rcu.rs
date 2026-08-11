@@ -40,10 +40,9 @@ const WS2_MAX_HCLK: u32 = 72_000_000;
 
 /// Target system clock produced by the PLL, in 4 MHz steps up to the 72 MHz limit.
 ///
-/// Named by the resulting frequency rather than the multiplier because the PLL
-/// source is fixed (IRC8M/2 = 4 MHz), so the two map one-to-one. Only reachable
-/// frequencies exist as variants, which makes an impossible request a compile
-/// error instead of a silently rounded one.
+/// Named by frequency rather than multiplier: the PLL source is fixed
+/// (IRC8M/2 = 4 MHz), so the two map one-to-one. Only reachable frequencies
+/// exist, so an impossible request is a compile error, not a silent rounding.
 #[derive(Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
@@ -69,9 +68,8 @@ pub enum PllFreq {
 
 /// AHB prescaler: divides the system clock down to `hclk`.
 ///
-/// Named by the divider, not the resulting frequency, because the source
-/// (`sysclk`) varies with configuration. Division can't exceed the source, so
-/// every variant is legal at any `sysclk`.
+/// Named by the divider, not the resulting frequency, because `sysclk` varies
+/// with configuration; every variant is legal at any `sysclk`.
 #[derive(Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
@@ -505,12 +503,8 @@ pub struct Rcu {
 impl Rcu {
     /// Routes an internal clock node out onto `PA8` (AF0) or `PA9` (AF5).
     ///
-    /// The pin still has to be put into the matching alternate function. With no
-    /// debug probe on this board, this is the only way to measure a real clock
-    /// frequency with a scope or logic analyser.
-    ///
-    /// Unlike the [`CFGR`] settings this is applied immediately and not recorded
-    /// in [`Clocks`] — nothing else needs to know about it afterwards.
+    /// The pin still has to be put into the matching alternate function. Applied
+    /// immediately and not recorded in [`Clocks`] — nothing else needs it.
     pub fn ck_out(&mut self, src: CkOutSrc, div: CkOutDiv) {
         self.rcu.cfg0().modify(|_, w| {
             let w = match div {

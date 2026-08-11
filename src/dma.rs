@@ -13,10 +13,9 @@
 //! a channel cannot be driving two transfers at once.
 //!
 //! Channels share a register block but not registers: each touches only its own
-//! `CHxCTL`/`CHxCNT`/`CHxPADDR`/`CHxMADDR`, which the channel number in the type
-//! guarantees. The two genuinely shared registers stay safe by construction —
-//! `INTF` is only ever read, and `INTC` is write-one-to-clear, so a channel
-//! clearing its own flags cannot disturb another's.
+//! `CHxCTL`/`CHxCNT`/`CHxPADDR`/`CHxMADDR`. Of the two shared ones, `INTF` is
+//! only read and `INTC` is write-one-to-clear, so a channel clearing its own
+//! flags cannot disturb another's.
 
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
@@ -96,9 +95,8 @@ macro_rules! channels {
                 /// priority, memory increment on, peripheral increment off, and
                 /// M2M/circular/interrupts off.
                 ///
-                /// A single `write` (not `modify`) so unmentioned fields reset to
-                /// zero — this clears any leftover bits when a channel is reused,
-                /// and must run while `CHEN` is 0 (before the channel is enabled).
+                /// A `write`, not a `modify`, so leftover bits from an earlier use
+                /// reset to zero. Must run while `CHEN` is 0.
                 fn configure(&mut self, dir: Dir, width: Width, prio: Prio) {
                     self.reg().$ctl().write(|w| {
                         let w = w.pnaga()
@@ -162,9 +160,8 @@ macro_rules! channels {
                 }
                 /// Clears every interrupt flag of this channel.
                 ///
-                /// `INTC` is write-one-to-clear, so writing zeroes into the other
-                /// channels' bits leaves them alone — this must never become a
-                /// `modify`, which would read and write back their flags too.
+                /// `INTC` is write-one-to-clear, so zeroes leave the other
+                /// channels' bits alone. Never make this a `modify`.
                 fn clear_flags(&mut self) {
                     self.reg().intc().write(|w| w.$gifc().set_bit());
                 }
@@ -202,15 +199,13 @@ impl DmaWord for u32 {
 
 /// Everything a channel needs from the peripheral on the other end of it.
 ///
-/// Split out from [`DmaSrc`]/[`DmaDst`] because both roles need exactly the same
-/// things, and duplicating them would mean [`Transfer::wait`] — which cannot know
-/// which of the two started it — had no single trait to call them through.
+/// Split out from [`DmaSrc`]/[`DmaDst`] because both roles need the same things,
+/// and [`Transfer::wait`] cannot know which of the two started it.
 ///
-/// The channel number is what makes one impl per role unambiguous: a peripheral
-/// serving both directions reaches them over different channels and gates them
-/// with different bits, so `DmaPeriph<1> for Usart0` drives `DENT` while
-/// `DmaPeriph<2> for Usart0` drives `DENR`, with no impl having to decide at
-/// runtime which one it is.
+/// The channel number keeps one impl per role unambiguous: a peripheral serving
+/// both directions reaches them over different channels, so `DmaPeriph<1> for
+/// Usart0` drives `DENT` and `DmaPeriph<2> for Usart0` drives `DENR`, with
+/// nothing decided at runtime.
 pub trait DmaPeriph<const N: u8> {
     /// The word type this peripheral transfers, fixing `PWIDTH`/`MWIDTH`.
     type Word: DmaWord;
@@ -240,12 +235,11 @@ pub trait DmaSrc<const N: u8>: DmaPeriph<N> {}
 /// The counterpart of [`DmaSrc`]; see there for why the channel is fixed.
 pub trait DmaDst<const N: u8>: DmaPeriph<N> {}
 
-// Request mapping, Table 8-3. Entries marked (1) apply while the corresponding
-// remap bit in SYSCFG_CFG0 is clear — the state after reset — and (2) while it
-// is set. Only the (1) mapping is implemented below: the two are mutually
-// exclusive at runtime, so implementing both would make either choice compile
-// while only one of them is actually wired. Peripherals without a HAL module
-// are listed for completeness only.
+// Request mapping, Table 8-3. Entries marked (1) apply while the SYSCFG_CFG0
+// remap bit is clear (the reset state), (2) while it is set. Only (1) is
+// implemented: the two are mutually exclusive at runtime, so implementing both
+// would let either choice compile while one is wired. Peripherals without a HAL
+// module are listed for completeness.
 //
 //   Ch0: ADC(1), TIMER16_CH0(1), TIMER16_UP(1)
 //   Ch1: ADC(2), SPI/I2S0_RX, USART0_TX(1), I2C0_TX, TIMER0_CH0, TIMER2_CH2,
@@ -313,9 +307,9 @@ where
 {
     /// Starts a memory-to-peripheral transfer, moving `buf` into `periph`.
     ///
-    /// Takes the channel, `periph` and `buf` by value; none of the three are
-    /// accessible again until [`Transfer::wait`] returns them. The transfer
-    /// width follows from the peripheral's word type, so `buf` must match it.
+    /// All three are taken by value and come back from [`Transfer::wait`]. The
+    /// transfer width follows from the peripheral's word type, so `buf` must
+    /// match it.
     pub fn write_to<P: DmaDst<N>>(
         mut self,
         mut periph: P,
@@ -336,8 +330,7 @@ where
     }
     /// Starts a peripheral-to-memory transfer, filling `buf` from `periph`.
     ///
-    /// Takes the channel, `periph` and `buf` by value; none of the three are
-    /// accessible again until [`Transfer::wait`] returns them — in particular,
+    /// All three are taken by value and come back from [`Transfer::wait`], so
     /// `buf` cannot be read before the transfer completes. The transfer width
     /// follows from the peripheral's word type, so `buf` must match it.
     pub fn read_from<P: DmaSrc<N>>(
@@ -366,12 +359,9 @@ where
 /// Owns the channel, the peripheral and the buffer for as long as the transfer
 /// runs; [`wait`](Transfer::wait) is the only way to get them back.
 ///
-/// Dropping instead of waiting stops the transfer: the request line goes down
-/// and the channel is disabled, so the hardware is not left writing into a
-/// buffer nobody is watching. The three owned parts are lost in that case.
-// The bounds sit on the declaration only because `Drop` demands it — a `Drop`
-// impl may not require more than the type it drops, or values would exist that
-// nothing could drop.
+/// Dropping instead of waiting stops the transfer and loses all three parts.
+// The bounds sit on the declaration only because `Drop` demands it: a `Drop` impl
+// may not require more than the type it drops.
 #[allow(private_bounds)]
 pub struct Transfer<const N: u8, P, BUF>
 where
@@ -415,22 +405,19 @@ where
     }
     /// How many transfers the channel has left, without waiting for it.
     ///
-    /// Counts transfers, not bytes: at [`Width::Bits16`] every unit here is two
-    /// bytes on the wire. Subtract from the buffer length to get progress.
-    ///
-    /// A snapshot only — the hardware keeps counting down while the caller looks
-    /// at the returned value, so it is good for diagnostics and progress, not for
-    /// deciding that a particular part of the buffer is now safe to touch.
+    /// Counts transfers, not bytes: at [`Width::Bits16`] a unit is two bytes on
+    /// the wire. A snapshot only — the hardware keeps counting while the caller
+    /// looks at it, so it serves progress reporting, not deciding that part of
+    /// the buffer is safe to touch.
     pub fn remaining(&self) -> u16 {
         self.channel.cnt()
     }
     /// Whether the channel has raised `ERRIF`, having hit a bus error.
     ///
-    /// Diagnostics rather than a check anyone is obliged to make: every address a
-    /// channel can be given through this API comes from a typed source, so there
-    /// is no safe way to aim it at memory that would fault. Offered because a
-    /// caller watching a live transfer through [`remaining`](Transfer::remaining)
-    /// should be able to tell a stalled channel from a failed one.
+    /// Diagnostics, not an obligation: every address this API can hand a channel
+    /// comes from a typed source, so nothing safe aims it at memory that faults.
+    /// Useful next to [`remaining`](Transfer::remaining) to tell a stalled
+    /// channel from a failed one.
     pub fn is_error(&self) -> bool {
         self.channel.is_error()
     }
@@ -444,10 +431,9 @@ where
 {
     /// Stops the transfer where it stands, without waiting for it to finish.
     ///
-    /// Takes the same steps as the tail of [`wait`](Transfer::wait) but never
-    /// blocks: a running channel is cut off mid-buffer. Correctness never rested
-    /// on this running — the buffer is `'static`, so a channel left writing would
-    /// only be wasteful, and `Drop` is not guaranteed to run in any case.
+    /// The tail of [`wait`](Transfer::wait) without the blocking: a running
+    /// channel is cut off mid-buffer. Correctness never rested on this — the
+    /// buffer is `'static`, and `Drop` is not guaranteed to run anyway.
     fn drop(&mut self) {
         self.periph.disable_dma();
         self.channel.set_enabled(false);

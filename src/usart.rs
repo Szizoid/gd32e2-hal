@@ -71,9 +71,8 @@ usart_pins! {
 /// Supplies the clock frequency feeding a given USART.
 ///
 /// USART0 can be reclocked away from its bus (see
-/// [`Usart0Sel`](crate::rcu::Usart0Sel)) while USART1 always runs off APB1.
-/// Resolving that per peripheral type keeps the baud divisor from ever being
-/// computed against the wrong frequency.
+/// [`Usart0Sel`](crate::rcu::Usart0Sel)), USART1 always runs off APB1. Resolving
+/// it per peripheral type keeps the baud divisor off the wrong frequency.
 pub trait BusClocks {
     /// Returns the frequency actually clocking this USART.
     fn clock(clocks: &Clocks) -> Hertz;
@@ -129,14 +128,11 @@ pub enum Oversampling {
 
 /// Word length and parity, as a single setting.
 ///
-/// Named for how the frame appears to the caller rather than for the register
-/// bits: `E7`/`O7` leave only 7 real data bits, because parity replaces the top
-/// bit of the byte, while `E8`/`O8` keep all 8 by widening the frame to 9 bits
-/// and putting parity in the extra one. There is no `N7` — without parity a
-/// frame always carries the full 8 bits, which is `N8`.
-///
-/// For raw 9-bit words with no parity, see [`Usart::new_word`], which moves
-/// `u16` rather than `u8`.
+/// Named for the frame as the caller sees it, not for the register bits:
+/// `E7`/`O7` leave 7 data bits because parity replaces the top one, `E8`/`O8`
+/// keep all 8 by widening the frame to 9 bits. No `N7` exists — without parity a
+/// frame carries the full 8 bits, which is `N8`. For raw 9-bit words see
+/// [`Usart::new_word`].
 #[derive(Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum FrameFormat {
@@ -266,12 +262,11 @@ pub struct Word;
 
 /// A line error the receiver reported for one frame.
 ///
-/// Its own type rather than a foreign `ErrorKind` so that what the `STAT`
-/// register distinguishes stays distinguishable; the portable classifications
-/// are still one `kind` call away, one per ecosystem —
-/// [`embedded_hal_nb::serial::Error::kind`] and [`embedded_io::Error::kind`].
-/// Both are lossy on purpose: neither foreign enum has a variant for every
-/// line condition this one names.
+/// Its own type rather than a foreign `ErrorKind`, so what `STAT` distinguishes
+/// stays distinguishable. The portable classifications are one `kind` call away
+/// per ecosystem ([`embedded_hal_nb::serial::Error::kind`],
+/// [`embedded_io::Error::kind`]), both lossy — neither has a variant for every
+/// line condition named here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
@@ -387,12 +382,9 @@ where
     }
     /// Blocks until everything handed to the peripheral has left the wire.
     ///
-    /// Waits for `TC`, not `TBE`: the latter only reports that `TDATA` was
-    /// copied into the shift register, while the byte is still being clocked
-    /// out. Call this before cutting power to a transceiver or sleeping, or the
-    /// last frame is truncated mid-flight.
-    ///
-    /// Cannot fail — transmission has no error conditions.
+    /// Waits for `TC`, not `TBE` — the latter only says `TDATA` reached the shift
+    /// register while the byte is still being clocked out. Call this before
+    /// cutting power to a transceiver or sleeping. Cannot fail.
     pub fn flush(&self) {
         self.wait_tc();
     }
@@ -429,9 +421,8 @@ where
     }
     /// Sends every byte of `buf`, blocking until the last one is handed over.
     ///
-    /// Returning does not mean the buffer has left the wire — for that, see
-    /// [`flush`](Usart::flush). Cannot fail: transmission has no error
-    /// conditions.
+    /// Returning does not mean the buffer has left the wire — for that see
+    /// [`flush`](Usart::flush). Cannot fail.
     pub fn write_bytes(&self, buf: &[u8]) {
         for &byte in buf {
             self.write_byte(byte);
@@ -452,12 +443,10 @@ where
     /// Receives into `buf` and returns how many bytes were placed there.
     ///
     /// Blocks until at least one byte arrives, then takes whatever else is
-    /// already waiting and returns — it deliberately does *not* wait for `buf`
-    /// to fill. A peer that sends a short command and then waits for the answer
-    /// would otherwise deadlock this call. Returns `0` only for an empty `buf`.
-    ///
-    /// A line error ends the call immediately; bytes copied before it are
-    /// unreachable, since the count is not reported alongside an error.
+    /// waiting and returns — it does *not* wait for `buf` to fill, which would
+    /// deadlock against a peer waiting for its answer. Returns `0` only for an
+    /// empty `buf`. A line error ends the call at once, losing the bytes copied
+    /// before it: the count is not reported alongside an error.
     pub fn read_bytes(&self, buf: &mut [u8]) -> Result<usize, Error> {
         if buf.is_empty() {
             return Ok(0);
@@ -480,10 +469,9 @@ where
 {
     /// Enables the peripheral's clock, resets it and configures 8-bit words.
     ///
-    /// The pins must already be in the alternate function this USART uses; the
-    /// bounds reject any other pin at compile time. They are moved in and handed
-    /// back by [`release`](Usart::release). `clocks` supplies the frequency the
-    /// baud divisor is computed from.
+    /// The pins must already be in this USART's alternate function; the bounds
+    /// reject anything else at compile time. [`release`](Usart::release) hands
+    /// them back. `clocks` supplies the frequency the baud divisor comes from.
     pub fn new(
         rcu: &mut Rcu,
         usart: USARTX,
@@ -527,9 +515,8 @@ where
     }
     /// Sends every word of `buf`, blocking until the last one is handed over.
     ///
-    /// Returning does not mean the buffer has left the wire — for that, see
-    /// [`flush`](Usart::flush). Cannot fail: transmission has no error
-    /// conditions.
+    /// Returning does not mean the buffer has left the wire — for that see
+    /// [`flush`](Usart::flush). Cannot fail.
     pub fn write_words(&self, buf: &[u16]) {
         for &word in buf {
             self.write_word(word);
