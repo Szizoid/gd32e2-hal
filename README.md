@@ -12,9 +12,11 @@ Rust from scratch on top of the [`gd32e2`](https://crates.io/crates/gd32e2) PAC.
 > ⚠️ **Work in progress.** Written by hand, incrementally; the API is unstable.
 > The package is a library (`src/lib.rs` → `adc`, `dma`, `gpio`, `i2c`, `prelude`,
 > `rcu`, `spi`, `time`, `timer`, `usart`) plus on-hardware binaries in `examples/`.
-> All 14 examples have been flashed and verified on the board — RCU, GPIO, USART
-> (8/9-bit and parity), SPI0/SPI1, ADC, a one-shot DMA transfer, TIMER, blocking
-> delays, PWM, input capture, RTT. I²C has no example yet.
+> 14 of the 15 examples have been flashed and verified on the board — RCU, GPIO,
+> USART (8/9-bit and parity), SPI0/SPI1, ADC, a one-shot DMA transfer, TIMER,
+> blocking delays, PWM, input capture, RTT. `examples/i2c.rs` is the exception:
+> this board has no I²C wiring, so it has never run. If you try it, please
+> [report what happened](https://github.com/Szizoid/gd32e2-hal/issues).
 
 ### Principles
 
@@ -215,7 +217,9 @@ its `transaction` merges adjacent operations of one direction and panics if a
 `Read` is not last. Errors are `i2c::Error`, one variant per `STAT0` flag, with
 `NoAcknowledge` carrying the source. A too-slow `pclk1` or an unreachable
 frequency panics in the constructor. 10-bit addressing, SMBus, slave mode and
-DMA are not implemented.
+DMA are not implemented. `examples/i2c.rs` scans the bus and reads a register
+from the first device that answers; it needs external pull-ups and has never
+been run — [results welcome](https://github.com/Szizoid/gd32e2-hal/issues).
 
 ### Usage
 
@@ -334,10 +338,12 @@ HAL для микроконтроллера **GD32E230K8U6** (Cortex-M23), на�
 
 > ⚠️ **Работа в процессе.** Пишется вручную и постепенно; API нестабилен. Пакет —
 > библиотека (`src/lib.rs` → `adc`, `dma`, `gpio`, `i2c`, `prelude`, `rcu`, `spi`, `time`,
-> `timer`, `usart`) плюс тестовые бинарники на железо в `examples/`. Все 14
-> примеров прошиты и проверены на плате — RCU, GPIO, USART (8/9-бит и чётность),
-> SPI0/SPI1, ADC, разовая передача по DMA, TIMER, блокирующие задержки, PWM,
-> input capture, RTT. У I²C примера пока нет.
+> `timer`, `usart`) плюс тестовые бинарники на железо в `examples/`. Из 15
+> примеров 14 прошиты и проверены на плате — RCU, GPIO, USART (8/9-бит и
+> чётность), SPI0/SPI1, ADC, разовая передача по DMA, TIMER, блокирующие
+> задержки, PWM, input capture, RTT. Исключение — `examples/i2c.rs`: на этой
+> плате I²C не разведён, пример ни разу не запускался. Если попробуете,
+> [расскажите о результате](https://github.com/Szizoid/gd32e2-hal/issues).
 
 ### Принципы
 
@@ -536,7 +542,9 @@ typestate периферии. Общий супертрейт `DmaPeriph<N>` з�
 операции одного направления и паникует, если `Read` не последняя. Ошибки —
 `i2c::Error`, по варианту на каждый флаг `STAT0`, `NoAcknowledge` несёт источник.
 Слишком медленный `pclk1` или недостижимая частота — паника в конструкторе.
-10-битная адресация, SMBus, slave и DMA не реализованы.
+10-битная адресация, SMBus, slave и DMA не реализованы. `examples/i2c.rs`
+сканирует шину и читает регистр у первого ответившего; нужны внешние подтяжки,
+ни разу не запускался — [результаты приветствуются](https://github.com/Szizoid/gd32e2-hal/issues).
 
 ### Пример
 
