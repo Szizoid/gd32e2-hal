@@ -71,8 +71,11 @@ on inputs and open-drain outputs; `embedded-hal` 1.0 `OutputPin` / `InputPin` /
 `StatefulOutputPin` sit on the same private helpers. `erase()` gives
 `ErasedPin<MODE>` — port and number as fields, so pins of any port share a type
 and fit an array, with `port()` / `number()` added and the mode still in the
-type. Gated by `Active`, one way only. Ports A, B and F; port C isn't bonded on
-this package.
+type. Gated by `Active`, one way only. Ports A, B and F. Which pins a port yields
+follows the package: `Parts` holds only bonded pads, so `PB9` exists on a 48-pin
+part and not on a 32-pin one, and reaching for it is a compile error instead of a
+pin that reads nothing. Port C (`PC13`–`PC15`, 48-pin only) is not implemented
+yet.
 
 **RCU** (`src/rcu.rs`) — `dp.rcu.constrain()` (`RcuExt`). Per-peripheral `Enable`
 and `Reset` traits from the `bus_en!`/`bus_rst!` macros (separate, since not every
@@ -411,7 +414,10 @@ open-drain; `embedded-hal` 1.0 `OutputPin` / `InputPin` / `StatefulOutputPin`
 стоят на тех же приватных хелперах. `erase()` даёт `ErasedPin<MODE>` — порт и
 номер полями, поэтому ноги любого порта складываются в массив; добавляются
 `port()` / `number()`, режим остаётся в типе. Гейтится `Active`, обратного пути
-нет. Порты A, B и F; порт C на этом корпусе не разведён.
+нет. Порты A, B и F. Какие ноги отдаёт порт, зависит от корпуса: в `Parts` лежат
+только разваренные площадки, поэтому `PB9` есть на 48-выводном чипе и отсутствует
+на 32-выводном, а обращение к нему — ошибка компиляции, а не нога, которая ничего
+не читает. Порт C (`PC13`–`PC15`, только 48 выводов) пока не реализован.
 
 **RCU** (`src/rcu.rs`) — `dp.rcu.constrain()` (`RcuExt`). Трейты `Enable` и
 `Reset` на каждую периферию из макросов `bus_en!`/`bus_rst!` (порознь, потому что

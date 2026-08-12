@@ -31,6 +31,11 @@ const CHIPS: &[Chip] = &[
     Chip::new("gd32e230c8", 48, 64, 8),
 ];
 
+/// Pin counts in the series, ascending. The bonded pads of a package are a
+/// superset of every smaller one's (datasheet figures 2-2 … 2-9), so the flags
+/// handed to the source are "at least this many pins" and a pin needs one gate.
+const PIN_COUNTS: &[u32] = &[20, 24, 28, 32, 48];
+
 /// Where the two memories live on every part of the series.
 const FLASH_ORIGIN: &str = "0x08000000";
 const RAM_ORIGIN: &str = "0x20000000";
@@ -68,8 +73,8 @@ fn main() {
     for flash_code in ['4', '6', '8'] {
         println!("cargo::rustc-check-cfg=cfg(chip_x{flash_code})");
     }
-    for pins in [20, 24, 28, 32, 48] {
-        println!("cargo::rustc-check-cfg=cfg(pins_{pins})");
+    for pins in PIN_COUNTS {
+        println!("cargo::rustc-check-cfg=cfg(pins_ge_{pins})");
     }
 
     let selected: Vec<&Chip> = CHIPS.iter().filter(|chip| chip.enabled()).collect();
@@ -90,7 +95,9 @@ fn main() {
     };
 
     println!("cargo::rustc-cfg=chip_x{}", chip.flash_code());
-    println!("cargo::rustc-cfg=pins_{}", chip.pins);
+    for pins in PIN_COUNTS.iter().filter(|&&count| count <= chip.pins) {
+        println!("cargo::rustc-cfg=pins_ge_{pins}");
+    }
 
     // The linker resolves `INCLUDE memory.x` against the current directory first
     // and the search paths after, so a `memory.x` in the project root still wins

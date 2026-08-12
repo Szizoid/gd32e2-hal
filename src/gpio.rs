@@ -880,10 +880,16 @@ pub trait GpioExt {
 }
 
 macro_rules! gpio {
-    ($Parts:ident, $Gpio:ty, $P:literal, [ $($name:ident : $num:literal : $mode:ty),+ $(,)? ]) => {
+    ($Parts:ident, $Gpio:ty, $P:literal, [
+        $( $(#[$cfg:meta])? $name:ident : $num:literal : $mode:ty ),+ $(,)?
+    ]) => {
         /// The pins of this port, in their reset modes.
+        ///
+        /// Only the pads the selected package bonds are here — a pin absent from
+        /// this struct cannot be reached at all.
         pub struct $Parts {
             $(
+                $(#[$cfg])?
                 #[doc = concat!("Pin ", stringify!($name), ".")]
                 pub $name: Pin<$P, $num, $mode>,
             )+
@@ -893,18 +899,67 @@ macro_rules! gpio {
             type Parts = $Parts;
             fn split(self, rcu: &mut Rcu) -> Self::Parts {
                 <$Gpio as crate::rcu::Enable>::enable(rcu);
-                $Parts { $( $name: Pin::<$P, $num, $mode> { _mode: PhantomData }, )+ }
+                $Parts {
+                    $(
+                        $(#[$cfg])?
+                        $name: Pin::<$P, $num, $mode> { _mode: PhantomData },
+                    )+
+                }
             }
         }
     };
 }
 
-gpio!(PartsA, pac::Gpioa, 'A',
-    [pa0:0:Input, pa1:1:Input, pa2:2:Input, pa3:3:Input, pa4:4:Input, pa5:5:Input, pa6:6:Input, pa7:7:Input,
-     pa8:8:Input, pa9:9:Input, pa10:10:Input, pa11:11:Input, pa12:12:Input, pa13:13:Debugger, pa14:14:Debugger, pa15:15:Input]);
+// Which pads a package bonds, from the pinout figures 2-2 … 2-9 of the datasheet.
+// The sets nest — 20 ⊂ 24 ⊂ 28 ⊂ 32 ⊂ 48 — so each pin carries one gate, naming the
+// smallest package that has it; `pins_ge_*` comes from build.rs. A pin missing from
+// its `Parts` is unreachable, which is the point: the alternative is a HAL promising
+// a pad the package never brought out.
+gpio!(PartsA, pac::Gpioa, 'A', [
+    pa0:0:Input,
+    pa1:1:Input,
+    pa2:2:Input,
+    pa3:3:Input,
+    pa4:4:Input,
+    pa5:5:Input,
+    pa6:6:Input,
+    pa7:7:Input,
+    #[cfg(pins_ge_24)] pa8:8:Input,
+    // Below 32 pins these two pads are shared with PA11 / PA12 through a remap,
+    // and PA9 / PA10 is the state after reset.
+    pa9:9:Input,
+    pa10:10:Input,
+    #[cfg(pins_ge_32)] pa11:11:Input,
+    #[cfg(pins_ge_32)] pa12:12:Input,
+    pa13:13:Debugger,
+    pa14:14:Debugger,
+    #[cfg(pins_ge_28)] pa15:15:Input,
+]);
 
-gpio!(PartsB, pac::Gpiob, 'B',
-    [pb0:0:Input, pb1:1:Input, pb2:2:Input, pb3:3:Input, pb4:4:Input, pb5:5:Input, pb6:6:Input, pb7:7:Input,
-     pb8:8:Input, pb9:9:Input, pb10:10:Input, pb11:11:Input, pb12:12:Input, pb13:13:Input, pb14:14:Input, pb15:15:Input]);
+gpio!(PartsB, pac::Gpiob, 'B', [
+    #[cfg(pins_ge_24)] pb0:0:Input,
+    pb1:1:Input,
+    // PB2 and PB8 are QFN32 only: an LQFP32 spends both pads on VSS, which the QFN
+    // moves onto its thermal pad.
+    #[cfg(pins_ge_32)] pb2:2:Input,
+    #[cfg(pins_ge_28)] pb3:3:Input,
+    #[cfg(pins_ge_28)] pb4:4:Input,
+    #[cfg(pins_ge_28)] pb5:5:Input,
+    #[cfg(pins_ge_24)] pb6:6:Input,
+    #[cfg(pins_ge_24)] pb7:7:Input,
+    #[cfg(pins_ge_32)] pb8:8:Input,
+    #[cfg(pins_ge_48)] pb9:9:Input,
+    #[cfg(pins_ge_48)] pb10:10:Input,
+    #[cfg(pins_ge_48)] pb11:11:Input,
+    #[cfg(pins_ge_48)] pb12:12:Input,
+    #[cfg(pins_ge_48)] pb13:13:Input,
+    #[cfg(pins_ge_48)] pb14:14:Input,
+    #[cfg(pins_ge_48)] pb15:15:Input,
+]);
 
-gpio!(PartsF, pac::Gpiof, 'F', [pf0:0:Input, pf1:1:Input]);
+gpio!(PartsF, pac::Gpiof, 'F', [
+    pf0:0:Input,
+    pf1:1:Input,
+    #[cfg(pins_ge_48)] pf6:6:Input,
+    #[cfg(pins_ge_48)] pf7:7:Input,
+]);
