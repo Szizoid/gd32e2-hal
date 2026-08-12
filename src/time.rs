@@ -10,7 +10,8 @@
 //!
 //! The generic [`Duration`] and [`Rate`] are re-exported for signatures that
 //! stay open to any scale, as are the suffix traits: [`ExtU32`] for durations
-//! and [`RateExtU32`] for frequencies. The whole crate is re-exported too, so
+//! and [`RateExtU32`] for frequencies, joined by our own [`BpsExtU32`] for bit
+//! rates, which `fugit` has no suffix for. The whole crate is re-exported too, so
 //! `Instant`, the tick-based `TimerDuration` and the `u64` widths are reachable
 //! without adding a matching dependency downstream.
 //!
@@ -31,6 +32,13 @@ pub type Megahertz = fugit::MegahertzU32;
 /// Frequency in gigahertz.
 pub type Gigahertz = fugit::GigahertzU32;
 
+/// Bit rate in symbols per second.
+///
+/// The very same type as [`Hertz`], a bit rate being a rate on the one-second
+/// scale: the name reads right in a signature but checks nothing, and a clock
+/// frequency passed as a bit rate still compiles.
+pub type Bps = fugit::Rate<u32, 1, 1>;
+
 /// Duration in picoseconds.
 pub type PicosDuration = fugit::PicosDurationU32;
 /// Duration in nanoseconds.
@@ -45,3 +53,15 @@ pub type SecsDuration = fugit::SecsDurationU32;
 pub type MinutesDuration = fugit::MinutesDurationU32;
 /// Duration in hours.
 pub type HoursDuration = fugit::HoursDurationU32;
+
+/// Suffix for bit rates, `fugit` having none: `115_200.bps()`.
+pub trait BpsExtU32 {
+    /// Reads the number as symbols per second.
+    fn bps(self) -> Bps;
+}
+
+impl BpsExtU32 for u32 {
+    fn bps(self) -> Bps {
+        Bps::from_raw(self)
+    }
+}

@@ -47,7 +47,7 @@ pub mod spi {
 
 /// Suffixes for durations and frequencies: `500.millis()`, `100.kHz()`.
 pub mod time {
-    pub use crate::time::{ExtU32 as _, RateExtU32 as _};
+    pub use crate::time::{BpsExtU32 as _, ExtU32 as _, RateExtU32 as _};
 }
 
 /// Timer entry point, delays, PWM duty, and `block!` for capture reads.

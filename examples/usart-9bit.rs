@@ -18,7 +18,7 @@ use panic_halt as _;
 use gd32e2_hal::pac;
 use gd32e2_hal::prelude::*;
 use gd32e2_hal::rcu::{CFGR, PllFreq};
-use gd32e2_hal::usart::{Oversampling, Usart, UsartConfig9, baud};
+use gd32e2_hal::usart::{Oversampling, Usart, UsartConfig9};
 
 #[entry]
 fn main() -> ! {
@@ -32,8 +32,10 @@ fn main() -> ! {
     let tx = gpioa.pa9.into_alternate::<1>();
     let rx = gpioa.pa10.into_alternate::<1>();
 
+    // The bit rate is a `time::Bps`; `usart::baud` has the standard ones named,
+    // and `usart-parity.rs` uses those instead.
     let config = UsartConfig9::default()
-        .baud(baud::B115200)
+        .baud(115_200.bps())
         .oversampling(Oversampling::X16);
     let usart0 = Usart::new_word(&mut rcu, dp.usart0, tx, rx, &clocks, config);
 

@@ -22,7 +22,7 @@ use core::ops::Deref;
 use crate::gpio::{Alternate, Pin};
 use crate::pac;
 use crate::rcu::{Clocks, Enable, Rcu, Reset};
-use crate::time::Hertz;
+use crate::time::{Bps, Hertz};
 
 /// 7 data bits: parity occupies bit 7 inside the u8 (`E7`/`O7`).
 const DATA_7BIT_MASK: u8 = 0x7F;
@@ -92,25 +92,28 @@ impl BusClocks for pac::Usart1 {
 
 /// Named constants for the standard bit rates.
 ///
-/// Purely a readability aid — [`UsartConfig::baud`] takes any `u32`, since the
-/// hardware divisor is not restricted to these values.
+/// Purely a readability aid — [`UsartConfig::baud`] takes any [`Bps`], the
+/// hardware divisor not being restricted to these values. `115_200.bps()` says
+/// the same thing.
 #[allow(missing_docs)]
 pub mod baud {
-    pub const B110: u32 = 110;
-    pub const B300: u32 = 300;
-    pub const B600: u32 = 600;
-    pub const B1200: u32 = 1_200;
-    pub const B2400: u32 = 2_400;
-    pub const B4800: u32 = 4_800;
-    pub const B9600: u32 = 9_600;
-    pub const B14400: u32 = 14_400;
-    pub const B19200: u32 = 19_200;
-    pub const B38400: u32 = 38_400;
-    pub const B57600: u32 = 57_600;
-    pub const B115200: u32 = 115_200;
-    pub const B230400: u32 = 230_400;
-    pub const B460800: u32 = 460_800;
-    pub const B921600: u32 = 921_600;
+    use crate::time::Bps;
+
+    pub const B110: Bps = Bps::from_raw(110);
+    pub const B300: Bps = Bps::from_raw(300);
+    pub const B600: Bps = Bps::from_raw(600);
+    pub const B1200: Bps = Bps::from_raw(1_200);
+    pub const B2400: Bps = Bps::from_raw(2_400);
+    pub const B4800: Bps = Bps::from_raw(4_800);
+    pub const B9600: Bps = Bps::from_raw(9_600);
+    pub const B14400: Bps = Bps::from_raw(14_400);
+    pub const B19200: Bps = Bps::from_raw(19_200);
+    pub const B38400: Bps = Bps::from_raw(38_400);
+    pub const B57600: Bps = Bps::from_raw(57_600);
+    pub const B115200: Bps = Bps::from_raw(115_200);
+    pub const B230400: Bps = Bps::from_raw(230_400);
+    pub const B460800: Bps = Bps::from_raw(460_800);
+    pub const B921600: Bps = Bps::from_raw(921_600);
 }
 
 /// How many times each bit is sampled.
@@ -153,14 +156,14 @@ pub enum FrameFormat {
 /// [`Default`] is 115200 baud, ×16 oversampling, [`FrameFormat::N8`] — i.e. the
 /// usual "115200 8N1".
 pub struct UsartConfig {
-    baud: u32,
+    baud: Bps,
     oversampling: Oversampling,
     frame_format: FrameFormat,
 }
 
 impl UsartConfig {
     /// Sets the bit rate. See the [`baud`] module for named constants.
-    pub fn baud(mut self, baud: u32) -> Self {
+    pub fn baud(mut self, baud: Bps) -> Self {
         self.baud = baud;
         self
     }
@@ -191,13 +194,13 @@ impl Default for UsartConfig {
 /// Deliberately has no frame-format field: the 9-bit path is always
 /// "9 data bits, no parity", so there would be nothing meaningful to choose.
 pub struct UsartConfig9 {
-    baud: u32,
+    baud: Bps,
     oversampling: Oversampling,
 }
 
 impl UsartConfig9 {
     /// Sets the bit rate. See the [`baud`] module for named constants.
-    pub fn baud(mut self, baud: u32) -> Self {
+    pub fn baud(mut self, baud: Bps) -> Self {
         self.baud = baud;
         self
     }
@@ -221,7 +224,7 @@ fn configure<USARTX>(
     rcu: &mut Rcu,
     usart: &USARTX,
     clocks: &Clocks,
-    baud: u32,
+    baud: Bps,
     oversampling: Oversampling,
 ) where
     USARTX: Deref<Target = pac::usart0::RegisterBlock> + Enable + Reset + BusClocks,
@@ -229,6 +232,7 @@ fn configure<USARTX>(
     USARTX::enable(rcu);
     USARTX::reset(rcu);
     let pclk = USARTX::clock(clocks).to_Hz();
+    let baud = baud.to_raw();
     // round(pclk / baud) in integers: adding half the divisor before truncating rounds.
     let usartdiv = (pclk + baud / 2) / baud;
     usart.baud().write(|w| unsafe {

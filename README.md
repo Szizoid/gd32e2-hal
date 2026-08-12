@@ -83,8 +83,9 @@ twice the bus clock otherwise. Frequencies are `fugit` aliases from `src/time.rs
 peripheral and both pins. `TxPin` / `RxPin` markers (from `usart_pins!`) reject a
 wrong pin or AF at compile time; `BusClocks` picks the bus frequency per
 instance, so the baud divisor cannot use the wrong one. `UsartConfig` (fluent,
-`Default` = 115200 / ×16 / `N8`) carries `baud` (named constants in
-`usart::baud`), `Oversampling::{X16, X8}` and `FrameFormat::{N8, E8, O8, E7, O7}`
+`Default` = 115200 / ×16 / `N8`) carries `baud` as a `time::Bps` (`115_200.bps()`,
+or the standard rates named in `usart::baud`),
+`Oversampling::{X16, X8}` and `FrameFormat::{N8, E8, O8, E7, O7}`
 — one source of truth for `WL`/`PCEN`/`PM`. Inherent blocking API on the `Byte`
 width: `write_byte` / `write_bytes` / `read_byte` / `read_bytes`, plus `flush`
 (waits for `TC`, not `TBE`); transmission has no error conditions and returns no
@@ -410,8 +411,9 @@ open-drain; `embedded-hal` 1.0 `OutputPin` / `InputPin` / `StatefulOutputPin`
 периферией и обоими пинами. Маркеры `TxPin` / `RxPin` (из `usart_pins!`)
 отсекают неверный пин или AF на компиляции; `BusClocks` выбирает частоту шины под
 конкретный инстанс, поэтому делитель `baud` не возьмёт не ту. `UsartConfig`
-(fluent, `Default` = 115200 / ×16 / `N8`) несёт `baud` (именованные константы в
-`usart::baud`), `Oversampling::{X16, X8}` и `FrameFormat::{N8, E8, O8, E7, O7}` —
+(fluent, `Default` = 115200 / ×16 / `N8`) несёт `baud` величиной `time::Bps`
+(`115_200.bps()` либо стандартные значения по именам в `usart::baud`),
+`Oversampling::{X16, X8}` и `FrameFormat::{N8, E8, O8, E7, O7}` —
 единственный источник правды для `WL`/`PCEN`/`PM`. Инхерентный блокирующий API на
 ширине `Byte`: `write_byte` / `write_bytes` / `read_byte` / `read_bytes` плюс
 `flush` (ждёт `TC`, а не `TBE`); у передачи нет условий ошибки, `Result` она не
