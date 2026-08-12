@@ -12,11 +12,9 @@ Rust from scratch on top of the [`gd32e2`](https://crates.io/crates/gd32e2) PAC.
 > ⚠️ **Work in progress.** Written by hand, incrementally; the API is unstable.
 > The package is a library (`src/lib.rs` → `adc`, `dma`, `gpio`, `i2c`, `prelude`,
 > `rcu`, `spi`, `time`, `timer`, `usart`) plus on-hardware binaries in `examples/`.
-> 14 of the 15 examples have been flashed and verified on the board — RCU, GPIO,
-> USART (8/9-bit and parity), SPI0/SPI1, ADC, a one-shot DMA transfer, TIMER,
-> blocking delays, PWM, input capture, RTT. `examples/i2c.rs` is the exception:
-> this board has no I²C wiring, so it has never run. If you try it, please
-> [report what happened](https://github.com/Szizoid/gd32e2-hal/issues).
+> All 16 examples have been flashed and verified on the board — RCU, GPIO, USART
+> (8/9-bit and parity), SPI0/SPI1, ADC, a one-shot DMA transfer, TIMER, blocking
+> delays, PWM, input capture, I²C, RTT.
 
 ### Principles
 
@@ -204,8 +202,8 @@ traits in scope make the call ambiguous (`E0034`). `use gd32e2_hal::prelude::*;`
 everything with `usart::io`; import a submodule instead to narrow it. Traits are
 re-exported as `_`, so the methods arrive without the names; types are not included.
 
-**I²C** (`src/i2c.rs`) — master, blocking, 7-bit addressing, both peripherals;
-**not yet verified on hardware**. `I2c::new(rcu, i2c, sda, scl, &clocks, mode)`
+**I²C** (`src/i2c.rs`) — master, blocking, 7-bit addressing, both peripherals.
+`I2c::new(rcu, i2c, sda, scl, &clocks, mode)`
 takes `I2cMode::{standard, fast, fast_plus}`, each carrying its SCL frequency and
 the fast modes their `DutyCycle`; `CLKC`, `RISETIME` and `I2CCLK` are derived
 from `pclk1`, which is why `&Clocks` is needed. Both pins must be
@@ -217,9 +215,11 @@ its `transaction` merges adjacent operations of one direction and panics if a
 `Read` is not last. Errors are `i2c::Error`, one variant per `STAT0` flag, with
 `NoAcknowledge` carrying the source. A too-slow `pclk1` or an unreachable
 frequency panics in the constructor. 10-bit addressing, SMBus, slave mode and
-DMA are not implemented. `examples/i2c.rs` scans the bus and reads a register
-from the first device that answers; it needs external pull-ups and has never
-been run — [results welcome](https://github.com/Szizoid/gd32e2-hal/issues).
+DMA are not implemented. `examples/i2c.rs` scans the bus and reads 1, 2, 3 and 4
+bytes from the first device that answers, sending nothing but a register index;
+`examples/i2c-registers.rs` writes two bytes and reads them back. Both were run
+at 50 kHz against an RP2040 in I²C target mode; fast and fast plus have not been
+on hardware yet.
 
 ### Usage
 
@@ -305,7 +305,7 @@ cargo build --release --no-default-features --features gd32e230x4
 
 - [ ] DMA: circular mode and `M2M`.
 - [ ] Timers: complementary outputs, break and dead time.
-- [ ] I²C: hardware verification, 10-bit addressing, SMBus, slave, DMA.
+- [ ] I²C: fast and fast plus on hardware, 10-bit addressing, SMBus, slave, DMA.
 - [ ] Interrupt-driven operation (NVIC infrastructure — also affects USART/SPI).
 - [ ] SPI: half-duplex / single-wire modes (`BDEN`/`BDOEN`/`RO`).
 - [ ] SPI: hardware NSS, CRC, TI mode, slave — low priority.
@@ -338,12 +338,10 @@ HAL для микроконтроллера **GD32E230K8U6** (Cortex-M23), на�
 
 > ⚠️ **Работа в процессе.** Пишется вручную и постепенно; API нестабилен. Пакет —
 > библиотека (`src/lib.rs` → `adc`, `dma`, `gpio`, `i2c`, `prelude`, `rcu`, `spi`, `time`,
-> `timer`, `usart`) плюс тестовые бинарники на железо в `examples/`. Из 15
-> примеров 14 прошиты и проверены на плате — RCU, GPIO, USART (8/9-бит и
-> чётность), SPI0/SPI1, ADC, разовая передача по DMA, TIMER, блокирующие
-> задержки, PWM, input capture, RTT. Исключение — `examples/i2c.rs`: на этой
-> плате I²C не разведён, пример ни разу не запускался. Если попробуете,
-> [расскажите о результате](https://github.com/Szizoid/gd32e2-hal/issues).
+> `timer`, `usart`) плюс тестовые бинарники на железо в `examples/`. Все 16
+> примеров прошиты и проверены на плате — RCU, GPIO, USART (8/9-бит и чётность),
+> SPI0/SPI1, ADC, разовая передача по DMA, TIMER, блокирующие задержки, PWM,
+> input capture, I²C, RTT.
 
 ### Принципы
 
@@ -530,8 +528,8 @@ typestate периферии. Общий супертрейт `DmaPeriph<N>` з�
 `usart::io`; чтобы сузить — импортировать подмодуль. Трейты реэкспортированы под `_`:
 методы приезжают, имена нет. Типы в прелюдию не входят.
 
-**I²C** (`src/i2c.rs`) — мастер, блокирующий, 7-битная адресация, обе периферии;
-**на железе пока не проверен**. `I2c::new(rcu, i2c, sda, scl, &clocks, mode)`
+**I²C** (`src/i2c.rs`) — мастер, блокирующий, 7-битная адресация, обе периферии.
+`I2c::new(rcu, i2c, sda, scl, &clocks, mode)`
 принимает `I2cMode::{standard, fast, fast_plus}`, каждый несёт свою частоту SCL, а
 быстрые режимы — ещё и `DutyCycle`; `CLKC`, `RISETIME` и `I2CCLK` считаются от
 `pclk1`, поэтому нужен `&Clocks`. Обе ноги обязаны быть
@@ -543,8 +541,10 @@ typestate периферии. Общий супертрейт `DmaPeriph<N>` з�
 `i2c::Error`, по варианту на каждый флаг `STAT0`, `NoAcknowledge` несёт источник.
 Слишком медленный `pclk1` или недостижимая частота — паника в конструкторе.
 10-битная адресация, SMBus, slave и DMA не реализованы. `examples/i2c.rs`
-сканирует шину и читает регистр у первого ответившего; нужны внешние подтяжки,
-ни разу не запускался — [результаты приветствуются](https://github.com/Szizoid/gd32e2-hal/issues).
+сканирует шину и читает у первого ответившего 1, 2, 3 и 4 байта, отправляя
+только индекс регистра; `examples/i2c-registers.rs` пишет два байта и читает их
+обратно. Оба прогнаны на 50 кГц против RP2040 в режиме I²C target; fast и fast
+plus на железе пока не были.
 
 ### Пример
 
@@ -629,7 +629,7 @@ cargo build --release --no-default-features --features gd32e230x4
 
 - [ ] DMA: циклический режим и `M2M`.
 - [ ] Таймеры: комплементарные выходы, break, dead time.
-- [ ] I²C: проверка на железе, 10-битная адресация, SMBus, slave, DMA.
+- [ ] I²C: fast и fast plus на железе, 10-битная адресация, SMBus, slave, DMA.
 - [ ] Работа на прерываниях (инфраструктура NVIC — затронет и USART/SPI).
 - [ ] SPI: half-duplex / однопроводные режимы (`BDEN`/`BDOEN`/`RO`).
 - [ ] SPI: аппаратный NSS, CRC, TI mode, slave — низкий приоритет.
