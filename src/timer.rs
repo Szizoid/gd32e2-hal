@@ -702,7 +702,7 @@ channel_pins! {
         0: [ 'A' 7:5, 'B' 9:2 ],
 }
 
-#[cfg(feature = "gd32e230x8")]
+#[cfg(chip_x8)]
 channel_pins! {
     pac::Timer14:
         0: [ 'A' 2:0, 'B' 14:1 ]

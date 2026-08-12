@@ -11,7 +11,12 @@ DEFMT_LOG = "trace"
 [target.thumbv8m.base-none-eabi]
 runner = "probe-rs run --chip GD32E230K8"
 
+# `lib` carries the part explicitly: with no default feature, a bare `cargo build`
+# stops in build.rs, and the [dev-dependencies] entry that gives the examples
+# theirs does not apply to the library alone. The example aliases need nothing —
+# building an example pulls dev-dependencies in.
 [alias]
+lib = "build --features gd32e230k8"
 be = "build --example"
 bre = "build --release --example"
 re = "run --release --example"

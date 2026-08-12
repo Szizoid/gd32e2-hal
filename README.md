@@ -27,19 +27,28 @@ Rust from scratch on top of the [`gd32e2`](https://crates.io/crates/gd32e2) PAC.
 
 ### Chip variants
 
-The same pin and AF number reach a different peripheral depending on the variant
-(`PA2` AF1 is `USART0_TX` on x4, `USART1_TX` on x8). The AF map is gated on three
-mutually exclusive features; exactly one must be enabled, or it's a
-`compile_error!` rather than a silently truncated pin map.
+One feature names the part, and exactly one must be enabled — zero or several is
+an error rather than a silently truncated pin map. **There is no default**: which
+part is on a board is not something this crate can assume. The letter is the
+bonded pin count, the digit the flash code. Package and temperature suffixes are
+not in the name: `K8U6` and `K8T6` are one die in two packages.
 
-| feature | datasheet note | applies to |
-| --- | --- | --- |
-| `gd32e230x4` | (1) | x4 |
-| `gd32e230x6` | (2) | x6 |
-| `gd32e230x8` *(default)* | (2) + (3) | x8 — the targeted `GD32E230K8U6` |
+| feature | pins | flash | SRAM |
+| --- | --- | --- | --- |
+| `gd32e230f4` / `f6` / `f8` | 20 | 16K / 32K / 64K | 4K / 6K / 8K |
+| `gd32e230e8` | 24 | 64K | 8K |
+| `gd32e230g4` / `g6` / `g8` | 28 | 16K / 32K / 64K | 4K / 6K / 8K |
+| `gd32e230k4` / `k6` / `k8` | 32 | 16K / 32K / 64K | 4K / 6K / 8K |
+| `gd32e230c4` / `c6` / `c8` | 48 | 16K / 32K / 64K | 4K / 6K / 8K |
 
-x8 is a superset of x6; where a row is footnoted only (1) and (3), x6 has no
-function on that AF at all.
+Development targets the `GD32E230K8U6`, i.e. `gd32e230k8`; the examples get it
+from the crate's own `[dev-dependencies]` entry.
+`build.rs` turns the choice into the `memory.x` the linker needs and into the cfg
+flags the source gates on: the AF map differs by flash code — the same pin at the
+same AF number reaching a different peripheral (`PA2` AF1 is `USART0_TX` on x4,
+`USART1_TX` on x8), datasheet Table 2-13/2-14 notes (1) x4, (2) x6/x8, (3) x8 —
+while the pin count decides which pins exist. x8 is a superset of x6; where a row
+is footnoted only (1) and (3), x6 has no function on that AF at all.
 
 An orthogonal feature, **`defmt`**, derives `defmt::Format` on the public enums
 and error types. Off by default; also enables `embedded-hal/defmt-03`.
@@ -262,18 +271,19 @@ if let Ok(byte) = usart0.read_byte() {
 
 ### Building
 
-The examples link against a `memory.x` that is git-ignored, since its lengths
-depend on the part. Copy the template once, before the first build:
+`build.rs` writes the `memory.x` the linker needs from the selected chip feature,
+so there is nothing to copy first. A `memory.x` in the project root still wins —
+the linker looks there before the search paths — which is the way out for a board
+this table does not describe.
 
 ```sh
-cp memory.x.example memory.x
-```
-
-```sh
-cargo build --release          # library only
+cargo lib                      # library only, alias for build --features gd32e230k8
 cargo be usart-echo            # compile-check one example, needs no probe
 cargo bre usart-echo           # same, release profile
 ```
+
+The library alone needs the part named, since nothing supplies a default and
+`[dev-dependencies]` does not apply to it; an example gets one either way.
 
 To flash, with an ST-Link on `PA13`/`PA14`:
 
@@ -357,19 +367,28 @@ HAL для микроконтроллера **GD32E230K8U6** (Cortex-M23), на�
 
 ### Варианты чипа
 
-Одна и та же нога на одном и том же номере AF ведёт к разной периферии в
-зависимости от варианта (`PA2` AF1 — это `USART0_TX` у x4 и `USART1_TX` у x8).
-Карта AF гейтится тремя взаимоисключающими фичами; ровно одна обязана быть
-включена, иначе `compile_error!`, а не молча урезанная карта пинов.
+Партномер задаётся одной фичей, и ровно одна обязана быть включена — ноль или
+несколько дают ошибку, а не молча урезанную карту пинов. **Дефолта нет**: какой
+чип стоит на плате, крейт знать не может. Буква — число разваренных ног, цифра —
+код флеша. Корпус и температура в имя не входят: `K8U6` и `K8T6` — один кристалл
+в двух корпусах.
 
-| фича | сноска datasheet | относится к |
-| --- | --- | --- |
-| `gd32e230x4` | (1) | x4 |
-| `gd32e230x6` | (2) | x6 |
-| `gd32e230x8` *(дефолт)* | (2) + (3) | x8 — целевой `GD32E230K8U6` |
+| фича | ноги | флеш | SRAM |
+| --- | --- | --- | --- |
+| `gd32e230f4` / `f6` / `f8` | 20 | 16K / 32K / 64K | 4K / 6K / 8K |
+| `gd32e230e8` | 24 | 64K | 8K |
+| `gd32e230g4` / `g6` / `g8` | 28 | 16K / 32K / 64K | 4K / 6K / 8K |
+| `gd32e230k4` / `k6` / `k8` | 32 | 16K / 32K / 64K | 4K / 6K / 8K |
+| `gd32e230c4` / `c6` / `c8` | 48 | 16K / 32K / 64K | 4K / 6K / 8K |
 
-x8 — надмножество x6; там, где строка помечена только (1) и (3), у x6 функции на
-этом AF нет вовсе.
+Разработка идёт на `GD32E230K8U6`, то есть `gd32e230k8`; примеры получают фичу из
+`[dev-dependencies]` самого крейта. Из выбора `build.rs` делает
+`memory.x` для линкера и cfg-флаги, которыми гейтится код: карта AF зависит от кода
+флеша — одна и та же нога на одном номере AF ведёт к разной периферии (`PA2` AF1 —
+`USART0_TX` у x4 и `USART1_TX` у x8), сноски datasheet Table 2-13/2-14: (1) x4,
+(2) x6/x8, (3) x8 — а число ног решает, какие ноги существуют вообще. x8 —
+надмножество x6; там, где строка помечена только (1) и (3), у x6 функции на этом AF
+нет вовсе.
 
 Ортогональная фича **`defmt`** вешает `defmt::Format` на публичные энумы и типы
 ошибок. По умолчанию выключена; заодно включает `embedded-hal/defmt-03`.
@@ -590,18 +609,18 @@ if let Ok(byte) = usart0.read_byte() {
 
 ### Сборка
 
-Примеры линкуются с `memory.x`; он в `.gitignore`, потому что размеры зависят от
-варианта чипа. Один раз перед первой сборкой скопировать шаблон:
+`memory.x` для линкера пишет `build.rs` из выбранной фичи чипа, копировать перед
+сборкой нечего. Файл `memory.x` в корне проекта по-прежнему главнее — линкер
+смотрит туда раньше путей поиска, и это выход для платы, которой в таблице нет.
 
 ```sh
-cp memory.x.example memory.x
-```
-
-```sh
-cargo build --release          # только библиотека
+cargo lib                      # только библиотека, алиас для build --features gd32e230k8
 cargo be usart-echo            # проверить сборку одного примера, зонд не нужен
 cargo bre usart-echo           # то же самое, release
 ```
+
+Библиотеке отдельно партномер нужно назвать: дефолта нет, а `[dev-dependencies]`
+к ней не применяются. Примеру фича достаётся и так.
 
 Чтобы прошить, с ST-Link на `PA13`/`PA14`:
 

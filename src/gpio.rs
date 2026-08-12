@@ -159,9 +159,11 @@ macro_rules! pin_af {
 
 // AF map from datasheet Table 2-13/2-14 (die-level), whose footnotes mark
 // functions present on some variants only:
-//   (1) GD32E230x4 only          -> feature `gd32e230x4`
-//   (2) GD32E230x8/6             -> features `gd32e230x6` + `gd32e230x8`
-//   (3) GD32E230x8 only          -> feature `gd32e230x8`
+//   (1) GD32E230x4 only          -> cfg `chip_x4`
+//   (2) GD32E230x8/6             -> cfg `chip_x6` or `chip_x8`
+//   (3) GD32E230x8 only          -> cfg `chip_x8`
+// The cfgs come from build.rs, which derives them from the part's flash code, so
+// a gate names the die rather than each of the parts sharing it.
 // AF numbers that exist on every variant live in the common block below, even
 // where the function behind them differs (PA2 AF1 is USART0_TX on x4, USART1_TX
 // on x8) — `ValidAf` gates the number alone. Which peripheral a pin belongs to is
@@ -205,7 +207,7 @@ pin_af! {
 }
 
 // ---- (1) GD32E230x4 only ----
-#[cfg(feature = "gd32e230x4")]
+#[cfg(chip_x4)]
 pin_af! {
     'B' 10 => [1],                   // 1:I2C0_SCL
     'B' 11 => [1],                   // 1:I2C0_SDA
@@ -216,14 +218,14 @@ pin_af! {
 }
 
 // ---- (2) GD32E230x8/6 ----
-#[cfg(any(feature = "gd32e230x6", feature = "gd32e230x8"))]
+#[cfg(any(chip_x6, chip_x8))]
 pin_af! {
     'A' 8  => [4],                   // 4:USART1_TX
     'B' 0  => [4],                   // 4:USART1_RX
 }
 
 // ---- (3) GD32E230x8 only ----
-#[cfg(feature = "gd32e230x8")]
+#[cfg(chip_x8)]
 pin_af! {
     'A' 0  => [4],                   // 4:I2C1_SCL
     'A' 1  => [4, 5],                // 4:I2C1_SDA 5:TIMER14_CH0_ON

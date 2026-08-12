@@ -8,12 +8,21 @@
 //!
 //! # Chip variants
 //!
-//! The alternate-function map differs across the GD32E230x series — the same pin
-//! at the same AF number can reach a different peripheral depending on the part
-//! (`PA2` AF1 is `USART0_TX` on x4 but `USART1_TX` on x8). Exactly one of the
-//! `gd32e230x4` / `gd32e230x6` / `gd32e230x8` features must be enabled; zero or
-//! several is a compile error rather than a silently wrong pin map. The default
-//! is `gd32e230x8`, matching the GD32E230K8U6 this HAL is developed against.
+//! One feature names the part being built for, and exactly one must be enabled;
+//! zero or several is an error rather than a silently wrong pin map. There is no
+//! default: which part sits on a board is not something this crate can assume.
+//!
+//! The letter is the bonded pin count (F 20, E 24, G 28, K 32, C 48) and the digit
+//! the flash code (4 = 16K flash and 4K SRAM, 6 = 32K and 6K, 8 = 64K and 8K).
+//! Package and temperature suffixes are not part of the name: `K8U6` and `K8T6`
+//! are one die in two packages, and nothing in software can tell them apart.
+//!
+//! Both halves of the name reach the code. The flash code decides the
+//! alternate-function map, where the same pin at the same AF number can reach a
+//! different peripheral (`PA2` AF1 is `USART0_TX` on x4 but `USART1_TX` on x8);
+//! the pin count decides which pins exist at all. `build.rs` also writes the
+//! `memory.x` the linker needs, so a project using this HAL does not supply one —
+//! though a `memory.x` in its own root still takes precedence.
 //!
 //! # Getting started
 //!
@@ -34,21 +43,11 @@
 #![no_std]
 #![warn(missing_docs)]
 
-#[cfg(not(any(feature = "gd32e230x4", feature = "gd32e230x6", feature = "gd32e230x8")))]
-compile_error!(
-    "select a chip variant: enable exactly one of the \
-     `gd32e230x4` / `gd32e230x6` / `gd32e230x8` features"
-);
-
-#[cfg(any(
-    all(feature = "gd32e230x4", feature = "gd32e230x6"),
-    all(feature = "gd32e230x4", feature = "gd32e230x8"),
-    all(feature = "gd32e230x6", feature = "gd32e230x8")
-))]
-compile_error!(
-    "the `gd32e230x4` / `gd32e230x6` / `gd32e230x8` features are mutually \
-     exclusive: enable exactly one"
-);
+// Both halves of the choice are checked in build.rs, which counts the enabled
+// features and knows their names. This guards the source against being compiled
+// with no build script at all — the flags below are what every gate reads.
+#[cfg(not(any(chip_x4, chip_x6, chip_x8)))]
+compile_error!("select a chip: enable exactly one of the `gd32e230*` features");
 
 /// Re-export of the peripheral access crate this HAL is built on. Referring to
 /// it as `pac` keeps the door open to other parts of the family behind a single

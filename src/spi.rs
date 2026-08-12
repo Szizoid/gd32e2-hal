@@ -131,7 +131,7 @@ spi_pins!(
 );
 
 // ---- (1) GD32E230x4 only: PB13/14/15 AF0 are SPI0 ----
-#[cfg(feature = "gd32e230x4")]
+#[cfg(chip_x4)]
 spi_pins!(
     pac::Spi0:
         SCK: ['B' 13 : 0]
@@ -142,7 +142,7 @@ spi_pins!(
 // ---- (3) GD32E230x8 only: SPI1 exists, and PB13/14/15 AF0 belong to it ----
 // NB: PA13/PA14 are SWDIO/SWCLK — reaching them needs `unsafe activate()` on
 // the `Debugger` typestate first, and doing so gives up SWD debugging.
-#[cfg(feature = "gd32e230x8")]
+#[cfg(chip_x8)]
 spi_pins!(
     pac::Spi1:
         SCK: ['B' 1 : 6, 'B' 10 : 7, 'B' 13 : 0]

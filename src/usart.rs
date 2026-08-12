@@ -53,7 +53,7 @@ usart_pins! {
 }
 
 // ---- (1) GD32E230x4 only: PA2/PA3/PA14/PA15 AF1 are USART0 ----
-#[cfg(feature = "gd32e230x4")]
+#[cfg(chip_x4)]
 usart_pins! {
     pac::Usart0:
         TX: [ 'A' 2:1, 'A' 14:1 ]
@@ -61,7 +61,7 @@ usart_pins! {
 }
 
 // ---- (2) GD32E230x8/6: PA2/PA3/PA14/PA15 AF1 are USART1; USART1 exists ----
-#[cfg(any(feature = "gd32e230x6", feature = "gd32e230x8"))]
+#[cfg(any(chip_x6, chip_x8))]
 usart_pins! {
     pac::Usart1:
         TX: [ 'A' 2:1, 'A' 8:4, 'A' 14:1 ]

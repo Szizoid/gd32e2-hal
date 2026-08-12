@@ -8,25 +8,43 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/Szizoid/gd32e2-hal"
 keywords = ["gd32", "gd32e230", "cortex-m", "hal", "embedded-hal"]
 categories = ["embedded", "hardware-support", "no-std", "no-std::no-alloc"]
-exclude = [".cargo", ".gitignore", "docs", "memory.x.example", "rust-toolchain.toml"]
+exclude = [".cargo", ".gitignore", "docs", "memory.x", "rust-toolchain.toml"]
 
+# A part has to be named here too, there being no default: docs.rs would otherwise
+# build with `defmt` alone and stop at build.rs.
 [package.metadata.docs.rs]
 default-target = "thumbv8m.base-none-eabi"
 targets = []
-features = ["defmt"]
+features = ["defmt", "gd32e230k8"]
 
-# Chip variant within the GD32E230x series. These gate the alternate-function
-# map: the same pin+AF maps to different peripherals depending on the variant
-# (datasheet Table 2-13/2-14 notes 1/2/3). Mutually exclusive; exactly one must
-# be enabled (enforced by a compile_error! in lib.rs).
-#   gd32e230x4 -> note (1), GD32E230x4 only
-#   gd32e230x6 -> note (2), GD32E230x8/6
-#   gd32e230x8 -> notes (2) and (3), GD32E230x8 (our GD32E230K8U6)
+# The part being built for. One feature per part, named after it: the letter is
+# the bonded pin count (F 20, E 24, G 28, K 32, C 48), the digit the flash code
+# (4 = 16K flash + 4K SRAM, 6 = 32K + 6K, 8 = 64K + 8K). Package and temperature
+# suffixes are absent on purpose — `K8U6` and `K8T6` are the same die, and
+# software cannot tell them apart.
+#
+# build.rs turns the choice into the memory sizes in `memory.x` and into the
+# `chip_x4`/`x6`/`x8` and `pins_*` cfg flags the source gates on: the AF map
+# differs by flash code (datasheet Table 2-13/2-14 notes 1/2/3), the bonded pins
+# by pin count. Mutually exclusive; exactly one must be enabled.
+#
+# No default on purpose: a default would be this crate assuming which part is on
+# someone else's board, and a wrong pin map compiles quietly. Our own examples get
+# theirs from the [dev-dependencies] entry below.
 [features]
-default = ["gd32e230x8"]
-gd32e230x4 = []
-gd32e230x6 = []
-gd32e230x8 = []
+gd32e230f4 = []
+gd32e230f6 = []
+gd32e230f8 = []
+gd32e230e8 = []
+gd32e230g4 = []
+gd32e230g6 = []
+gd32e230g8 = []
+gd32e230k4 = []
+gd32e230k6 = []
+gd32e230k8 = []
+gd32e230c4 = []
+gd32e230c6 = []
+gd32e230c8 = []
 
 # Derives defmt::Format on the public enums so they can be logged. Off by
 # default: a user who does not log with defmt should not pull the crate in.
@@ -71,8 +89,11 @@ defmt = "1.1"
 defmt-rtt = "1.3"
 # The crate depending on itself is not a cycle: this entry applies to examples
 # only, and it is the one way to build them with a feature of the library
-# enabled. Without it the examples cannot log our own error types.
-gd32e2-hal = { path = ".", features = ["defmt"] }
+# enabled. Without it the examples cannot log our own error types, and — since
+# there is no default chip — would not know which part they are for either. This
+# is also why plain `cargo build` needs the feature spelled out: it builds the
+# library alone, where dev-dependencies do not apply (see the `lib` alias).
+gd32e2-hal = { path = ".", features = ["defmt", "gd32e230k8"] }
 
 # Small, predictable binary. debug = true costs no flash — probe-rs only loads
 # the loadable sections — and is what gives symbols to `probe-rs gdb`.

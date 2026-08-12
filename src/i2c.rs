@@ -71,7 +71,7 @@ i2c_pins!(
 );
 
 // ---- (1) GD32E230x4 only: PB10/PB11 AF1 are I2C0 ----
-#[cfg(feature = "gd32e230x4")]
+#[cfg(chip_x4)]
 i2c_pins!(
     pac::I2c0:
         SDA: ['B' 11 : 1]
@@ -79,7 +79,7 @@ i2c_pins!(
 );
 
 // ---- (3) GD32E230x8 only: I2C1 exists, and PB10/PB11 AF1 belong to it ----
-#[cfg(feature = "gd32e230x8")]
+#[cfg(chip_x8)]
 i2c_pins!(
     pac::I2c1:
         SDA: ['A' 1 : 4, 'A' 12 : 5, 'B' 11 : 1, 'B' 14 : 5]
