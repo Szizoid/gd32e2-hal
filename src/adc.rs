@@ -2,12 +2,12 @@
 //!
 //! Single-channel blocking conversions, software triggered. The ADC needs its own
 //! clock, which is *not* started by default — call
-//! [`CFGR::adc_sel`](crate::rcu::CFGR::adc_sel) before constructing an [`Adc`],
+//! [`ClockConfig::adc_sel`](crate::rcu::ClockConfig::adc_sel) before constructing an [`Adc`],
 //! or [`Clocks::ck_adc`](crate::rcu::Clocks::ck_adc) is zero and [`Adc::new`]
 //! panics on the division rather than hanging in calibration.
 //!
 //! ```ignore
-//! let clocks = CFGR::default()
+//! let clocks = ClockConfig::default()
 //!     .adc_sel(AdcSel::Prescaled(AdcPsc::Apb2Div8))
 //!     .freeze(&mut rcu, &mut dp.fmc);
 //! let adc = Adc::new(&mut rcu, dp.adc, clocks);
@@ -103,7 +103,7 @@ impl Adc {
     ///
     /// If the ADC clock was never selected — [`Clocks::ck_adc`](crate::rcu::Clocks::ck_adc)
     /// is then zero and the calibration delay divides by it. Configure the clock
-    /// with [`CFGR::adc_sel`](crate::rcu::CFGR::adc_sel) first.
+    /// with [`ClockConfig::adc_sel`](crate::rcu::ClockConfig::adc_sel) first.
     pub fn new(rcu: &mut Rcu, adc: pac::Adc, clocks: Clocks) -> Self {
         <pac::Adc as Enable>::enable(rcu);
         <pac::Adc as Reset>::reset(rcu);

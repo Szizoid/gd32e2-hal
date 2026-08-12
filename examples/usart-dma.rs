@@ -13,7 +13,7 @@ use panic_halt as _;
 use gd32e2_hal::dma::Prio;
 use gd32e2_hal::pac;
 use gd32e2_hal::prelude::*;
-use gd32e2_hal::rcu::{CFGR, PllFreq};
+use gd32e2_hal::rcu::{ClockConfig, PllFreq, SysClk};
 use gd32e2_hal::usart::{Usart, UsartConfig};
 
 /// One second at 48 MHz, so the messages are distinguishable in a terminal.
@@ -25,8 +25,8 @@ const MSG: &[u8] = b"dma works\r\n";
 fn main() -> ! {
     let mut dp = pac::Peripherals::take().unwrap();
     let mut rcu = dp.rcu.constrain();
-    let clocks = CFGR::default()
-        .sysclk(PllFreq::Mhz48)
+    let clocks = ClockConfig::default()
+        .sysclk(SysClk::Pll(PllFreq::Mhz48))
         .freeze(&mut rcu, &mut dp.fmc);
     let parts = dp.gpioa.split(&mut rcu);
     let pa6 = parts.pa6.into_output();

@@ -18,7 +18,7 @@ use panic_halt as _;
 
 use gd32e2_hal::pac;
 use gd32e2_hal::prelude::*;
-use gd32e2_hal::rcu::{CFGR, PllFreq};
+use gd32e2_hal::rcu::{ClockConfig, PllFreq, SysClk};
 use gd32e2_hal::spi::{BitOrder, Spi, SpiConfig, SpiPsc};
 
 #[entry]
@@ -27,8 +27,8 @@ fn main() -> ! {
     let mut rcu = dp.rcu.constrain();
     // SPI takes its clock from the bus, so nothing here reads the frequencies —
     // but the tree still has to be frozen before `split`.
-    let _clocks = CFGR::default()
-        .sysclk(PllFreq::Mhz48)
+    let _clocks = ClockConfig::default()
+        .sysclk(SysClk::Pll(PllFreq::Mhz48))
         .freeze(&mut rcu, &mut dp.fmc);
 
     let gpioa = dp.gpioa.split(&mut rcu);

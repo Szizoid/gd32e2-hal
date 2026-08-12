@@ -24,7 +24,7 @@ use gd32e2_hal::gpio::Pull;
 use gd32e2_hal::i2c::{I2c, I2cMode};
 use gd32e2_hal::pac;
 use gd32e2_hal::prelude::*;
-use gd32e2_hal::rcu::{CFGR, PllFreq};
+use gd32e2_hal::rcu::{ClockConfig, PllFreq, SysClk};
 
 /// SCL frequency. 100 kHz is the standard-mode rate; anything near it needs real
 /// pull-up resistors, not the internal ones.
@@ -40,8 +40,8 @@ const VALUES: [u8; 2] = [0xDE, 0xAD];
 fn main() -> ! {
     let mut dp = pac::Peripherals::take().unwrap();
     let mut rcu = dp.rcu.constrain();
-    let clocks = CFGR::default()
-        .sysclk(PllFreq::Mhz48)
+    let clocks = ClockConfig::default()
+        .sysclk(SysClk::Pll(PllFreq::Mhz48))
         .freeze(&mut rcu, &mut dp.fmc);
 
     let gpiob = dp.gpiob.split(&mut rcu);

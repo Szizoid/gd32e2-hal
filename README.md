@@ -68,9 +68,11 @@ this package.
 **RCU** (`src/rcu.rs`) — `dp.rcu.constrain()` (`RcuExt`). Per-peripheral `Enable`
 and `Reset` traits from the `bus_en!`/`bus_rst!` macros (separate, since not every
 peripheral has a reset bit — DMA has none), called from every driver's
-constructor, so nothing can be used unclocked. Clock tree: a `CFGR` builder →
-`.freeze(&mut rcu, &mut dp.fmc)` → a frozen `Clocks`. PLL from IRC8M (`PllFreq`,
-8–72 MHz) and bus prescalers (`AhbPsc` / `ApbPsc`) are typed enums, so an
+constructor, so nothing can be used unclocked. Clock tree: a `ClockConfig` builder →
+`.freeze(&mut rcu, &mut dp.fmc)` → a frozen `Clocks`. `ClockConfig::default()` is
+the reset state — undivided buses, `SysClk::Irc8m`, USART0 on APB2, `AdcSel::Off` —
+and every field reaches its registers whether it was named or not. PLL from IRC8M
+(`PllFreq`, 8–72 MHz) and bus prescalers (`AhbPsc` / `ApbPsc`) are typed enums, so an
 unreachable frequency is a compile error, not a silent rounding; flash wait states
 are set from the new `hclk` before the source switch. `Usart0Sel` and `AdcSel` /
 `AdcPsc` resolve into `Clocks`. `rcu.ck_out(src, div)` routes an internal clock
@@ -227,13 +229,13 @@ on hardware yet.
 ```rust
 use gd32e2_hal::gpio::GpioExt;
 use gd32e2_hal::pac;
-use gd32e2_hal::rcu::{RcuExt, CFGR, PllFreq};
+use gd32e2_hal::rcu::{ClockConfig, PllFreq, RcuExt, SysClk};
 use gd32e2_hal::usart::{Usart, UsartConfig};
 
 let mut dp = pac::Peripherals::take().unwrap();
 let mut rcu = dp.rcu.constrain();
-let clocks = CFGR::default()
-    .sysclk(PllFreq::Mhz48)                  // PLL from IRC8M -> 48 MHz
+let clocks = ClockConfig::default()
+    .sysclk(SysClk::Pll(PllFreq::Mhz48))     // PLL from IRC8M -> 48 MHz
     .freeze(&mut rcu, &mut dp.fmc);
 let parts = dp.gpioa.split(&mut rcu);        // enables the GPIOA clock
 
@@ -395,8 +397,10 @@ open-drain; `embedded-hal` 1.0 `OutputPin` / `InputPin` / `StatefulOutputPin`
 **RCU** (`src/rcu.rs`) — `dp.rcu.constrain()` (`RcuExt`). Трейты `Enable` и
 `Reset` на каждую периферию из макросов `bus_en!`/`bus_rst!` (порознь, потому что
 не у каждой периферии есть бит сброса — у DMA его нет), зовутся из конструктора
-каждого драйвера, так что без такта не поработать. Дерево тактов: билдер `CFGR` →
-`.freeze(&mut rcu, &mut dp.fmc)` → замороженный `Clocks`. PLL от IRC8M
+каждого драйвера, так что без такта не поработать. Дерево тактов: билдер `ClockConfig` →
+`.freeze(&mut rcu, &mut dp.fmc)` → замороженный `Clocks`. `ClockConfig::default()` —
+это состояние после сброса (шины без делителей, `SysClk::Irc8m`, USART0 на APB2,
+`AdcSel::Off`), и каждое поле доезжает до регистров, названо оно или нет. PLL от IRC8M
 (`PllFreq`, 8–72 МГц) и прескейлеры шин (`AhbPsc` / `ApbPsc`) — типизированные
 энумы, поэтому недостижимая частота даёт ошибку компиляции, а не тихое
 округление; wait state'ы flash выставляются от нового `hclk` до переключения
@@ -553,13 +557,13 @@ plus на железе пока не были.
 ```rust
 use gd32e2_hal::gpio::GpioExt;
 use gd32e2_hal::pac;
-use gd32e2_hal::rcu::{RcuExt, CFGR, PllFreq};
+use gd32e2_hal::rcu::{ClockConfig, PllFreq, RcuExt, SysClk};
 use gd32e2_hal::usart::{Usart, UsartConfig};
 
 let mut dp = pac::Peripherals::take().unwrap();
 let mut rcu = dp.rcu.constrain();
-let clocks = CFGR::default()
-    .sysclk(PllFreq::Mhz48)                  // PLL от IRC8M -> 48 МГц
+let clocks = ClockConfig::default()
+    .sysclk(SysClk::Pll(PllFreq::Mhz48))     // PLL от IRC8M -> 48 МГц
     .freeze(&mut rcu, &mut dp.fmc);
 let parts = dp.gpioa.split(&mut rcu);        // включает такт GPIOA
 

@@ -1,14 +1,14 @@
 //! Reset and clock unit: the system clock tree and per-peripheral clock gating.
 //!
-//! Start with [`RcuExt::constrain`], build the clock tree with [`CFGR`], then
+//! Start with [`RcuExt::constrain`], build the clock tree with [`ClockConfig`], then
 //! freeze it into a [`Clocks`] value that the other modules take as an argument.
 //! Freezing writes the registers once; the resulting frequencies are read-only
 //! afterwards.
 //!
 //! ```ignore
 //! let mut rcu = dp.rcu.constrain();
-//! let clocks = CFGR::default()
-//!     .sysclk(PllFreq::Mhz48)
+//! let clocks = ClockConfig::default()
+//!     .sysclk(SysClk::Pll(PllFreq::Mhz48))
 //!     .adc_sel(AdcSel::Prescaled(AdcPsc::Apb2Div8))
 //!     .freeze(&mut rcu, &mut dp.fmc);
 //! ```
@@ -64,6 +64,21 @@ pub enum PllFreq {
     Mhz64 = 64_000_000,
     Mhz68 = 68_000_000,
     Mhz72 = 72_000_000,
+}
+
+/// Source of the system clock.
+///
+/// [`Irc8m`](Self::Irc8m) means the reset state rather than a switch back to it:
+/// [`freeze`](ClockConfig::freeze) leaves `SCS` alone, because lowering the clock
+/// after the flash wait states were already set for a higher one is exactly the
+/// order that must not happen.
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum SysClk {
+    /// IRC8M straight through at 8 MHz, PLL off.
+    Irc8m,
+    /// The PLL, at the frequency it is asked for.
+    Pll(PllFreq),
 }
 
 /// AHB prescaler: divides the system clock down to `hclk`.
@@ -128,7 +143,10 @@ pub enum Irc28mDiv {
 #[derive(Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum AdcSel {
-    /// The dedicated internal 28 MHz oscillator, which [`CFGR::freeze`] starts.
+    /// Left as the reset state: IRC28M selected but not running, so `CK_ADC` is
+    /// 0 Hz and [`Clocks::ck_adc`] reads zero.
+    Off,
+    /// The dedicated internal 28 MHz oscillator, which [`ClockConfig::freeze`] starts.
     Irc28m(Irc28mDiv),
     /// A prescaled tap off APB2 or AHB.
     Prescaled(AdcPsc),
@@ -152,7 +170,7 @@ pub enum Usart0Sel {
     Irc8m,
 }
 
-/// Frozen clock frequencies, produced by [`CFGR::freeze`].
+/// Frozen clock frequencies, produced by [`ClockConfig::freeze`].
 ///
 /// Passed by value into the drivers that need it (USART for its baud divisor,
 /// ADC for its calibration delay). There are no setters — once frozen, the tree
@@ -190,7 +208,7 @@ impl Clocks {
     pub fn usart0(&self) -> Hertz {
         self.usart0
     }
-    /// Clock feeding the ADC. Zero if [`CFGR::adc_sel`] was never called.
+    /// Clock feeding the ADC. Zero while [`AdcSel::Off`] stands.
     pub fn ck_adc(&self) -> Hertz {
         self.ck_adc
     }
@@ -210,60 +228,70 @@ impl Clocks {
     }
 }
 
-/// Builder for the clock tree, applied by [`freeze`](CFGR::freeze).
+/// Builder for the clock tree, applied by [`freeze`](ClockConfig::freeze).
 ///
-/// Every field is optional: anything left unset keeps its reset value and its
-/// registers are not written. With no calls at all, the system clock stays on
-/// IRC8M at 8 MHz with no bus division.
-#[derive(Default)]
-pub struct CFGR {
-    hclk: Option<AhbPsc>,
-    pclk1: Option<ApbPsc>,
-    pclk2: Option<ApbPsc>,
-    sysclk: Option<PllFreq>,
-    usart0_sel: Option<Usart0Sel>,
-    adc_sel: Option<AdcSel>,
+/// [`Default`] holds the reset state in one place — undivided buses, IRC8M as the
+/// system clock, USART0 on APB2 and no ADC clock — and every field is written to
+/// its registers whether it was named or not.
+pub struct ClockConfig {
+    hclk: AhbPsc,
+    pclk1: ApbPsc,
+    pclk2: ApbPsc,
+    sysclk: SysClk,
+    usart0_sel: Usart0Sel,
+    adc_sel: AdcSel,
 }
 
-impl CFGR {
+impl Default for ClockConfig {
+    fn default() -> Self {
+        Self {
+            hclk: AhbPsc::Div1,
+            pclk1: ApbPsc::Div1,
+            pclk2: ApbPsc::Div1,
+            sysclk: SysClk::Irc8m,
+            usart0_sel: Usart0Sel::Apb2,
+            adc_sel: AdcSel::Off,
+        }
+    }
+}
+
+impl ClockConfig {
     fn pll_mul(desired: PllFreq) -> u32 {
         (desired as u32) / PLL_SRC
     }
 
     /// Sets the AHB prescaler, dividing `sysclk` down to `hclk`.
     pub fn hclk(mut self, psc: AhbPsc) -> Self {
-        self.hclk = Some(psc);
+        self.hclk = psc;
         self
     }
     /// Sets the APB1 prescaler, dividing `hclk` down to `pclk1`.
     pub fn pclk1(mut self, psc: ApbPsc) -> Self {
-        self.pclk1 = Some(psc);
+        self.pclk1 = psc;
         self
     }
     /// Sets the APB2 prescaler, dividing `hclk` down to `pclk2`.
     pub fn pclk2(mut self, psc: ApbPsc) -> Self {
-        self.pclk2 = Some(psc);
+        self.pclk2 = psc;
         self
     }
-    /// Runs the system clock off the PLL at the given frequency.
-    ///
-    /// Without this the system clock stays on IRC8M at 8 MHz.
-    pub fn sysclk(mut self, freq: PllFreq) -> Self {
-        self.sysclk = Some(freq);
+    /// Picks the system clock source.
+    pub fn sysclk(mut self, src: SysClk) -> Self {
+        self.sysclk = src;
         self
     }
-    /// Picks the USART0 clock source. Defaults to the APB2 bus clock.
+    /// Picks the USART0 clock source.
     pub fn usart0_sel(mut self, src: Usart0Sel) -> Self {
-        self.usart0_sel = Some(src);
+        self.usart0_sel = src;
         self
     }
     /// Picks the ADC clock source and starts it if needed.
     ///
-    /// Without this the ADC is left unclocked and [`Clocks::ck_adc`] stays zero —
-    /// constructing an [`Adc`](crate::adc::Adc) would then divide by zero rather
-    /// than silently hang in calibration.
+    /// Left at [`AdcSel::Off`] the ADC has no clock and [`Clocks::ck_adc`] stays
+    /// zero — constructing an [`Adc`](crate::adc::Adc) would then divide by zero
+    /// rather than silently hang in calibration.
     pub fn adc_sel(mut self, sel: AdcSel) -> Self {
-        self.adc_sel = Some(sel);
+        self.adc_sel = sel;
         self
     }
 
@@ -274,8 +302,8 @@ impl CFGR {
     /// `fmc` is taken because those wait states live in a separate peripheral.
     pub fn freeze(self, rcu: &mut Rcu, fmc: &mut pac::Fmc) -> Clocks {
         let sysclk = match self.sysclk {
-            None => IRC8M,
-            Some(desired) => {
+            SysClk::Irc8m => IRC8M,
+            SysClk::Pll(desired) => {
                 let mul = Self::pll_mul(desired);
                 rcu.rcu.cfg0().modify(|_, w| {
                     let w = w.pllsel().irc8m_2();
@@ -306,14 +334,14 @@ impl CFGR {
             }
         };
 
-        let ahb_psc = self.hclk.unwrap_or(AhbPsc::Div1);
+        let ahb_psc = self.hclk;
         let hclk = sysclk / (ahb_psc as u32);
-        let apb1_psc = self.pclk1.unwrap_or(ApbPsc::Div1);
+        let apb1_psc = self.pclk1;
         let pclk1 = hclk / (apb1_psc as u32);
-        let apb2_psc = self.pclk2.unwrap_or(ApbPsc::Div1);
+        let apb2_psc = self.pclk2;
         let pclk2 = hclk / (apb2_psc as u32);
 
-        let usart0_sel = self.usart0_sel.unwrap_or(Usart0Sel::Apb2);
+        let usart0_sel = self.usart0_sel;
         let usart0 = match usart0_sel {
             Usart0Sel::Apb2 => pclk2,
             Usart0Sel::Sysclk => sysclk,
@@ -327,57 +355,52 @@ impl CFGR {
             Usart0Sel::Irc8m => w.usart0sel().irc8m(),
         });
 
-        // None => ADC clock stays at reset (IRC28M selected but off), 0 Hz.
         let ck_adc = match self.adc_sel {
-            None => 0,
-            Some(sel) => {
-                match sel {
-                    AdcSel::Irc28m(div) => {
-                        rcu.rcu.ctl1().modify(|_, w| w.irc28men().on());
-                        while rcu.rcu.ctl1().read().irc28mstb().is_not_ready() {}
-                        rcu.rcu.cfg2().modify(|_, w| {
-                            let w = match div {
-                                Irc28mDiv::Div1 => w.irc28mdiv().bit(IRC28MDIV_DIV1),
-                                Irc28mDiv::Div2 => w.irc28mdiv().bit(IRC28MDIV_DIV2),
-                            };
-                            w.adcsel().bit(ADCSEL_IRC28M)
-                        });
-                    }
-                    AdcSel::Prescaled(psc) => {
-                        // ADCPSC = 3-bit code split CFG0[15:14] + CFG2[31] (like PLLMF+MSB)
-                        rcu.rcu.cfg0().modify(|_, w| match psc {
-                            AdcPsc::Apb2Div2 | AdcPsc::AhbDiv3 => w.adcpsc().div2(),
-                            AdcPsc::Apb2Div4 | AdcPsc::AhbDiv5 => w.adcpsc().div4(),
-                            AdcPsc::Apb2Div6 | AdcPsc::AhbDiv7 => w.adcpsc().div6(),
-                            AdcPsc::Apb2Div8 | AdcPsc::AhbDiv9 => w.adcpsc().div8(),
-                        });
-                        rcu.rcu.cfg2().modify(|_, w| {
-                            let w = match psc {
-                                AdcPsc::Apb2Div2
-                                | AdcPsc::Apb2Div4
-                                | AdcPsc::Apb2Div6
-                                | AdcPsc::Apb2Div8 => w.adcpsc().bit(ADCPSC_MSB_APB2),
-                                AdcPsc::AhbDiv3
-                                | AdcPsc::AhbDiv5
-                                | AdcPsc::AhbDiv7
-                                | AdcPsc::AhbDiv9 => w.adcpsc().bit(ADCPSC_MSB_AHB),
-                            };
-                            w.adcsel().bit(ADCSEL_PRESCALED)
-                        });
-                    }
+            AdcSel::Off => 0,
+            AdcSel::Irc28m(div) => {
+                rcu.rcu.ctl1().modify(|_, w| w.irc28men().on());
+                while rcu.rcu.ctl1().read().irc28mstb().is_not_ready() {}
+                rcu.rcu.cfg2().modify(|_, w| {
+                    let w = match div {
+                        Irc28mDiv::Div1 => w.irc28mdiv().bit(IRC28MDIV_DIV1),
+                        Irc28mDiv::Div2 => w.irc28mdiv().bit(IRC28MDIV_DIV2),
+                    };
+                    w.adcsel().bit(ADCSEL_IRC28M)
+                });
+                match div {
+                    Irc28mDiv::Div1 => IRC28M,
+                    Irc28mDiv::Div2 => IRC28M / 2,
                 }
-
-                match sel {
-                    AdcSel::Irc28m(Irc28mDiv::Div1) => IRC28M,
-                    AdcSel::Irc28m(Irc28mDiv::Div2) => IRC28M / 2,
-                    AdcSel::Prescaled(AdcPsc::Apb2Div2) => pclk2 / 2,
-                    AdcSel::Prescaled(AdcPsc::Apb2Div4) => pclk2 / 4,
-                    AdcSel::Prescaled(AdcPsc::Apb2Div6) => pclk2 / 6,
-                    AdcSel::Prescaled(AdcPsc::Apb2Div8) => pclk2 / 8,
-                    AdcSel::Prescaled(AdcPsc::AhbDiv3) => hclk / 3,
-                    AdcSel::Prescaled(AdcPsc::AhbDiv5) => hclk / 5,
-                    AdcSel::Prescaled(AdcPsc::AhbDiv7) => hclk / 7,
-                    AdcSel::Prescaled(AdcPsc::AhbDiv9) => hclk / 9,
+            }
+            AdcSel::Prescaled(psc) => {
+                // ADCPSC = 3-bit code split CFG0[15:14] + CFG2[31] (like PLLMF+MSB)
+                rcu.rcu.cfg0().modify(|_, w| match psc {
+                    AdcPsc::Apb2Div2 | AdcPsc::AhbDiv3 => w.adcpsc().div2(),
+                    AdcPsc::Apb2Div4 | AdcPsc::AhbDiv5 => w.adcpsc().div4(),
+                    AdcPsc::Apb2Div6 | AdcPsc::AhbDiv7 => w.adcpsc().div6(),
+                    AdcPsc::Apb2Div8 | AdcPsc::AhbDiv9 => w.adcpsc().div8(),
+                });
+                rcu.rcu.cfg2().modify(|_, w| {
+                    let w = match psc {
+                        AdcPsc::Apb2Div2
+                        | AdcPsc::Apb2Div4
+                        | AdcPsc::Apb2Div6
+                        | AdcPsc::Apb2Div8 => w.adcpsc().bit(ADCPSC_MSB_APB2),
+                        AdcPsc::AhbDiv3 | AdcPsc::AhbDiv5 | AdcPsc::AhbDiv7 | AdcPsc::AhbDiv9 => {
+                            w.adcpsc().bit(ADCPSC_MSB_AHB)
+                        }
+                    };
+                    w.adcsel().bit(ADCSEL_PRESCALED)
+                });
+                match psc {
+                    AdcPsc::Apb2Div2 => pclk2 / 2,
+                    AdcPsc::Apb2Div4 => pclk2 / 4,
+                    AdcPsc::Apb2Div6 => pclk2 / 6,
+                    AdcPsc::Apb2Div8 => pclk2 / 8,
+                    AdcPsc::AhbDiv3 => hclk / 3,
+                    AdcPsc::AhbDiv5 => hclk / 5,
+                    AdcPsc::AhbDiv7 => hclk / 7,
+                    AdcPsc::AhbDiv9 => hclk / 9,
                 }
             }
         };
@@ -420,10 +443,11 @@ impl CFGR {
                 ApbPsc::Div8 => w.apb2psc().div8(),
                 ApbPsc::Div16 => w.apb2psc().div16(),
             };
-            if self.sysclk.is_some() {
-                w.scs().pll()
-            } else {
-                w
+            match self.sysclk {
+                SysClk::Pll(_) => w.scs().pll(),
+                // SCS is left alone: switching down after the wait states were
+                // set for a higher hclk would read the flash too fast.
+                SysClk::Irc8m => w,
             }
         });
         Clocks {

@@ -25,7 +25,7 @@ use panic_halt as _;
 
 use gd32e2_hal::pac;
 use gd32e2_hal::prelude::*;
-use gd32e2_hal::rcu::{CFGR, PllFreq};
+use gd32e2_hal::rcu::{ClockConfig, PllFreq, SysClk};
 use gd32e2_hal::time::MicrosDuration;
 
 /// Reads taken per measurement, spanning several PWM periods.
@@ -37,8 +37,8 @@ const TOLERANCE: u32 = 5;
 fn main() -> ! {
     let mut dp = pac::Peripherals::take().unwrap();
     let mut rcu = dp.rcu.constrain();
-    let clocks = CFGR::default()
-        .sysclk(PllFreq::Mhz48)
+    let clocks = ClockConfig::default()
+        .sysclk(SysClk::Pll(PllFreq::Mhz48))
         .freeze(&mut rcu, &mut dp.fmc);
 
     let gpioa = dp.gpioa.split(&mut rcu);

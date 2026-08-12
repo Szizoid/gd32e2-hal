@@ -34,7 +34,7 @@ use gd32e2_hal::gpio::Pull;
 use gd32e2_hal::i2c::{Error, I2c, I2cMode};
 use gd32e2_hal::pac;
 use gd32e2_hal::prelude::*;
-use gd32e2_hal::rcu::{CFGR, PllFreq};
+use gd32e2_hal::rcu::{ClockConfig, PllFreq, SysClk};
 
 /// SCL frequency. 100 kHz is the standard-mode rate; anything near it needs real
 /// pull-up resistors, not the internal ones.
@@ -51,8 +51,8 @@ fn main() -> ! {
     let mut rcu = dp.rcu.constrain();
     // I²C derives CLKC, RISETIME and I2CCLK from pclk1, so the tree has to be
     // frozen first. Standard mode needs pclk1 of 2 MHz, fast 8, fast plus 24.
-    let clocks = CFGR::default()
-        .sysclk(PllFreq::Mhz48)
+    let clocks = ClockConfig::default()
+        .sysclk(SysClk::Pll(PllFreq::Mhz48))
         .freeze(&mut rcu, &mut dp.fmc);
 
     let gpiob = dp.gpiob.split(&mut rcu);

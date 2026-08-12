@@ -23,8 +23,8 @@
 //! ```ignore
 //! let mut dp = pac::Peripherals::take().unwrap();
 //! let mut rcu = dp.rcu.constrain();
-//! let clocks = CFGR::default()
-//!     .sysclk(PllFreq::Mhz48)
+//! let clocks = ClockConfig::default()
+//!     .sysclk(SysClk::Pll(PllFreq::Mhz48))
 //!     .freeze(&mut rcu, &mut dp.fmc);
 //! let parts = dp.gpioa.split(&mut rcu);
 //! let mut led = parts.pa5.into_output();

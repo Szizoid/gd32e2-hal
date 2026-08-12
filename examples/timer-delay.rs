@@ -18,15 +18,15 @@ use panic_halt as _;
 
 use gd32e2_hal::pac;
 use gd32e2_hal::prelude::*;
-use gd32e2_hal::rcu::{CFGR, PllFreq};
+use gd32e2_hal::rcu::{ClockConfig, PllFreq, SysClk};
 use gd32e2_hal::time::{MicrosDuration, MillisDuration, SecsDuration};
 
 #[entry]
 fn main() -> ! {
     let mut dp = pac::Peripherals::take().unwrap();
     let mut rcu = dp.rcu.constrain();
-    let clocks = CFGR::default()
-        .sysclk(PllFreq::Mhz24)
+    let clocks = ClockConfig::default()
+        .sysclk(SysClk::Pll(PllFreq::Mhz24))
         .freeze(&mut rcu, &mut dp.fmc);
 
     let mut timer = dp.timer5.constrain(&mut rcu, clocks).into_delay();

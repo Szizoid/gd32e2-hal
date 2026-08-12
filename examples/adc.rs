@@ -18,14 +18,14 @@ use panic_halt as _;
 use gd32e2_hal::adc::{Adc, SampTime};
 use gd32e2_hal::pac;
 use gd32e2_hal::prelude::*;
-use gd32e2_hal::rcu::{AdcPsc, AdcSel, CFGR, Irc28mDiv, PllFreq};
+use gd32e2_hal::rcu::{AdcPsc, AdcSel, ClockConfig, Irc28mDiv, PllFreq, SysClk};
 
 #[entry]
 fn main() -> ! {
     let mut dp = pac::Peripherals::take().unwrap();
     let mut rcu = dp.rcu.constrain();
-    let clocks = CFGR::default()
-        .sysclk(PllFreq::Mhz48)
+    let clocks = ClockConfig::default()
+        .sysclk(SysClk::Pll(PllFreq::Mhz48))
         // CK_ADC = pclk2 / 8 = 6 MHz — slow enough for the temperature sensor.
         .adc_sel(AdcSel::Prescaled(AdcPsc::Apb2Div8))
         .freeze(&mut rcu, &mut dp.fmc);

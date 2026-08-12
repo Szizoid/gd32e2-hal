@@ -25,7 +25,7 @@ use panic_halt as _;
 use gd32e2_hal::gpio::{Pull, Speed};
 use gd32e2_hal::pac;
 use gd32e2_hal::prelude::*;
-use gd32e2_hal::rcu::{CFGR, PllFreq};
+use gd32e2_hal::rcu::{ClockConfig, PllFreq, SysClk};
 
 #[entry]
 fn main() -> ! {
@@ -33,8 +33,8 @@ fn main() -> ! {
     let mut rcu = dp.rcu.constrain();
     // Nothing here reads the frequencies, but the clock tree still has to be
     // frozen: `split` needs the GPIO port clocked.
-    let _clocks = CFGR::default()
-        .sysclk(PllFreq::Mhz48)
+    let _clocks = ClockConfig::default()
+        .sysclk(SysClk::Pll(PllFreq::Mhz48))
         .freeze(&mut rcu, &mut dp.fmc);
 
     let gpioa = dp.gpioa.split(&mut rcu);

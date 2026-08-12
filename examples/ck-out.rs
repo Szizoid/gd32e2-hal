@@ -5,7 +5,7 @@
 //! onto PA8 (AF0) for a scope or a frequency counter, sets the bus prescalers,
 //! and logs the computed values so the two can be compared.
 //!
-//! Covers: `CFGR` `hclk`/`pclk1`/`pclk2`/`usart0_sel`, `AhbPsc`/`ApbPsc`,
+//! Covers: `ClockConfig` `hclk`/`pclk1`/`pclk2`/`usart0_sel`, `AhbPsc`/`ApbPsc`,
 //! `Usart0Sel`, the `Clocks` getters, and `Rcu::ck_out`.
 
 #![no_std]
@@ -18,15 +18,15 @@ use panic_halt as _;
 use gd32e2_hal::pac;
 use gd32e2_hal::prelude::*;
 use gd32e2_hal::rcu::{
-    AhbPsc, ApbPsc, CFGR, CkOutDiv, CkOutSrc, PllDiv, PllFreq, RcuExt, Usart0Sel,
+    AhbPsc, ApbPsc, CkOutDiv, CkOutSrc, ClockConfig, PllDiv, PllFreq, RcuExt, SysClk, Usart0Sel,
 };
 
 #[entry]
 fn main() -> ! {
     let mut dp = pac::Peripherals::take().unwrap();
     let mut rcu = dp.rcu.constrain();
-    let clocks = CFGR::default()
-        .sysclk(PllFreq::Mhz48)
+    let clocks = ClockConfig::default()
+        .sysclk(SysClk::Pll(PllFreq::Mhz48))
         .hclk(AhbPsc::Div1) // hclk = 48 MHz
         .pclk1(ApbPsc::Div2) // pclk1 = 24 MHz
         .pclk2(ApbPsc::Div1) // pclk2 = 48 MHz
