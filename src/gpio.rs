@@ -29,13 +29,23 @@ use embedded_hal::digital::{ErrorType, InputPin, OutputPin, StatefulOutputPin};
 use crate::pac;
 use crate::rcu::Rcu;
 
-const CTL_INPUT: u32 = 0b00;
-const CTL_OUTPUT: u32 = 0b01;
-const CTL_AF: u32 = 0b10;
-const CTL_ANALOG: u32 = 0b11;
+/// `CTL` field encoding: what the pin is wired to.
+///
+/// A distinct type from [`Omode`] so the two cannot be passed to each other's
+/// setter — both are two-bit-or-less fields of the same port, and `u32` let a swap
+/// compile into a write on the neighbouring pin.
+enum Ctl {
+    Input = 0b00,
+    Output = 0b01,
+    Af = 0b10,
+    Analog = 0b11,
+}
 
-const OMODE_PUSH_PULL: u32 = 0b0;
-const OMODE_OPEN_DRAIN: u32 = 0b1;
+/// `OMODE` field encoding: how an output drives the pin.
+enum Omode {
+    PushPull = 0b0,
+    OpenDrain = 0b1,
+}
 
 /// Mode: digital input.
 pub struct Input;
@@ -279,7 +289,7 @@ impl<const N: u8, MODE> HasLock for Pin<'B', N, MODE> {}
 impl<const P: char, const N: u8> Pin<P, N, Debugger> {
     /// Releases the pin as a digital input.
     pub fn activate_into_input(self) -> Pin<P, N, Input> {
-        self.set_mode(CTL_INPUT);
+        self.set_mode(Ctl::Input);
         Pin { _mode: PhantomData }
     }
     /// Releases the pin as an input; shorthand for
@@ -289,14 +299,14 @@ impl<const P: char, const N: u8> Pin<P, N, Debugger> {
     }
     /// Releases the pin as a push-pull output.
     pub fn activate_into_push_pull_output(self) -> Pin<P, N, Output<PushPull>> {
-        self.set_mode(CTL_OUTPUT);
-        self.set_omode(OMODE_PUSH_PULL);
+        self.set_mode(Ctl::Output);
+        self.set_omode(Omode::PushPull);
         Pin { _mode: PhantomData }
     }
     /// Releases the pin as an open-drain output.
     pub fn activate_into_open_drain_output(self) -> Pin<P, N, Output<OpenDrain>> {
-        self.set_mode(CTL_OUTPUT);
-        self.set_omode(OMODE_OPEN_DRAIN);
+        self.set_mode(Ctl::Output);
+        self.set_omode(Omode::OpenDrain);
         Pin { _mode: PhantomData }
     }
     /// Releases the pin as an output; shorthand for the push-pull variant.
@@ -305,7 +315,7 @@ impl<const P: char, const N: u8> Pin<P, N, Debugger> {
     }
     /// Releases the pin as an analog input, as required by the ADC.
     pub fn activate_into_analog(self) -> Pin<P, N, Analog> {
-        self.set_mode(CTL_ANALOG);
+        self.set_mode(Ctl::Analog);
         Pin { _mode: PhantomData }
     }
     /// Releases the pin to a peripheral through alternate function `AF`,
@@ -317,7 +327,7 @@ impl<const P: char, const N: u8> Pin<P, N, Debugger> {
     where
         Self: ValidAf<AF>,
     {
-        self.set_alternate(AF as u32, OMODE_PUSH_PULL);
+        self.set_alternate(AF as u32, Omode::PushPull);
         Pin { _mode: PhantomData }
     }
     /// Same, but leaves the pin open-drain, as I²C requires.
@@ -327,7 +337,7 @@ impl<const P: char, const N: u8> Pin<P, N, Debugger> {
     where
         Self: ValidAf<AF>,
     {
-        self.set_alternate(AF as u32, OMODE_OPEN_DRAIN);
+        self.set_alternate(AF as u32, Omode::OpenDrain);
         Pin { _mode: PhantomData }
     }
 }
@@ -395,11 +405,11 @@ impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
 // call them: `Debugger` is not `Active`, yet leaving that mode is itself a mode
 // write, and the bounded block is invisible from outside it.
 impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
-    fn set_mode(&self, mode: u32) {
+    fn set_mode(&self, mode: Ctl) {
         let offset = N * 2;
-        self.reg()
-            .ctl()
-            .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (mode << offset)) });
+        self.reg().ctl().modify(|r, w| unsafe {
+            w.bits((r.bits() & !(0b11 << offset)) | ((mode as u32) << offset))
+        });
     }
     fn set_af(&self, af: u32) {
         let is_afsel0 = N < 8;
@@ -426,17 +436,17 @@ impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
             .ospd()
             .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (bits << offset)) });
     }
-    fn set_omode(&self, bits: u32) {
+    fn set_omode(&self, omode: Omode) {
         let offset = N;
-        self.reg()
-            .omode()
-            .modify(|r, w| unsafe { w.bits((r.bits() & !(0b1 << offset)) | (bits << offset)) });
+        self.reg().omode().modify(|r, w| unsafe {
+            w.bits((r.bits() & !(0b1 << offset)) | ((omode as u32) << offset))
+        });
     }
     /// Routes the pin to `af` and drives it as `omode`, the two halves of every
     /// `*_alternate*` method — the output type is part of the resulting mode, so
     /// it is written here rather than left at whatever the previous mode used.
-    fn set_alternate(&self, af: u32, omode: u32) {
-        self.set_mode(CTL_AF);
+    fn set_alternate(&self, af: u32, omode: Omode) {
+        self.set_mode(Ctl::Af);
         self.set_af(af);
         self.set_omode(omode);
     }
@@ -476,13 +486,13 @@ where
 {
     /// Reconfigures the pin as a digital input.
     pub fn into_input(self) -> Pin<P, N, Input> {
-        self.set_mode(CTL_INPUT);
+        self.set_mode(Ctl::Input);
         Pin { _mode: PhantomData }
     }
     /// Reconfigures the pin as a push-pull output.
     pub fn into_push_pull_output(self) -> Pin<P, N, Output<PushPull>> {
-        self.set_mode(CTL_OUTPUT);
-        self.set_omode(OMODE_PUSH_PULL);
+        self.set_mode(Ctl::Output);
+        self.set_omode(Omode::PushPull);
         Pin { _mode: PhantomData }
     }
     /// Reconfigures the pin as an open-drain output.
@@ -490,8 +500,8 @@ where
     /// The pin can also be read back in this mode, which shared buses such as
     /// I²C rely on.
     pub fn into_open_drain_output(self) -> Pin<P, N, Output<OpenDrain>> {
-        self.set_mode(CTL_OUTPUT);
-        self.set_omode(OMODE_OPEN_DRAIN);
+        self.set_mode(Ctl::Output);
+        self.set_omode(Omode::OpenDrain);
         Pin { _mode: PhantomData }
     }
     /// Reconfigures the pin as an output; shorthand for the push-pull variant.
@@ -500,7 +510,7 @@ where
     }
     /// Reconfigures the pin as an analog input, as required by the ADC.
     pub fn into_analog(self) -> Pin<P, N, Analog> {
-        self.set_mode(CTL_ANALOG);
+        self.set_mode(Ctl::Analog);
         Pin { _mode: PhantomData }
     }
     /// Routes the pin to a peripheral through alternate function `AF`, driven
@@ -512,7 +522,7 @@ where
     where
         Self: ValidAf<AF>,
     {
-        self.set_alternate(AF as u32, OMODE_PUSH_PULL);
+        self.set_alternate(AF as u32, Omode::PushPull);
         Pin { _mode: PhantomData }
     }
     /// Same, but leaves the pin open-drain: [`I2c`](crate::i2c::I2c) accepts only
@@ -521,7 +531,7 @@ where
     where
         Self: ValidAf<AF>,
     {
-        self.set_alternate(AF as u32, OMODE_OPEN_DRAIN);
+        self.set_alternate(AF as u32, Omode::OpenDrain);
         Pin { _mode: PhantomData }
     }
     /// Freezes the pin's configuration until the next chip reset.
@@ -924,42 +934,42 @@ gpio!(PartsA, pac::Gpioa, 'A', [
     pa5:5:Input,
     pa6:6:Input,
     pa7:7:Input,
-    #[cfg(pins_ge_24)] pa8:8:Input,
+    #[cfg(pads_ge_24)] pa8:8:Input,
     // Below 32 pins these two pads are shared with PA11 / PA12 through a remap,
     // and PA9 / PA10 is the state after reset.
     pa9:9:Input,
     pa10:10:Input,
-    #[cfg(pins_ge_32)] pa11:11:Input,
-    #[cfg(pins_ge_32)] pa12:12:Input,
+    #[cfg(pads_ge_lqfp32)] pa11:11:Input,
+    #[cfg(pads_ge_lqfp32)] pa12:12:Input,
     pa13:13:Debugger,
     pa14:14:Debugger,
-    #[cfg(pins_ge_28)] pa15:15:Input,
+    #[cfg(pads_ge_28)] pa15:15:Input,
 ]);
 
 gpio!(PartsB, pac::Gpiob, 'B', [
-    #[cfg(pins_ge_24)] pb0:0:Input,
+    #[cfg(pads_ge_24)] pb0:0:Input,
     pb1:1:Input,
-    // PB2 and PB8 are QFN32 only: an LQFP32 spends both pads on VSS, which the QFN
-    // moves onto its thermal pad.
-    #[cfg(pins_ge_32)] pb2:2:Input,
-    #[cfg(pins_ge_28)] pb3:3:Input,
-    #[cfg(pins_ge_28)] pb4:4:Input,
-    #[cfg(pins_ge_28)] pb5:5:Input,
-    #[cfg(pins_ge_24)] pb6:6:Input,
-    #[cfg(pins_ge_24)] pb7:7:Input,
-    #[cfg(pins_ge_32)] pb8:8:Input,
-    #[cfg(pins_ge_48)] pb9:9:Input,
-    #[cfg(pins_ge_48)] pb10:10:Input,
-    #[cfg(pins_ge_48)] pb11:11:Input,
-    #[cfg(pins_ge_48)] pb12:12:Input,
-    #[cfg(pins_ge_48)] pb13:13:Input,
-    #[cfg(pins_ge_48)] pb14:14:Input,
-    #[cfg(pins_ge_48)] pb15:15:Input,
+    // PB2 and PB8 need at least a QFN32: an LQFP32 spends both pins on VSS, which
+    // the QFN moves onto its thermal pad.
+    #[cfg(pads_ge_qfn32)] pb2:2:Input,
+    #[cfg(pads_ge_28)] pb3:3:Input,
+    #[cfg(pads_ge_28)] pb4:4:Input,
+    #[cfg(pads_ge_28)] pb5:5:Input,
+    #[cfg(pads_ge_24)] pb6:6:Input,
+    #[cfg(pads_ge_24)] pb7:7:Input,
+    #[cfg(pads_ge_qfn32)] pb8:8:Input,
+    #[cfg(pads_ge_48)] pb9:9:Input,
+    #[cfg(pads_ge_48)] pb10:10:Input,
+    #[cfg(pads_ge_48)] pb11:11:Input,
+    #[cfg(pads_ge_48)] pb12:12:Input,
+    #[cfg(pads_ge_48)] pb13:13:Input,
+    #[cfg(pads_ge_48)] pb14:14:Input,
+    #[cfg(pads_ge_48)] pb15:15:Input,
 ]);
 
 gpio!(PartsF, pac::Gpiof, 'F', [
     pf0:0:Input,
     pf1:1:Input,
-    #[cfg(pins_ge_48)] pf6:6:Input,
-    #[cfg(pins_ge_48)] pf7:7:Input,
+    #[cfg(pads_ge_48)] pf6:6:Input,
+    #[cfg(pads_ge_48)] pf7:7:Input,
 ]);

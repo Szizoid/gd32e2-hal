@@ -1,65 +1,130 @@
 //! Turns the selected chip feature into the two things the build needs from it:
 //! a `memory.x` for the linker, and the `cfg` flags the source gates on.
 //!
-//! Only the pin count and the memory sizes reach the code — a part's package and
-//! temperature grade are invisible to software, so `K8U6` and `K8T6` are one
-//! feature. The AF map is keyed to the flash code, hence `chip_x4` / `x6` / `x8`
-//! rather than one flag per part.
+//! A feature is named after the part with an `x` in every field the code cannot
+//! see: temperature grade always, package wherever it bonds the same pads. The
+//! 32-pin parts are the exception that needs its package spelled out — a QFN32
+//! carries VSS on its thermal pad and spends the two freed pins on PB2 and PB8.
 
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-/// Every part of the series: feature name, bonded pins, flash and SRAM in KiB.
+/// Every part of the series: feature name, flash code, pad set, flash and SRAM in
+/// KiB.
 ///
 /// The flash code also gives the SRAM size (4 -> 4K, 6 -> 6K, 8 -> 8K), but both
 /// are spelled out rather than derived — a future part that breaks the pattern
 /// should be a new row here, not a special case in code.
 const CHIPS: &[Chip] = &[
-    Chip::new("gd32e230f4", 20, 16, 4),
-    Chip::new("gd32e230f6", 20, 32, 6),
-    Chip::new("gd32e230f8", 20, 64, 8),
-    Chip::new("gd32e230e8", 24, 64, 8),
-    Chip::new("gd32e230g4", 28, 16, 4),
-    Chip::new("gd32e230g6", 28, 32, 6),
-    Chip::new("gd32e230g8", 28, 64, 8),
-    Chip::new("gd32e230k4", 32, 16, 4),
-    Chip::new("gd32e230k6", 32, 32, 6),
-    Chip::new("gd32e230k8", 32, 64, 8),
-    Chip::new("gd32e230c4", 48, 16, 4),
-    Chip::new("gd32e230c6", 48, 32, 6),
-    Chip::new("gd32e230c8", 48, 64, 8),
+    Chip::new("gd32e230f4xx", Flash::X4, Pads::Pins20, 16, 4),
+    Chip::new("gd32e230f6xx", Flash::X6, Pads::Pins20, 32, 6),
+    Chip::new("gd32e230f8xx", Flash::X8, Pads::Pins20, 64, 8),
+    Chip::new("gd32e230e8xx", Flash::X8, Pads::Pins24, 64, 8),
+    Chip::new("gd32e230g4xx", Flash::X4, Pads::Pins28, 16, 4),
+    Chip::new("gd32e230g6xx", Flash::X6, Pads::Pins28, 32, 6),
+    Chip::new("gd32e230g8xx", Flash::X8, Pads::Pins28, 64, 8),
+    Chip::new("gd32e230k4tx", Flash::X4, Pads::Lqfp32, 16, 4),
+    Chip::new("gd32e230k4ux", Flash::X4, Pads::Qfn32, 16, 4),
+    Chip::new("gd32e230k6tx", Flash::X6, Pads::Lqfp32, 32, 6),
+    Chip::new("gd32e230k6ux", Flash::X6, Pads::Qfn32, 32, 6),
+    Chip::new("gd32e230k8tx", Flash::X8, Pads::Lqfp32, 64, 8),
+    Chip::new("gd32e230k8ux", Flash::X8, Pads::Qfn32, 64, 8),
+    Chip::new("gd32e230c4xx", Flash::X4, Pads::Pins48, 16, 4),
+    Chip::new("gd32e230c6xx", Flash::X6, Pads::Pins48, 32, 6),
+    Chip::new("gd32e230c8xx", Flash::X8, Pads::Pins48, 64, 8),
 ];
-
-/// Pin counts in the series, ascending. The bonded pads of a package are a
-/// superset of every smaller one's (datasheet figures 2-2 … 2-9), so the flags
-/// handed to the source are "at least this many pins" and a pin needs one gate.
-const PIN_COUNTS: &[u32] = &[20, 24, 28, 32, 48];
 
 /// Where the two memories live on every part of the series.
 const FLASH_ORIGIN: &str = "0x08000000";
 const RAM_ORIGIN: &str = "0x20000000";
 
+/// Flash code from the part number, which is what the AF map differs by
+/// (datasheet Table 2-13/2-14 footnotes).
+#[derive(Clone, Copy)]
+enum Flash {
+    X4,
+    X6,
+    X8,
+}
+
+impl Flash {
+    const ALL: &'static [Flash] = &[Flash::X4, Flash::X6, Flash::X8];
+
+    /// Name of the `chip_*` cfg flag standing for this die.
+    const fn flag(self) -> &'static str {
+        match self {
+            Flash::X4 => "chip_x4",
+            Flash::X6 => "chip_x6",
+            Flash::X8 => "chip_x8",
+        }
+    }
+}
+
+/// The pad sets of the series, ascending — each one contains every set before it
+/// (datasheet figures 2-2 … 2-9).
+///
+/// QFN32 sits between LQFP32 and the 48-pin parts, bonding the same pads plus PB2
+/// and PB8. Because the sets nest, the flags handed to the source are "at least
+/// this pad set" and a pin needs exactly one gate.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Pads {
+    Pins20,
+    Pins24,
+    Pins28,
+    Lqfp32,
+    Qfn32,
+    Pins48,
+}
+
+impl Pads {
+    /// Ascending, so a part gets every flag up to and including its own set.
+    const ALL: &'static [Pads] = &[
+        Pads::Pins20,
+        Pads::Pins24,
+        Pads::Pins28,
+        Pads::Lqfp32,
+        Pads::Qfn32,
+        Pads::Pins48,
+    ];
+
+    /// Name of the `pads_ge_*` cfg flag standing for this set.
+    const fn flag(self) -> &'static str {
+        match self {
+            Pads::Pins20 => "pads_ge_20",
+            Pads::Pins24 => "pads_ge_24",
+            Pads::Pins28 => "pads_ge_28",
+            Pads::Lqfp32 => "pads_ge_lqfp32",
+            Pads::Qfn32 => "pads_ge_qfn32",
+            Pads::Pins48 => "pads_ge_48",
+        }
+    }
+}
+
 struct Chip {
     feature: &'static str,
-    pins: u32,
+    flash: Flash,
+    /// The largest pad set this part bonds.
+    pads: Pads,
     flash_kb: u32,
     sram_kb: u32,
 }
 
 impl Chip {
-    const fn new(feature: &'static str, pins: u32, flash_kb: u32, sram_kb: u32) -> Self {
+    const fn new(
+        feature: &'static str,
+        flash: Flash,
+        pads: Pads,
+        flash_kb: u32,
+        sram_kb: u32,
+    ) -> Self {
         Self {
             feature,
-            pins,
+            flash,
+            pads,
             flash_kb,
             sram_kb,
         }
-    }
-
-    /// The flash code, which is what the AF map differs by.
-    fn flash_code(&self) -> char {
-        self.feature.chars().last().expect("feature name is empty")
     }
 
     /// Whether Cargo enabled this part's feature.
@@ -70,11 +135,11 @@ impl Chip {
 
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
-    for flash_code in ['4', '6', '8'] {
-        println!("cargo::rustc-check-cfg=cfg(chip_x{flash_code})");
+    for flash in Flash::ALL {
+        println!("cargo::rustc-check-cfg=cfg({})", flash.flag());
     }
-    for pins in PIN_COUNTS {
-        println!("cargo::rustc-check-cfg=cfg(pins_ge_{pins})");
+    for pads in Pads::ALL {
+        println!("cargo::rustc-check-cfg=cfg({})", pads.flag());
     }
 
     let selected: Vec<&Chip> = CHIPS.iter().filter(|chip| chip.enabled()).collect();
@@ -94,9 +159,9 @@ fn main() {
         ),
     };
 
-    println!("cargo::rustc-cfg=chip_x{}", chip.flash_code());
-    for pins in PIN_COUNTS.iter().filter(|&&count| count <= chip.pins) {
-        println!("cargo::rustc-cfg=pins_ge_{pins}");
+    println!("cargo::rustc-cfg={}", chip.flash.flag());
+    for pads in Pads::ALL.iter().filter(|set| **set <= chip.pads) {
+        println!("cargo::rustc-cfg={}", pads.flag());
     }
 
     // The linker resolves `INCLUDE memory.x` against the current directory first

@@ -1,6 +1,6 @@
 //! SPI1 in 16-bit master mode, verified by loopback.
 //!
-//! Needs a 48-pin x8 part (`gd32e230c8`): SPI1 exists only on x8, and its AF0 pins
+//! Needs a 48-pin x8 part (`gd32e230c8xx`): SPI1 exists only on x8, and its AF0 pins
 //! PB13/14/15 are bonded only on the 48-pin package. Smaller packages reach SPI1
 //! through PB1 plus PA13/PA14 — the SWD pins, so at the cost of the debug port and
 //! the RTT log with it.

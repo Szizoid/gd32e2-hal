@@ -12,15 +12,18 @@
 //! zero or several is an error rather than a silently wrong pin map. There is no
 //! default: which part sits on a board is not something this crate can assume.
 //!
-//! The letter is the bonded pin count (F 20, E 24, G 28, K 32, C 48) and the digit
-//! the flash code (4 = 16K flash and 4K SRAM, 6 = 32K and 6K, 8 = 64K and 8K).
-//! Package and temperature suffixes are not part of the name: `K8U6` and `K8T6`
-//! are one die in two packages, and nothing in software can tell them apart.
+//! A feature is the part number with an `x` in each field the code cannot see, so
+//! `gd32e230g8xx` is every G8 part: the letter is the bonded pin count (F 20, E 24,
+//! G 28, K 32, C 48), the digit the flash code (4 = 16K flash and 4K SRAM, 6 = 32K
+//! and 6K, 8 = 64K and 8K), and the last `x` the temperature grade. Only the 32-pin
+//! parts spell their package out — a QFN32 (`gd32e230k8ux`) carries VSS on its
+//! thermal pad and gives the two freed pins to `PB2` and `PB8`, an LQFP32
+//! (`gd32e230k8tx`) does not.
 //!
-//! Both halves of the name reach the code. The flash code decides the
+//! Every named field reaches the code. The flash code decides the
 //! alternate-function map, where the same pin at the same AF number can reach a
 //! different peripheral (`PA2` AF1 is `USART0_TX` on x4 but `USART1_TX` on x8);
-//! the pin count decides which pins exist at all. `build.rs` also writes the
+//! the bonded pads decide which pins exist at all. `build.rs` also writes the
 //! `memory.x` the linker needs, so a project using this HAL does not supply one —
 //! though a `memory.x` in its own root still takes precedence.
 //!
