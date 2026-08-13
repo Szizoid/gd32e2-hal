@@ -11,11 +11,13 @@ categories = ["embedded", "hardware-support", "no-std", "no-std::no-alloc"]
 exclude = [".cargo", ".gitignore", "docs", "memory.x", "rust-toolchain.toml"]
 
 # A part has to be named here too, there being no default: docs.rs would otherwise
-# build with `defmt` alone and stop at build.rs.
+# build with `defmt` alone and stop at build.rs. It names the largest one — 48 pins
+# and 64K, so every peripheral and every pad the series has — because every other
+# part is a subset of it, and documenting a superset over-promises rather than hides.
 [package.metadata.docs.rs]
 default-target = "thumbv8m.base-none-eabi"
 targets = []
-features = ["defmt", "gd32e230k8ux"]
+features = ["defmt", "gd32e230c8xx"]
 
 # The part being built for, one feature each, named after the part number with an
 # `x` in the fields the code cannot see. The letter is the bonded pin count (F 20,

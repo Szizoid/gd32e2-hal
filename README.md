@@ -49,7 +49,9 @@ thermal pad and gives the two freed pins to `PB2` and `PB8`, an LQFP32 does not.
 Elsewhere the packages of one pin count bond the same pads, hence the `x`.
 
 Development targets the `GD32E230K8U6`, i.e. `gd32e230k8ux`; the examples get it
-from the crate's own `[dev-dependencies]` entry.
+from the crate's own `[dev-dependencies]` entry. The published documentation is built
+for `gd32e230c8xx`, the largest part — every other one is a subset of it, so the page
+shows pins and peripherals a smaller part does not have, and its AF map holds for x8.
 `build.rs` turns the choice into the `memory.x` the linker needs and into the cfg
 flags the source gates on: the AF map differs by flash code — the same pin at the
 same AF number reaching a different peripheral (`PA2` AF1 is `USART0_TX` on x4,
@@ -291,7 +293,7 @@ the linker looks there before the search paths — which is the way out for a bo
 this table does not describe.
 
 ```sh
-cargo lib                      # library only, alias for build --features gd32e230k8ux
+cargo lib                      # library only, alias for build --features gd32e230c8xx
 cargo be usart-echo            # compile-check one example, needs no probe
 cargo bre usart-echo           # same, release profile
 ```
@@ -403,7 +405,10 @@ HAL для микроконтроллера **GD32E230K8U6** (Cortex-M23), на�
 числа ног разваривают одни и те же площадки, отсюда `x`.
 
 Разработка идёт на `GD32E230K8U6`, то есть `gd32e230k8ux`; примеры получают фичу из
-`[dev-dependencies]` самого крейта. Из выбора `build.rs` делает
+`[dev-dependencies]` самого крейта. Опубликованная дока собрана для `gd32e230c8xx` —
+самой крупной детали: остальные её подмножества, поэтому на странице видны ноги и
+периферия, которых у мелкой детали нет, а карта AF там верна для x8.
+Из выбора `build.rs` делает
 `memory.x` для линкера и cfg-флаги, которыми гейтится код: карта AF зависит от кода
 флеша — одна и та же нога на одном номере AF ведёт к разной периферии (`PA2` AF1 —
 `USART0_TX` у x4 и `USART1_TX` у x8), сноски datasheet Table 2-13/2-14: (1) x4,
@@ -641,7 +646,7 @@ if let Ok(byte) = usart0.read_byte() {
 смотрит туда раньше путей поиска, и это выход для платы, которой в таблице нет.
 
 ```sh
-cargo lib                      # только библиотека, алиас для build --features gd32e230k8ux
+cargo lib                      # только библиотека, алиас для build --features gd32e230c8xx
 cargo be usart-echo            # проверить сборку одного примера, зонд не нужен
 cargo bre usart-echo           # то же самое, release
 ```
