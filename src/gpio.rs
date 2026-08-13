@@ -982,10 +982,10 @@ macro_rules! gpio {
 }
 
 // Which pads a package bonds, from the pinout figures 2-2 … 2-9 of the datasheet.
-// The sets nest — 20 ⊂ 24 ⊂ 28 ⊂ 32 ⊂ 48 — so each pin carries one gate, naming the
-// smallest package that has it; `pins_ge_*` comes from build.rs. A pin missing from
-// its `Parts` is unreachable, which is the point: the alternative is a HAL promising
-// a pad the package never brought out.
+// The sets nest — 20 ⊂ 24 ⊂ 28 ⊂ LQFP32 ⊂ QFN32 ⊂ 48 — so each pin carries one gate,
+// naming the smallest package that has it; `pads_ge_*` comes from build.rs. A pin
+// missing from its `Parts` is unreachable, which is the point: the alternative is a
+// HAL promising a pad the package never brought out.
 gpio!(PartsA, pac::Gpioa, 'A', [
     pa0:0:Input,
     pa1:1:Input,

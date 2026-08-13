@@ -339,9 +339,9 @@ cargo build --release --no-default-features --features gd32e230x4
 - [ ] USART: hardware flow control (`CTS`/`RTS`).
 - [ ] RCU: `HXTAL` (needs an external crystal on the board).
 - [ ] GPIO: port F alternate functions (no `AFSEL` register — needs its own study).
-- [ ] Package / pin-count variants — a second axis, independent of x4/x6/x8:
-      which pins are bonded out at all (`PC13`–`PC15`, `PF6`/`PF7` exist on
-      QFN48 but not on this QFN32).
+- [ ] GPIO: port C (`PC13`–`PC15`, 48-pin parts only) — needs its own `Parts`.
+- [ ] GPIO: the `PA11`/`PA12` remap onto the `PA9`/`PA10` pads below 32 pins
+      (`SYSCFG`, which nothing uses yet).
 - [ ] `embedded-dma` for the DMA buffers.
 - [ ] Extract the HAL into its own standalone crate/repo (not just `examples/` —
       splitting the library out entirely).
@@ -689,9 +689,9 @@ cargo build --release --no-default-features --features gd32e230x4
 - [ ] RCU: `HXTAL` (нужен внешний кварц на плате).
 - [ ] GPIO: альтернативные функции порта F (регистра `AFSEL` нет — нужен
       отдельный разбор).
-- [ ] Варианты корпуса / числа ног — вторая ось, независимая от x4/x6/x8: какие
-      ноги вообще разварены (`PC13`–`PC15`, `PF6`/`PF7` есть на QFN48, но не на
-      нашем QFN32).
+- [ ] GPIO: порт C (`PC13`–`PC15`, только 48-выводные) — нужен свой `Parts`.
+- [ ] GPIO: ремап `PA11`/`PA12` на площадки `PA9`/`PA10` ниже 32 выводов
+      (`SYSCFG`, который пока никем не используется).
 - [ ] `embedded-dma` для буферов DMA.
 - [ ] Вынос HAL в полностью отдельный крейт/репозиторий (не просто `examples/` —
       разделение самой библиотеки).
