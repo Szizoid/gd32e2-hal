@@ -90,6 +90,15 @@ channel!(
     'B' 1 => 9,
 );
 
+/// An ADC event that can raise an interrupt.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Event {
+    /// A conversion finished; `RDATA` holds the result. `EOC` clears on
+    /// reading it, the same read a handler makes to fetch the value.
+    Eoc,
+}
+
 /// A calibrated ADC, ready to convert.
 pub struct Adc {
     adc: pac::Adc,
@@ -158,9 +167,15 @@ impl Adc {
         });
     }
     fn convert(&self) -> u16 {
+        self.start_conversion();
+        while self.adc.stat().read().eoc().is_not_complete() {}
+        self.read_result()
+    }
+    fn start_conversion(&self) {
         self.adc.ctl1().modify(|_, w| w.swrcst().start());
         while self.adc.ctl1().read().swrcst().is_not_started() {}
-        while self.adc.stat().read().eoc().is_not_complete() {}
+    }
+    fn read_result(&self) -> u16 {
         self.adc.rdata().read().rdata().bits()
     }
     fn with_internal<R>(&self, f: impl FnOnce(&Self) -> R) -> R {
@@ -173,6 +188,37 @@ impl Adc {
             self.adc.ctl1().modify(|_, w| w.tsvren().disabled());
         }
         result
+    }
+
+    /// Triggers a conversion, blocking only until the trigger is acknowledged
+    /// — not until it finishes. Pairs with [`listen`](Self::listen) and
+    /// [`result`](Self::result) for the interrupt-driven path: this starts a
+    /// conversion without blocking on `EOC` at all.
+    pub fn start<PIN: Channel>(&self, _pin: &PIN, time: SampTime) {
+        self.set_channel(PIN::CHANNEL);
+        self.set_sample_time(PIN::CHANNEL, time);
+        self.start_conversion();
+    }
+    /// Reads the conversion result out of `RDATA`, clearing `EOC`.
+    ///
+    /// Does not check `EOC` itself — call this once notified of it (an `Eoc`
+    /// handler after [`listen`](Self::listen)), not on a guess.
+    pub fn result(&self) -> u16 {
+        self.read_result()
+    }
+
+    /// Lets `event` raise an interrupt. Unmasking the line in the NVIC is the
+    /// caller's.
+    pub fn listen(&mut self, event: Event) {
+        match event {
+            Event::Eoc => self.adc.ctl0().modify(|_, w| w.eocie().enabled()),
+        }
+    }
+    /// Stops `event` from raising an interrupt.
+    pub fn unlisten(&mut self, event: Event) {
+        match event {
+            Event::Eoc => self.adc.ctl0().modify(|_, w| w.eocie().disabled()),
+        }
     }
 
     /// Converts one channel and returns the raw 12-bit code (0..=4095).

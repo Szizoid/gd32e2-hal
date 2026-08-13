@@ -141,8 +141,12 @@ for `Pin<P, N, Analog>`, so a pin must actually have gone through
 in mV (derived from the factory `VREFINT_CAL` in flash, falling back to the
 typical ~1.2 V VREFINT if that calibration is blank), and
 `read_temperature() -> Option<i32>` returns tenths of °C — `None` when `CK_ADC`
-is too fast to satisfy the sensor's minimum sampling time. Scan mode needs DMA
-and is deferred.
+is too fast to satisfy the sensor's minimum sampling time. `start(&pin, SampTime)`
+and `result()` are the two halves of `read` taken apart, for driving conversions
+from an interrupt: `listen` / `unlisten` (`Event::Eoc`) toggle `EOCIE`, and `EOC`
+clears on reading `RDATA`, so `result()` is both the fetch and the acknowledge —
+there is no separate clear. Unmasking the line in the NVIC is the caller's. Scan
+mode needs DMA and is deferred.
 
 **SPI** (`src/spi.rs`) — SPI0 **and** SPI1: master, full-duplex, blocking, 8- or
 16-bit, software NSS. `Spi::new(...)` / `Spi::new_word(...)` take a `SpiConfig`
@@ -344,8 +348,8 @@ cargo build --release --no-default-features --features gd32e230x4
 - [ ] DMA: circular mode and `M2M`.
 - [ ] Timers: complementary outputs, break and dead time.
 - [ ] I²C: fast and fast plus on hardware, 10-bit addressing, SMBus, slave, DMA.
-- [ ] Interrupt-driven operation for the rest of the peripherals (SPI, I²C, ADC,
-      DMA) and `EXTI` — TIMER and USART have `listen`/`unlisten` now; unmasking
+- [ ] Interrupt-driven operation for the rest of the peripherals (SPI, I²C, DMA)
+      and `EXTI` — TIMER, USART and ADC have `listen`/`unlisten` now; unmasking
       the NVIC line stays the caller's.
 - [ ] SPI: half-duplex / single-wire modes (`BDEN`/`BDOEN`/`RO`).
 - [ ] SPI: hardware NSS, CRC, TI mode, slave — low priority.
@@ -508,8 +512,12 @@ open-drain; `embedded-hal` 1.0 `OutputPin` / `InputPin` / `StatefulOutputPin`
 (вычисляется по заводскому `VREFINT_CAL` из flash, а если эта калибровка пустая —
 по типовому VREFINT ≈ 1.2 В), а
 `read_temperature() -> Option<i32>` — десятые доли °C; `None`, когда `CK_ADC`
-слишком высока для минимального времени сэмплирования датчика. Scan-режим
-требует DMA и отложен.
+слишком высока для минимального времени сэмплирования датчика. `start(&pin, SampTime)`
+и `result()` — те же две половины `read`, разнятые для запуска конверсий из
+прерывания: `listen` / `unlisten` (`Event::Eoc`) переключают `EOCIE`, а `EOC`
+гасится чтением `RDATA`, поэтому `result()` — одновременно и забор значения, и
+подтверждение; отдельного сброса нет. Размаскирование линии в NVIC — за
+вызывающим. Scan-режим требует DMA и отложен.
 
 **SPI** (`src/spi.rs`) — SPI0 **и** SPI1: master, full-duplex, блокирующий, 8 или
 16 бит, программный NSS. `Spi::new(...)` / `Spi::new_word(...)` принимают
@@ -709,9 +717,9 @@ cargo build --release --no-default-features --features gd32e230x4
 - [ ] DMA: циклический режим и `M2M`.
 - [ ] Таймеры: комплементарные выходы, break, dead time.
 - [ ] I²C: fast и fast plus на железе, 10-битная адресация, SMBus, slave, DMA.
-- [ ] Работа на прерываниях для остальных периферий (SPI, I²C, ADC, DMA) и
-      `EXTI` — у TIMER и USART уже есть `listen`/`unlisten`; размаскирование
-      линии в NVIC остаётся за вызывающим.
+- [ ] Работа на прерываниях для остальных периферий (SPI, I²C, DMA) и `EXTI` —
+      у TIMER, USART и ADC уже есть `listen`/`unlisten`; размаскирование линии
+      в NVIC остаётся за вызывающим.
 - [ ] SPI: half-duplex / однопроводные режимы (`BDEN`/`BDOEN`/`RO`).
 - [ ] SPI: аппаратный NSS, CRC, TI mode, slave — низкий приоритет.
 - [ ] USART: аппаратное управление потоком (`CTS`/`RTS`).
