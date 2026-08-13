@@ -161,9 +161,20 @@ pub enum Speed {
 /// variant feature.
 pub trait ValidAf<const AF: u8> {}
 
+// Recursive, one row per step, and with the gated row spelled out as its own rule:
+// a row expands to one impl per AF number, and an attribute captured inside `$(…)?`
+// cannot be repeated across that inner loop — it would be used one nesting level
+// deeper than it was bound. Matching `#[$cfg:meta]` outside any repetition puts it
+// at depth zero, where the loop can replicate it.
 macro_rules! pin_af {
-    ( $( $p:literal $n:literal => [ $($af:literal),* $(,)? ] ),* $(,)? ) => {
-        $( $( impl<MODE> ValidAf<$af> for Pin<$p, $n, MODE> {} )* )*
+    () => {};
+    ( #[$cfg:meta] $p:literal $n:literal => [ $($af:literal),* $(,)? ] $(, $($rest:tt)*)? ) => {
+        $( #[$cfg] impl<MODE> ValidAf<$af> for Pin<$p, $n, MODE> {} )*
+        $( pin_af! { $($rest)* } )?
+    };
+    ( $p:literal $n:literal => [ $($af:literal),* $(,)? ] $(, $($rest:tt)*)? ) => {
+        $( impl<MODE> ValidAf<$af> for Pin<$p, $n, MODE> {} )*
+        $( pin_af! { $($rest)* } )?
     };
 }
 
@@ -188,29 +199,47 @@ pin_af! {
     'A' 5  => [0],                   // 0:SPI0_SCK/I2S0_CK
     'A' 6  => [0, 1, 2, 5, 6, 7],    // 0:SPI0_MISO 1:TIMER2_CH0 2:TIMER0_BRKIN 5:TIMER15_CH0 6:EVENTOUT 7:CMP_OUT
     'A' 7  => [0, 1, 2, 4, 5, 6],    // 0:SPI0_MOSI 1:TIMER2_CH1 2:TIMER0_CH0_ON 4:TIMER13_CH0 5:TIMER16_CH0 6:EVENTOUT
+    #[cfg(pads_ge_24)]
     'A' 8  => [0, 1, 2, 3],          // 0:CK_OUT 1:USART0_CK 2:TIMER0_CH0 3:EVENTOUT
     'A' 9  => [1, 2, 4, 5],          // 1:USART0_TX 2:TIMER0_CH1 4:I2C0_SCL 5:CK_OUT
     'A' 10 => [0, 1, 2, 4],          // 0:TIMER16_BRKIN 1:USART0_RX 2:TIMER0_CH2 4:I2C0_SDA
+    #[cfg(pads_ge_lqfp32)]
     'A' 11 => [0, 1, 2, 4, 7],       // 0:EVENTOUT 1:USART0_CTS 2:TIMER0_CH3 4:I2C0_SMBA 7:CMP_OUT
+    #[cfg(pads_ge_lqfp32)]
     'A' 12 => [0, 1, 2, 4],          // 0:EVENTOUT 1:USART0_RTS/DE 2:TIMER0_ETI 4:I2C0_TXFRAME
     'A' 13 => [0, 1],                // 0:SWDIO 1:IFRP_OUT
     'A' 14 => [0, 1],                // 0:SWCLK 1:USART0_TX(1) | USART1_TX(2)
+    #[cfg(pads_ge_28)]
     'A' 15 => [0, 1, 3],             // 0:SPI0_NSS/I2S0_WS 1:USART0_RX(1)|USART1_RX(2) 3:EVENTOUT
     // ---- Port B ----
+    #[cfg(pads_ge_24)]
     'B' 0  => [0, 1, 2],             // 0:EVENTOUT 1:TIMER2_CH2 2:TIMER0_CH1_ON
     'B' 1  => [1, 2, 3],             // 1:TIMER2_CH3 2:TIMER13_CH0 3:TIMER0_CH2_ON
+    #[cfg(pads_ge_qfn32)]
     'B' 2  => [1],                   // 1:TIMER2_ETI
+    #[cfg(pads_ge_28)]
     'B' 3  => [0, 1],                // 0:SPI0_SCK/I2S0_CK 1:EVENTOUT
+    #[cfg(pads_ge_28)]
     'B' 4  => [0, 1, 2, 4, 6],       // 0:SPI0_MISO 1:TIMER2_CH0 2:EVENTOUT 4:I2C0_TXFRAME 6:TIMER16_BRKIN
+    #[cfg(pads_ge_28)]
     'B' 5  => [0, 1, 2, 3],          // 0:SPI0_MOSI 1:TIMER2_CH1 2:I2C0_SMBA 3:TIMER15_BRKIN
+    #[cfg(pads_ge_24)]
     'B' 6  => [0, 1, 2],             // 0:USART0_TX 1:I2C0_SCL 2:TIMER15_CH0_ON
+    #[cfg(pads_ge_24)]
     'B' 7  => [0, 1, 2],             // 0:USART0_RX 1:I2C0_SDA 2:TIMER16_CH0_ON
+    #[cfg(pads_ge_qfn32)]
     'B' 8  => [1, 2],                // 1:I2C0_SCL 2:TIMER15_CH0
+    #[cfg(pads_ge_48)]
     'B' 9  => [0, 1, 2, 3, 5],       // 0:IFRP_OUT 1:I2C0_SDA 2:TIMER16_CH0 3:EVENTOUT 5:I2S0_MCK
+    #[cfg(pads_ge_48)]
     'B' 11 => [0],                   // 0:EVENTOUT
+    #[cfg(pads_ge_48)]
     'B' 12 => [1, 2],                // 1:EVENTOUT 2:TIMER0_BRKIN
+    #[cfg(pads_ge_48)]
     'B' 13 => [2],                   // 2:TIMER0_CH0_ON
+    #[cfg(pads_ge_48)]
     'B' 14 => [2],                   // 2:TIMER0_CH1_ON
+    #[cfg(pads_ge_48)]
     'B' 15 => [2],                   // 2:TIMER0_CH2_ON
     // NB: 'B' 10 has no variant-independent AF — every one of its functions is
     // footnoted, so it appears only in the gated blocks below.
@@ -219,18 +248,26 @@ pin_af! {
 // ---- (1) GD32E230x4 only ----
 #[cfg(chip_x4)]
 pin_af! {
+    #[cfg(pads_ge_48)]
     'B' 10 => [1],                   // 1:I2C0_SCL
+    #[cfg(pads_ge_48)]
     'B' 11 => [1],                   // 1:I2C0_SDA
+    #[cfg(pads_ge_48)]
     'B' 12 => [0],                   // 0:SPI0_NSS
+    #[cfg(pads_ge_48)]
     'B' 13 => [0],                   // 0:SPI0_SCK
+    #[cfg(pads_ge_48)]
     'B' 14 => [0],                   // 0:SPI0_MISO
+    #[cfg(pads_ge_48)]
     'B' 15 => [0],                   // 0:SPI0_MOSI
 }
 
 // ---- (2) GD32E230x8/6 ----
 #[cfg(any(chip_x6, chip_x8))]
 pin_af! {
+    #[cfg(pads_ge_24)]
     'A' 8  => [4],                   // 4:USART1_TX
+    #[cfg(pads_ge_24)]
     'B' 0  => [4],                   // 4:USART1_RX
 }
 
@@ -243,18 +280,28 @@ pin_af! {
     'A' 3  => [0],                   // 0:TIMER14_CH1
     'A' 4  => [6],                   // 6:SPI1_NSS
     'A' 9  => [0],                   // 0:TIMER14_BRKIN
+    #[cfg(pads_ge_lqfp32)]
     'A' 11 => [5, 6],                // 5:I2C1_SCL 6:SPI1_IO2
+    #[cfg(pads_ge_lqfp32)]
     'A' 12 => [5, 6],                // 5:I2C1_SDA 6:SPI1_IO3
     'A' 13 => [6],                   // 6:SPI1_MISO
     'A' 14 => [6],                   // 6:SPI1_MOSI
+    #[cfg(pads_ge_28)]
     'A' 15 => [6],                   // 6:SPI1_NSS
     'B' 1  => [6],                   // 6:SPI1_SCK
+    #[cfg(pads_ge_48)]
     'B' 9  => [7],                   // 7:SPI1_NSS
+    #[cfg(pads_ge_48)]
     'B' 10 => [1, 6, 7],             // 1:I2C1_SCL 6:SPI1_IO2 7:SPI1_SCK
+    #[cfg(pads_ge_48)]
     'B' 11 => [1, 6],                // 1:I2C1_SDA 6:SPI1_IO3
+    #[cfg(pads_ge_48)]
     'B' 12 => [0, 4],                // 0:SPI1_NSS 4:I2C1_SMBA
+    #[cfg(pads_ge_48)]
     'B' 13 => [0, 1, 5],             // 0:SPI1_SCK 1:I2C1_TXFRAME 5:I2C1_SCL
+    #[cfg(pads_ge_48)]
     'B' 14 => [0, 1, 5],             // 0:SPI1_MISO 1:TIMER14_CH0 5:I2C1_SDA
+    #[cfg(pads_ge_48)]
     'B' 15 => [0, 1, 3],             // 0:SPI1_MOSI 1:TIMER14_CH1 3:TIMER14_CH0_ON
 }
 

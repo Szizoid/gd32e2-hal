@@ -35,10 +35,13 @@ pub trait TxPin<USART> {}
 pub trait RxPin<USART> {}
 
 macro_rules! usart_pins {
-    ( $( $USART:ty: TX: [ $($tx_p:literal $tx_n:literal : $tx_af:literal),* $(,)? ] RX: [ $($rx_p:literal $rx_n:literal : $rx_af:literal),* $(,)? ] ),* $(,)? ) => {
+    ( $( $USART:ty:
+        TX: [ $($(#[$tx_cfg:meta])? $tx_p:literal $tx_n:literal : $tx_af:literal),* $(,)? ]
+        RX: [ $($(#[$rx_cfg:meta])? $rx_p:literal $rx_n:literal : $rx_af:literal),* $(,)? ]
+    ),* $(,)? ) => {
         $(
-            $( impl TxPin<$USART> for Pin<$tx_p, $tx_n, Alternate<$tx_af>> {} )*
-            $( impl RxPin<$USART> for Pin<$rx_p, $rx_n, Alternate<$rx_af>> {} )*
+            $( $(#[$tx_cfg])? impl TxPin<$USART> for Pin<$tx_p, $tx_n, Alternate<$tx_af>> {} )*
+            $( $(#[$rx_cfg])? impl RxPin<$USART> for Pin<$rx_p, $rx_n, Alternate<$rx_af>> {} )*
         )*
     };
 }
@@ -46,10 +49,14 @@ macro_rules! usart_pins {
 // PA2/PA3/PA14/PA15 at AF1 belong to a *different* USART depending on the chip
 // variant (datasheet Table 2-13 footnotes): USART0 on GD32E230x4, USART1 on
 // GD32E230x8/6. They are therefore listed in the gated blocks, not here.
+//
+// The `pads_ge_*` gates say the package bonds the pin at all, and match the ones in
+// `gpio::Parts` — an entry for an unbonded pad would advertise in the docs a pin
+// nobody can obtain.
 usart_pins! {
     pac::Usart0:
-        TX: [ 'A' 9:1, 'B' 6:0 ]
-        RX: [ 'A' 10:1, 'B' 7:0 ],
+        TX: [ 'A' 9:1, #[cfg(pads_ge_24)] 'B' 6:0 ]
+        RX: [ 'A' 10:1, #[cfg(pads_ge_24)] 'B' 7:0 ],
 }
 
 // ---- (1) GD32E230x4 only: PA2/PA3/PA14/PA15 AF1 are USART0 ----
@@ -57,15 +64,15 @@ usart_pins! {
 usart_pins! {
     pac::Usart0:
         TX: [ 'A' 2:1, 'A' 14:1 ]
-        RX: [ 'A' 3:1, 'A' 15:1 ],
+        RX: [ 'A' 3:1, #[cfg(pads_ge_28)] 'A' 15:1 ],
 }
 
 // ---- (2) GD32E230x8/6: PA2/PA3/PA14/PA15 AF1 are USART1; USART1 exists ----
 #[cfg(any(chip_x6, chip_x8))]
 usart_pins! {
     pac::Usart1:
-        TX: [ 'A' 2:1, 'A' 8:4, 'A' 14:1 ]
-        RX: [ 'A' 3:1, 'A' 15:1, 'B' 0:4 ],
+        TX: [ 'A' 2:1, #[cfg(pads_ge_24)] 'A' 8:4, 'A' 14:1 ]
+        RX: [ 'A' 3:1, #[cfg(pads_ge_28)] 'A' 15:1, #[cfg(pads_ge_24)] 'B' 0:4 ],
 }
 
 /// Supplies the clock frequency feeding a given USART.

@@ -634,9 +634,15 @@ bus_en! {
     pac::Adc => apb2en, adcen,
     pac::Spi0 => apb2en, spi0en,
     pac::Timer0 => apb2en, timer0en,
-    pac::Timer14 => apb2en, timer14en,
     pac::Timer15 => apb2en, timer15en,
     pac::Timer16 => apb2en, timer16en,
+}
+
+// TIMER14 is absent from the 20- and 24-pin parts whatever their flash size, so its
+// gate is the part's own row in build.rs rather than the flash code.
+#[cfg(has_timer14)]
+bus_en! {
+    pac::Timer14 => apb2en, timer14en,
 }
 
 bus_rst! {
@@ -654,7 +660,11 @@ bus_rst! {
     pac::Adc => apb2rst, adcrst,
     pac::Spi0 => apb2rst, spi0rst,
     pac::Timer0 => apb2rst, timer0rst,
-    pac::Timer14 => apb2rst, timer14rst,
     pac::Timer15 => apb2rst, timer15rst,
     pac::Timer16 => apb2rst, timer16rst,
+}
+
+#[cfg(has_timer14)]
+bus_rst! {
+    pac::Timer14 => apb2rst, timer14rst,
 }

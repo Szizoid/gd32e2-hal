@@ -108,14 +108,14 @@ pub trait MosiPin<SPI> {}
 
 macro_rules! spi_pins {
     ( $( $SPI:ty:
-        SCK:  [ $($sck_p:literal  $sck_n:literal  : $sck_af:literal),* $(,)? ]
-        MISO: [ $($miso_p:literal $miso_n:literal : $miso_af:literal),* $(,)? ]
-        MOSI: [ $($mosi_p:literal $mosi_n:literal : $mosi_af:literal),* $(,)? ]
+        SCK:  [ $($(#[$sck_cfg:meta])? $sck_p:literal  $sck_n:literal  : $sck_af:literal),* $(,)? ]
+        MISO: [ $($(#[$miso_cfg:meta])? $miso_p:literal $miso_n:literal : $miso_af:literal),* $(,)? ]
+        MOSI: [ $($(#[$mosi_cfg:meta])? $mosi_p:literal $mosi_n:literal : $mosi_af:literal),* $(,)? ]
     ),* $(,)? ) => {
         $(
-            $( impl SckPin<$SPI>  for Pin<$sck_p,  $sck_n,  Alternate<$sck_af>>  {} )*
-            $( impl MisoPin<$SPI> for Pin<$miso_p, $miso_n, Alternate<$miso_af>> {} )*
-            $( impl MosiPin<$SPI> for Pin<$mosi_p, $mosi_n, Alternate<$mosi_af>> {} )*
+            $( $(#[$sck_cfg])?  impl SckPin<$SPI>  for Pin<$sck_p,  $sck_n,  Alternate<$sck_af>>  {} )*
+            $( $(#[$miso_cfg])? impl MisoPin<$SPI> for Pin<$miso_p, $miso_n, Alternate<$miso_af>> {} )*
+            $( $(#[$mosi_cfg])? impl MosiPin<$SPI> for Pin<$mosi_p, $mosi_n, Alternate<$mosi_af>> {} )*
         )*
     };
 }
@@ -123,31 +123,35 @@ macro_rules! spi_pins {
 // PB13/PB14/PB15 at AF0 belong to a *different* SPI depending on the chip
 // variant (datasheet Table 2-14 footnotes): SPI0 on GD32E230x4, SPI1 on
 // GD32E230x8. They are therefore listed in the gated blocks, not here.
+//
+// The `pads_ge_*` gates say the package bonds the pin at all, and match the ones in
+// `gpio::Parts` — an entry for an unbonded pad would advertise in the docs a pin
+// nobody can obtain.
 spi_pins!(
     pac::Spi0:
-        SCK: ['A' 5 : 0, 'B' 3 : 0]
-        MISO: ['A' 6 : 0, 'B' 4 : 0]
-        MOSI: ['A' 7 : 0, 'B' 5 : 0]
+        SCK: ['A' 5 : 0, #[cfg(pads_ge_28)] 'B' 3 : 0]
+        MISO: ['A' 6 : 0, #[cfg(pads_ge_28)] 'B' 4 : 0]
+        MOSI: ['A' 7 : 0, #[cfg(pads_ge_28)] 'B' 5 : 0]
 );
 
 // ---- (1) GD32E230x4 only: PB13/14/15 AF0 are SPI0 ----
 #[cfg(chip_x4)]
 spi_pins!(
     pac::Spi0:
-        SCK: ['B' 13 : 0]
-        MISO: ['B' 14 : 0]
-        MOSI: ['B' 15 : 0]
+        SCK: [#[cfg(pads_ge_48)] 'B' 13 : 0]
+        MISO: [#[cfg(pads_ge_48)] 'B' 14 : 0]
+        MOSI: [#[cfg(pads_ge_48)] 'B' 15 : 0]
 );
 
 // ---- (3) GD32E230x8 only: SPI1 exists, and PB13/14/15 AF0 belong to it ----
-// NB: PA13/PA14 are SWDIO/SWCLK — reaching them needs `unsafe activate()` on
-// the `Debugger` typestate first, and doing so gives up SWD debugging.
+// NB: below 48 pins this leaves PB1 plus PA13/PA14 — the SWD pair, reachable only
+// through the `activate_into_*` family, at the cost of the debug port.
 #[cfg(chip_x8)]
 spi_pins!(
     pac::Spi1:
-        SCK: ['B' 1 : 6, 'B' 10 : 7, 'B' 13 : 0]
-        MISO: ['A' 13 : 6, 'B' 14 : 0]
-        MOSI: ['A' 14 : 6, 'B' 15 : 0]
+        SCK: ['B' 1 : 6, #[cfg(pads_ge_48)] 'B' 10 : 7, #[cfg(pads_ge_48)] 'B' 13 : 0]
+        MISO: ['A' 13 : 6, #[cfg(pads_ge_48)] 'B' 14 : 0]
+        MOSI: ['A' 14 : 6, #[cfg(pads_ge_48)] 'B' 15 : 0]
 );
 
 /// Word-width marker: 8-bit frames ([`Spi::transfer_byte`], `SpiBus<u8>`).

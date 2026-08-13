@@ -70,11 +70,13 @@ pub trait Channel {
 }
 
 macro_rules! channel {
-    ($($port:literal $pin:literal => $channel:literal),+ $(,)?) => {
-        $(impl Channel for Pin<$port, $pin, Analog> { const CHANNEL: u8 = $channel; })+
+    ($($(#[$cfg:meta])? $port:literal $pin:literal => $channel:literal),+ $(,)?) => {
+        $($(#[$cfg])? impl Channel for Pin<$port, $pin, Analog> { const CHANNEL: u8 = $channel; })+
     };
 }
 
+// PB0 is the only one of these the smallest package leaves unbonded; the gate
+// matches the one in `gpio::Parts`.
 channel!(
     'A' 0 => 0,
     'A' 1 => 1,
@@ -84,7 +86,7 @@ channel!(
     'A' 5 => 5,
     'A' 6 => 6,
     'A' 7 => 7,
-    'B' 0 => 8,
+    #[cfg(pads_ge_24)] 'B' 0 => 8,
     'B' 1 => 9,
 );
 

@@ -17,22 +17,22 @@ use std::path::PathBuf;
 /// are spelled out rather than derived — a future part that breaks the pattern
 /// should be a new row here, not a special case in code.
 const CHIPS: &[Chip] = &[
-    Chip::new("gd32e230f4xx", Flash::X4, Pads::Pins20, 16, 4),
-    Chip::new("gd32e230f6xx", Flash::X6, Pads::Pins20, 32, 6),
-    Chip::new("gd32e230f8xx", Flash::X8, Pads::Pins20, 64, 8),
-    Chip::new("gd32e230e8xx", Flash::X8, Pads::Pins24, 64, 8),
-    Chip::new("gd32e230g4xx", Flash::X4, Pads::Pins28, 16, 4),
-    Chip::new("gd32e230g6xx", Flash::X6, Pads::Pins28, 32, 6),
-    Chip::new("gd32e230g8xx", Flash::X8, Pads::Pins28, 64, 8),
-    Chip::new("gd32e230k4tx", Flash::X4, Pads::Lqfp32, 16, 4),
-    Chip::new("gd32e230k4ux", Flash::X4, Pads::Qfn32, 16, 4),
-    Chip::new("gd32e230k6tx", Flash::X6, Pads::Lqfp32, 32, 6),
-    Chip::new("gd32e230k6ux", Flash::X6, Pads::Qfn32, 32, 6),
-    Chip::new("gd32e230k8tx", Flash::X8, Pads::Lqfp32, 64, 8),
-    Chip::new("gd32e230k8ux", Flash::X8, Pads::Qfn32, 64, 8),
-    Chip::new("gd32e230c4xx", Flash::X4, Pads::Pins48, 16, 4),
-    Chip::new("gd32e230c6xx", Flash::X6, Pads::Pins48, 32, 6),
-    Chip::new("gd32e230c8xx", Flash::X8, Pads::Pins48, 64, 8),
+    Chip::new("gd32e230f4xx", Flash::X4, Pads::Pins20, Timers::Four, 16, 4),
+    Chip::new("gd32e230f6xx", Flash::X6, Pads::Pins20, Timers::Four, 32, 6),
+    Chip::new("gd32e230f8xx", Flash::X8, Pads::Pins20, Timers::Four, 64, 8),
+    Chip::new("gd32e230e8xx", Flash::X8, Pads::Pins24, Timers::Four, 64, 8),
+    Chip::new("gd32e230g4xx", Flash::X4, Pads::Pins28, Timers::Four, 16, 4),
+    Chip::new("gd32e230g6xx", Flash::X6, Pads::Pins28, Timers::Four, 32, 6),
+    Chip::new("gd32e230g8xx", Flash::X8, Pads::Pins28, Timers::Five, 64, 8),
+    Chip::new("gd32e230k4tx", Flash::X4, Pads::Lqfp32, Timers::Four, 16, 4),
+    Chip::new("gd32e230k4ux", Flash::X4, Pads::Qfn32, Timers::Four, 16, 4),
+    Chip::new("gd32e230k6tx", Flash::X6, Pads::Lqfp32, Timers::Four, 32, 6),
+    Chip::new("gd32e230k6ux", Flash::X6, Pads::Qfn32, Timers::Four, 32, 6),
+    Chip::new("gd32e230k8tx", Flash::X8, Pads::Lqfp32, Timers::Five, 64, 8),
+    Chip::new("gd32e230k8ux", Flash::X8, Pads::Qfn32, Timers::Five, 64, 8),
+    Chip::new("gd32e230c4xx", Flash::X4, Pads::Pins48, Timers::Four, 16, 4),
+    Chip::new("gd32e230c6xx", Flash::X6, Pads::Pins48, Timers::Four, 32, 6),
+    Chip::new("gd32e230c8xx", Flash::X8, Pads::Pins48, Timers::Five, 64, 8),
 ];
 
 /// Where the two memories live on every part of the series.
@@ -101,11 +101,21 @@ impl Pads {
     }
 }
 
+/// How many general-purpose timers the part carries (datasheet Table 1-1). The
+/// fifth one is `TIMER14`, and which parts have it does NOT follow from the flash
+/// code: the 20- and 24-pin x8 parts stop at four.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Timers {
+    Four,
+    Five,
+}
+
 struct Chip {
     feature: &'static str,
     flash: Flash,
     /// The largest pad set this part bonds.
     pads: Pads,
+    timers: Timers,
     flash_kb: u32,
     sram_kb: u32,
 }
@@ -115,6 +125,7 @@ impl Chip {
         feature: &'static str,
         flash: Flash,
         pads: Pads,
+        timers: Timers,
         flash_kb: u32,
         sram_kb: u32,
     ) -> Self {
@@ -122,6 +133,7 @@ impl Chip {
             feature,
             flash,
             pads,
+            timers,
             flash_kb,
             sram_kb,
         }
@@ -141,6 +153,7 @@ fn main() {
     for pads in Pads::ALL {
         println!("cargo::rustc-check-cfg=cfg({})", pads.flag());
     }
+    println!("cargo::rustc-check-cfg=cfg(has_timer14)");
 
     let selected: Vec<&Chip> = CHIPS.iter().filter(|chip| chip.enabled()).collect();
     let chip = match selected.as_slice() {
@@ -162,6 +175,9 @@ fn main() {
     println!("cargo::rustc-cfg={}", chip.flash.flag());
     for pads in Pads::ALL.iter().filter(|set| **set <= chip.pads) {
         println!("cargo::rustc-cfg={}", pads.flag());
+    }
+    if chip.timers == Timers::Five {
+        println!("cargo::rustc-cfg=has_timer14");
     }
 
     // The linker resolves `INCLUDE memory.x` against the current directory first

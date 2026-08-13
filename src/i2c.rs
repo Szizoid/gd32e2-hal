@@ -51,12 +51,12 @@ pub trait SclPin<I2C> {}
 
 macro_rules! i2c_pins {
     ( $( $I2C:ty:
-        SDA: [ $($sda_p:literal $sda_n:literal : $sda_af:literal),* $(,)? ]
-        SCL: [ $($scl_p:literal $scl_n:literal : $scl_af:literal),* $(,)? ]
+        SDA: [ $($(#[$sda_cfg:meta])? $sda_p:literal $sda_n:literal : $sda_af:literal),* $(,)? ]
+        SCL: [ $($(#[$scl_cfg:meta])? $scl_p:literal $scl_n:literal : $scl_af:literal),* $(,)? ]
     ),* $(,)? ) => {
         $(
-            $(impl SdaPin<$I2C> for Pin<$sda_p, $sda_n, Alternate<$sda_af, OpenDrain>> {})*
-            $(impl SclPin<$I2C> for Pin<$scl_p, $scl_n, Alternate<$scl_af, OpenDrain>> {})*
+            $($(#[$sda_cfg])? impl SdaPin<$I2C> for Pin<$sda_p, $sda_n, Alternate<$sda_af, OpenDrain>> {})*
+            $($(#[$scl_cfg])? impl SclPin<$I2C> for Pin<$scl_p, $scl_n, Alternate<$scl_af, OpenDrain>> {})*
         )*
     };
 }
@@ -64,26 +64,30 @@ macro_rules! i2c_pins {
 // PB10/PB11 at AF1 belong to a *different* I²C depending on the chip variant
 // (datasheet Table 2-14 footnotes): I2C0 on GD32E230x4, I2C1 on GD32E230x8.
 // They are therefore listed in the gated blocks, not here.
+//
+// The `pads_ge_*` gates say the package bonds the pin at all, and match the ones in
+// `gpio::Parts` — an entry for an unbonded pad would advertise in the docs a pin
+// nobody can obtain.
 i2c_pins!(
     pac::I2c0:
-        SDA: ['A' 10 : 4, 'B' 7 : 1, 'B' 9 : 1]
-        SCL: ['A' 9 : 4, 'B' 6 : 1, 'B' 8 : 1],
+        SDA: ['A' 10 : 4, #[cfg(pads_ge_24)] 'B' 7 : 1, #[cfg(pads_ge_48)] 'B' 9 : 1]
+        SCL: ['A' 9 : 4, #[cfg(pads_ge_24)] 'B' 6 : 1, #[cfg(pads_ge_qfn32)] 'B' 8 : 1],
 );
 
 // ---- (1) GD32E230x4 only: PB10/PB11 AF1 are I2C0 ----
 #[cfg(chip_x4)]
 i2c_pins!(
     pac::I2c0:
-        SDA: ['B' 11 : 1]
-        SCL: ['B' 10 : 1],
+        SDA: [#[cfg(pads_ge_48)] 'B' 11 : 1]
+        SCL: [#[cfg(pads_ge_48)] 'B' 10 : 1],
 );
 
 // ---- (3) GD32E230x8 only: I2C1 exists, and PB10/PB11 AF1 belong to it ----
 #[cfg(chip_x8)]
 i2c_pins!(
     pac::I2c1:
-        SDA: ['A' 1 : 4, 'A' 12 : 5, 'B' 11 : 1, 'B' 14 : 5]
-        SCL: ['A' 0 : 4, 'A' 11 : 5, 'B' 10 : 1, 'B' 13 : 5]
+        SDA: ['A' 1 : 4, #[cfg(pads_ge_lqfp32)] 'A' 12 : 5, #[cfg(pads_ge_48)] 'B' 11 : 1, #[cfg(pads_ge_48)] 'B' 14 : 5]
+        SCL: ['A' 0 : 4, #[cfg(pads_ge_lqfp32)] 'A' 11 : 5, #[cfg(pads_ge_48)] 'B' 10 : 1, #[cfg(pads_ge_48)] 'B' 13 : 5]
 );
 
 /// Writes the bus timing to `CTL1`, `CKCFG` and `RT`, leaving the peripheral enabled.

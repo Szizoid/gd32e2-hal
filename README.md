@@ -201,8 +201,10 @@ channels writing it. `enable()` / `disable()`, `set_duty(cv)` and `max_duty()`
 are inherent, `embedded-hal`'s `SetDutyCycle` sits on top. `set_period` /
 `set_period_interval` change the frequency for every channel at once, and duties
 keep their tick value, not their share. `enable_output()` exists only on the
-timers with a `CCHP` register (`TIMER0`, `TIMER14`, `TIMER15`, `TIMER16`), whose
-outputs stay silent until `POEN` is raised.
+timers with a `CCHP` register (`TIMER0`, `TIMER15`, `TIMER16`, plus `TIMER14`), whose
+outputs stay silent until `POEN` is raised. `TIMER14` exists only on the 28-pin parts
+and larger at 64K flash, and every impl of it is gated on that — the flash code alone
+does not decide it.
 
 `into_capture(psc)` gives a fifth type, `Capture`, whose counter free runs at the
 full `u16` range — only the prescaler is a choice. `channel(pin, edge)` returns a
@@ -552,8 +554,9 @@ typestate периферии. Общий супертрейт `DmaPeriph<N>` з�
 инхерентные, сверху лежит `SetDutyCycle` из `embedded-hal`. `set_period` /
 `set_period_interval` меняют частоту сразу всем каналам, скважность при этом
 сохраняется в тиках, а не в долях. `enable_output()` существует только у таймеров
-с регистром `CCHP` (`TIMER0`, `TIMER14`, `TIMER15`, `TIMER16`), выходы которых
-молчат, пока не поднят `POEN`.
+с регистром `CCHP` (`TIMER0`, `TIMER15`, `TIMER16` и `TIMER14`), выходы которых
+молчат, пока не поднят `POEN`. `TIMER14` есть только на чипах от 28 выводов с 64K
+флеша, и все его impl'ы гейтятся этим — код флеша сам по себе его не решает.
 
 `into_capture(psc)` даёт пятый тип, `Capture`, счётчик которого свободно бежит на
 полном диапазоне `u16` — выбором остаётся только делитель. `channel(pin, edge)`

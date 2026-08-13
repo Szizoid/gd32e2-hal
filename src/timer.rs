@@ -176,9 +176,18 @@ timer_instance! {
     pac::Timer5 => pclk1_tim,
     pac::Timer13 => pclk1_tim,
     pac::Timer0 => pclk2_tim,
-    pac::Timer14 => pclk2_tim,
     pac::Timer15 => pclk2_tim,
     pac::Timer16 => pclk2_tim,
+}
+
+// TIMER14 is the one peripheral whose presence the flash code does not decide: it
+// is absent from the 20- and 24-pin parts even at 64K (datasheet Table 1-1), so the
+// gate comes from the part's own row in build.rs. Its every impl is gated, not just
+// the pin table — the PAC has the register block regardless, and a timer needs no
+// pins, so ungated it would configure silicon that isn't there.
+#[cfg(has_timer14)]
+timer_instance! {
+    pac::Timer14 => pclk2_tim,
 }
 
 /// A stopped timer, holding the peripheral and the frequency feeding it.
@@ -581,9 +590,13 @@ channel_enable! {
     pac::Timer0 => [(0, ch0en), (1, ch1en), (2, ch2en), (3, ch3en)],
     pac::Timer2 => [(0, ch0en), (1, ch1en), (2, ch2en), (3, ch3en)],
     pac::Timer13 => [(0, ch0en)],
-    pac::Timer14 => [(0, ch0en), (1, ch1en)],
     pac::Timer15 => [(0, ch0en)],
     pac::Timer16 => [(0, ch0en)]
+}
+
+#[cfg(has_timer14)]
+channel_enable! {
+    pac::Timer14 => [(0, ch0en), (1, ch1en)]
 }
 
 /// Register operations on compare channel `C` of a timer.
@@ -639,16 +652,21 @@ pwm! {
         (2, (chctl1_output, ch2ms, ch2comctl, ch2comsen), (ch2cv, ch2val), ch2p),
         (3, (chctl1_output, ch3ms, ch3comctl, ch3comsen), (ch3cv, ch3val), ch3p)],
     pac::Timer13 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0p)],
-    pac::Timer14 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0p),
-        (1, (chctl0_output, ch1ms, ch1comctl, ch1comsen), (ch1cv, ch1val), ch1p)],
     pac::Timer15 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0p)],
     pac::Timer16 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0p)]
+}
+
+#[cfg(has_timer14)]
+pwm! {
+    pac::Timer14 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0p),
+        (1, (chctl0_output, ch1ms, ch1comctl, ch1comsen), (ch1cv, ch1val), ch1p)]
 }
 
 /// The output switch shared by every channel of a timer that has one.
 ///
 /// Only the timers carrying a `CCHP` register implement this: `TIMER0`,
-/// `TIMER14`, `TIMER15` and `TIMER16`. It sits above the per-channel enables —
+/// `TIMER15`, `TIMER16`, and `TIMER14` where the part has it. It sits above the
+/// per-channel enables —
 /// with it off, the channels stay configured and the counter keeps running
 /// while the pins show nothing.
 pub trait PrimaryOutput: Instance {
@@ -669,44 +687,49 @@ macro_rules! poen {
     };
 }
 
-poen!(pac::Timer0, pac::Timer14, pac::Timer15, pac::Timer16);
+poen!(pac::Timer0, pac::Timer15, pac::Timer16);
+#[cfg(has_timer14)]
+poen!(pac::Timer14);
 
 /// Marks a pin the silicon routes to channel `C` of `TIMERX`, in the right
 /// alternate function.
 pub trait ChannelPin<TIMERX, const C: u8> {}
 
 macro_rules! channel_pins {
-    ( $( $TIMERX:ty: $( $C:literal: [ $($p:literal $n:literal : $af:literal),* $(,)? ] )* ),* $(,)? ) => {
-        $($($( impl ChannelPin<$TIMERX, $C> for Pin<$p, $n, Alternate<$af>> {} )*)*)*
+    ( $( $TIMERX:ty: $( $C:literal: [ $($(#[$cfg:meta])? $p:literal $n:literal : $af:literal),* $(,)? ] )* ),* $(,)? ) => {
+        $($($( $(#[$cfg])? impl ChannelPin<$TIMERX, $C> for Pin<$p, $n, Alternate<$af>> {} )*)*)*
     };
 }
 
 // Complementary outputs (`CHx_ON`), break inputs and `ETI` share these same
 // pins at other alternate functions; only the plain compare outputs are listed.
+//
+// The `pads_ge_*` gates say the package bonds the pin at all, and match the ones in
+// `gpio::Parts`.
 channel_pins! {
     pac::Timer0:
-        0: [ 'A' 8:2 ]
+        0: [ #[cfg(pads_ge_24)] 'A' 8:2 ]
         1: [ 'A' 9:2 ]
         2: [ 'A' 10:2 ]
-        3: [ 'A' 11:2 ],
+        3: [ #[cfg(pads_ge_lqfp32)] 'A' 11:2 ],
     pac::Timer2:
-        0: [ 'A' 6:1, 'B' 4:1 ]
-        1: [ 'A' 7:1, 'B' 5:1 ]
-        2: [ 'B' 0:1 ]
+        0: [ 'A' 6:1, #[cfg(pads_ge_28)] 'B' 4:1 ]
+        1: [ 'A' 7:1, #[cfg(pads_ge_28)] 'B' 5:1 ]
+        2: [ #[cfg(pads_ge_24)] 'B' 0:1 ]
         3: [ 'B' 1:1 ],
     pac::Timer13:
         0: [ 'A' 4:4, 'A' 7:4, 'B' 1:2 ],
     pac::Timer15:
-        0: [ 'A' 6:5, 'B' 8:2 ],
+        0: [ 'A' 6:5, #[cfg(pads_ge_qfn32)] 'B' 8:2 ],
     pac::Timer16:
-        0: [ 'A' 7:5, 'B' 9:2 ],
+        0: [ 'A' 7:5, #[cfg(pads_ge_48)] 'B' 9:2 ],
 }
 
-#[cfg(chip_x8)]
+#[cfg(has_timer14)]
 channel_pins! {
     pac::Timer14:
-        0: [ 'A' 2:0, 'B' 14:1 ]
-        1: [ 'A' 3:0, 'B' 15:1 ],
+        0: [ 'A' 2:0, #[cfg(pads_ge_48)] 'B' 14:1 ]
+        1: [ 'A' 3:0, #[cfg(pads_ge_48)] 'B' 15:1 ],
 }
 
 /// One PWM output of a timer, configured and ready to take a duty value.
@@ -983,8 +1006,12 @@ capture! {
         (2, (chctl1_input, ch2ms, ci0, ch2capflt, ch2cappsc), (ch2cv, ch2val), (ch2p, ch2np), ch2if, ch2of),
         (3, (chctl1_input, ch3ms, ci0, ch3capflt, ch3cappsc), (ch3cv, ch3val), (ch3p), ch3if, ch3of)],
     pac::Timer13 => [(0, (chctl0_input, ch0ms, ci0, ch0capflt, ch0cappsc), (ch0cv, ch0val), (ch0p, ch0np), ch0if, ch0of)],
-    pac::Timer14 => [(0, (chctl0_input, ch0ms, ci0, ch0capflt, ch0cappsc), (ch0cv, ch0val), (ch0p, ch0np), ch0if, ch0of),
-        (1, (chctl0_input, ch1ms, ci0, ch1capflt, ch1cappsc), (ch1cv, ch1val), (ch1p, ch1np), ch1if, ch1of)],
     pac::Timer15 => [(0, (chctl0_input, ch0ms, ci0, ch0capflt, ch0cappsc), (ch0cv, ch0val), (ch0p, ch0np), ch0if, ch0of)],
     pac::Timer16 => [(0, (chctl0_input, ch0ms, ci0, ch0capflt, ch0cappsc), (ch0cv, ch0val), (ch0p, ch0np), ch0if, ch0of)]
+}
+
+#[cfg(has_timer14)]
+capture! {
+    pac::Timer14 => [(0, (chctl0_input, ch0ms, ci0, ch0capflt, ch0cappsc), (ch0cv, ch0val), (ch0p, ch0np), ch0if, ch0of),
+        (1, (chctl0_input, ch1ms, ci0, ch1capflt, ch1cappsc), (ch1cv, ch1val), (ch1p, ch1np), ch1if, ch1of)]
 }
