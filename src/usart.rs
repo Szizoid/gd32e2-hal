@@ -326,6 +326,17 @@ impl embedded_hal_nb::serial::Error for Error {
     }
 }
 
+/// A USART event that can raise an interrupt.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Event {
+    /// A byte arrived in `RDATA`, cleared by reading it.
+    Rbne,
+    /// The transmit buffer is free — true at idle, so listening for this needs
+    /// `unlisten` from inside the handler once nothing is left to send.
+    Tbe,
+}
+
 /// A configured USART, owning the peripheral and both pins.
 ///
 /// `WORD` records the word width, so methods of the wrong width don't exist:
@@ -398,6 +409,44 @@ where
     /// cutting power to a transceiver or sleeping. Cannot fail.
     pub fn flush(&self) {
         self.wait_tc();
+    }
+
+    /// Lets `event` raise an interrupt.
+    ///
+    /// Half of what an interrupt takes: the request now reaches the NVIC, which
+    /// still has the line masked. Unmasking it — `NVIC::unmask` on the
+    /// peripheral's [`Interrupt`](crate::pac::Interrupt) — is the caller's, this
+    /// crate does not touch core registers.
+    ///
+    /// Neither event needs a separate clear: `Rbne` is acknowledged by
+    /// [`read_byte`](Usart::read_byte), `Tbe` by
+    /// [`write_byte`](Usart::write_byte) — the same call a handler makes to do
+    /// its work. `Tbe` is set whenever nothing is queued, so a handler that
+    /// listens for it must call `unlisten` once it has nothing left to send, or
+    /// it re-enters at once.
+    pub fn listen(&mut self, event: Event) {
+        match event {
+            Event::Rbne => self.usart.ctl0().modify(|_, w| w.rbneie().enabled()),
+            Event::Tbe => self.usart.ctl0().modify(|_, w| w.tbeie().enabled()),
+        }
+    }
+    /// Stops `event` from raising an interrupt. Leaves the NVIC alone.
+    pub fn unlisten(&mut self, event: Event) {
+        match event {
+            Event::Rbne => self.usart.ctl0().modify(|_, w| w.rbneie().disabled()),
+            Event::Tbe => self.usart.ctl0().modify(|_, w| w.tbeie().disabled()),
+        }
+    }
+    /// Whether `event` currently raises an interrupt.
+    ///
+    /// `Rbne` and `Tbe` share one NVIC line, so a handler needs this to tell
+    /// which of the two woke it: the flag alone is not enough, since `Tbe` is
+    /// set at idle regardless of whether it is being listened for.
+    pub fn is_listening(&self, event: Event) -> bool {
+        match event {
+            Event::Rbne => self.usart.ctl0().read().rbneie().is_enabled(),
+            Event::Tbe => self.usart.ctl0().read().tbeie().is_enabled(),
+        }
     }
 
     /// Disables the peripheral and returns it along with both pins.

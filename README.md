@@ -117,8 +117,14 @@ waiting. `read_ready` / `write_ready` poll `RBNE` / `TBE`. Trait layers on the
 same width: `embedded-hal-nb` `Read<u8>` / `Write<u8>` and `embedded-io`
 `Read` / `Write` / `ReadReady` / `WriteReady`, the latter supplying
 `read_exact` / `write_all` / `write_fmt` as defaults. `flush`, `read_ready` and
-`write_ready` exist in both layers; the inherent ones win method-call syntax, the
-trait ones are reached by path. Raw 9-bit words via `new_word` / `write_word` /
+`write_ready` exist in both layers; the inherent ones win method-call syntax on an
+owned or `&` receiver, the trait ones on `&mut` — reach the other one by path.
+`listen` / `unlisten` (`Event::Rbne` / `Event::Tbe`) toggle `RBNEIE` / `TBEIE`;
+both share one NVIC line, so a handler checks `is_listening` before trusting
+either flag. `Rbne` clears on `read_byte`, `Tbe` on `write_byte` — no separate
+clear, and `Tbe` is set at idle, so a handler listening for it must `unlisten`
+once nothing is left to send. Unmasking the line in the NVIC is the caller's.
+Raw 9-bit words via `new_word` / `write_word` /
 `write_words` / `read_word` / `read_words` on the `Word` typestate
 (`UsartConfig9`). RX errors are `usart::Error` (`Overrun` / `Noise` / `Framing` /
 `Parity`), cleared through `USART_INTC`, with `ErrorKind` from the
@@ -177,15 +183,18 @@ timers. `Timer::new(rcu, timer, clocks)`, or `dp.timer5.constrain(...)` through
 `TimerExt`, clocks and resets the peripheral and records its own `CK_TIMERx`
 through `Instance`, which binds each timer to its bus. `start(psc, car)` consumes
 the stopped `Timer` and returns a running `CountDownTimer`, so `wait()` doesn't
-exist on a timer that was never started; `stop()` goes back. `start` loads both
-dividers out of their shadow registers with `UPG` and consumes the update event
-that raises, so the first `wait()` measures a full interval. `wait()` blocks for
+exist on a timer that was never started; `stop()` goes back. `start` sets `UPS`
+before loading both dividers out of their shadow registers with `UPG`, so that
+load does not itself raise `UPIF` — only a real rollover does, and the first
+`wait()` measures a full interval. `wait()` blocks for
 one rollover and leaves the timer running; `cnt()`, `car()` and `psc()` are read
 back from the hardware, not from a remembered copy. `start_interval(5.secs())`
 takes a `fugit` duration in any scale — the scale is a const generic, so `millis`
 and `micros` need no conversion at the call site — and derives the dividers
-against this timer's clock, in `u64` and saturating. Register access is confined
-to `Instance`, so no `Deref` is needed. `into_delay()` gives a third type,
+against this timer's clock, in `u64` and saturating. `listen` / `unlisten`
+(`Event::Update`) toggle `UPIE`; `clear_interrupt` clears `UPIF`, which hardware
+never does on its own. Unmasking the line in the NVIC is the caller's. Register
+access is confined to `Instance`, so no `Deref` is needed. `into_delay()` gives a third type,
 `Delay`, which promises no interval of its own: `delay(interval)` sets up the
 dividers, blocks and stops the counter again, so a period set elsewhere cannot be
 overwritten. `embedded-hal`'s `DelayNs` sits on it; resolution is one timer tick.
@@ -335,7 +344,9 @@ cargo build --release --no-default-features --features gd32e230x4
 - [ ] DMA: circular mode and `M2M`.
 - [ ] Timers: complementary outputs, break and dead time.
 - [ ] I²C: fast and fast plus on hardware, 10-bit addressing, SMBus, slave, DMA.
-- [ ] Interrupt-driven operation (NVIC infrastructure — also affects USART/SPI).
+- [ ] Interrupt-driven operation for the rest of the peripherals (SPI, I²C, ADC,
+      DMA) and `EXTI` — TIMER and USART have `listen`/`unlisten` now; unmasking
+      the NVIC line stays the caller's.
 - [ ] SPI: half-duplex / single-wire modes (`BDEN`/`BDOEN`/`RO`).
 - [ ] SPI: hardware NSS, CRC, TI mode, slave — low priority.
 - [ ] USART: hardware flow control (`CTS`/`RTS`).
@@ -474,7 +485,14 @@ open-drain; `embedded-hal` 1.0 `OutputPin` / `InputPin` / `StatefulOutputPin`
 на той же ширине: `embedded-hal-nb` `Read<u8>` / `Write<u8>` и `embedded-io`
 `Read` / `Write` / `ReadReady` / `WriteReady`; второй даёт `read_exact` /
 `write_all` / `write_fmt` дефолтами. `flush`, `read_ready` и `write_ready` есть в
-обоих слоях — точечную запись выигрывает инхерентный, трейтовый доступен по пути.
+обоих слоях — точечную запись на владении или `&` выигрывает инхерентный, на
+`&mut` — трейтовый; другой доступен по пути.
+`listen` / `unlisten` (`Event::Rbne` / `Event::Tbe`) переключают `RBNEIE` /
+`TBEIE`; оба флага висят на одной линии NVIC, поэтому обработчик сверяет
+`is_listening`, прежде чем доверять флагу. `Rbne` гасится `read_byte`, `Tbe` —
+`write_byte`, отдельного сброса нет; `Tbe` взведён в покое, поэтому слушающий
+его обработчик обязан звать `unlisten`, когда слать больше нечего.
+Размаскирование линии в NVIC — за вызывающим.
 Сырой 9-битный режим — `new_word` / `write_word` / `write_words` / `read_word` /
 `read_words` на typestate `Word` (`UsartConfig9`). Ошибки приёма — `usart::Error`
 (`Overrun` / `Noise` / `Framing` / `Parity`), сбрасываются через `USART_INTC`,
@@ -533,14 +551,18 @@ typestate периферии. Общий супертрейт `DmaPeriph<N>` з�
 `Instance`, который привязывает каждый таймер к его шине. `start(psc, car)`
 забирает остановленный `Timer` и отдаёт запущенный `CountDownTimer`, поэтому
 `wait()` не существует у незапущенного таймера; `stop()` возвращает обратно.
-`start` загружает делители из теневых регистров через `UPG` и гасит порождённое
-им событие обновления, так что первый `wait()` отсчитывает полный интервал.
+`start` поднимает `UPS` перед тем, как загрузить делители из теневых регистров
+через `UPG`, поэтому сама загрузка `UPIF` не взводит — только настоящее
+переполнение, и первый `wait()` отсчитывает полный интервал.
 `wait()` блокирует до одного переполнения и оставляет таймер бежать; `cnt()`,
 `car()` и `psc()` читаются из железа, а не из запомненной копии.
 `start_interval(5.secs())` принимает длительность `fugit` в любой шкале — шкала
 приезжает const-генериком, поэтому `millis` и `micros` не требуют конверсии на
 месте вызова — и выводит делители от собственного такта таймера, в `u64` и с
-насыщением. Доступ к регистрам заперт в `Instance`, поэтому `Deref` не нужен.
+насыщением. `listen` / `unlisten` (`Event::Update`) переключают `UPIE`;
+`clear_interrupt` гасит `UPIF`, который железо само не снимает никогда.
+Размаскирование линии в NVIC — за вызывающим. Доступ к регистрам заперт в
+`Instance`, поэтому `Deref` не нужен.
 `into_delay()` даёт третий тип, `Delay`, который не обещает своего интервала:
 `delay(interval)` настраивает делители, блокирует и снова останавливает счётчик,
 поэтому задержкой нельзя затереть период, заданный где-то ещё. На нём реализован
@@ -687,7 +709,9 @@ cargo build --release --no-default-features --features gd32e230x4
 - [ ] DMA: циклический режим и `M2M`.
 - [ ] Таймеры: комплементарные выходы, break, dead time.
 - [ ] I²C: fast и fast plus на железе, 10-битная адресация, SMBus, slave, DMA.
-- [ ] Работа на прерываниях (инфраструктура NVIC — затронет и USART/SPI).
+- [ ] Работа на прерываниях для остальных периферий (SPI, I²C, ADC, DMA) и
+      `EXTI` — у TIMER и USART уже есть `listen`/`unlisten`; размаскирование
+      линии в NVIC остаётся за вызывающим.
 - [ ] SPI: half-duplex / однопроводные режимы (`BDEN`/`BDOEN`/`RO`).
 - [ ] SPI: аппаратный NSS, CRC, TI mode, slave — низкий приоритет.
 - [ ] USART: аппаратное управление потоком (`CTS`/`RTS`).

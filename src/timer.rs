@@ -76,8 +76,8 @@ fn ticks_to_interval<const NOM: u64, const DENOM: u64>(
 fn start_counter<TIMERX: Instance>(timer: &TIMERX, psc: u16, car: u16) {
     timer.set_psc(psc);
     timer.set_car(car);
+    timer.set_ups(true);
     timer.gen_update();
-    timer.clear_upif();
     timer.set_cen(true);
 }
 
@@ -109,6 +109,11 @@ pub trait Instance: Enable + Reset {
     fn gen_update(&self);
     /// Runs or halts the counter.
     fn set_cen(&self, on: bool);
+    /// Restricts what counts as an update event to overflow/underflow — `UPG` no
+    /// longer raises `UPIF`, only the counter rolling over does.
+    fn set_ups(&self, on: bool);
+    /// Lets the update event through to the NVIC. The flag is raised either way.
+    fn set_upie(&self, on: bool);
     /// Update flag — set by hardware on every rollover, never cleared by it.
     fn read_upif(&self) -> bool;
     /// Clears the update flag.
@@ -154,6 +159,12 @@ macro_rules! timer_instance {
                 }
                 fn set_cen(&self, on: bool) {
                     self.ctl0().modify(|_, w| w.cen().bit(on));
+                }
+                fn set_ups(&self, on: bool) {
+                    self.ctl0().modify(|_, w| w.ups().bit(on));
+                }
+                fn set_upie(&self, on: bool) {
+                    self.dmainten().modify(|_, w| w.upie().bit(on));
                 }
                 fn read_upif(&self) -> bool {
                     self.intf().read().upif().bit_is_set()
@@ -287,6 +298,14 @@ impl<TIMERX: Instance> Timer<TIMERX> {
     }
 }
 
+/// A timer event that can raise an interrupt.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Event {
+    /// The counter rolled over, ending one interval.
+    Update,
+}
+
 /// A running timer, counting down the interval [`Timer::start`] was given.
 ///
 /// Free-running: the counter reloads and starts over on every rollover, so the
@@ -328,6 +347,38 @@ impl<TIMERX: Instance> CountDownTimer<TIMERX> {
     /// tick.
     pub fn elapsed<const NOM: u64, const DENOM: u64>(&self) -> Duration<u32, NOM, DENOM> {
         ticks_to_interval(self.cnt(), self.psc(), self.clk)
+    }
+
+    /// Lets `event` raise an interrupt.
+    ///
+    /// Half of what an interrupt takes: the request now reaches the NVIC, which
+    /// still has the line masked. Unmasking it — `NVIC::unmask` on the
+    /// peripheral's [`Interrupt`](crate::pac::Interrupt) — is the caller's, this
+    /// crate does not touch core registers.
+    pub fn listen(&mut self, event: Event) {
+        match event {
+            Event::Update => {
+                self.timer.set_upie(true);
+            }
+        }
+    }
+    /// Stops `event` from raising an interrupt. Leaves the NVIC alone.
+    pub fn unlisten(&mut self, event: Event) {
+        match event {
+            Event::Update => {
+                self.timer.set_upie(false);
+            }
+        }
+    }
+    /// Clears the flag `event` raised.
+    ///
+    /// A handler must call this, first thing: the request is the flag being set,
+    /// and hardware never clears it, so returning with it still set re-enters
+    /// the handler at once and starves everything else.
+    pub fn clear_interrupt(&mut self, event: Event) {
+        match event {
+            Event::Update => self.timer.clear_upif(),
+        }
     }
 
     /// Blocks until the counter rolls over, then clears the update flag.

@@ -1,6 +1,6 @@
 [package]
 name = "gd32e2-hal"
-version = "0.16.0"
+version = "0.17.0"
 edition = "2024"
 authors = ["Szizoid"]
 description = "HAL for the GD32E23x series (Cortex-M23), currently the GD32E230"
@@ -91,6 +91,10 @@ fugit = "0.4.0"
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
 cortex-m-rt = "0.7.3"
 panic-halt = "0.2.0"
+# Shares a peripheral between `main` and an interrupt handler: a
+# `Mutex<RefCell<Option<T>>>` proves the borrow happens with interrupts masked,
+# without which the two contexts could race on the same registers.
+critical-section = "1.1"
 # Logging for the examples: defmt keeps only a string index plus raw argument
 # bytes on the target, defmt-rtt drains them into the RTT ring buffer that
 # `probe-rs run` reads over SWD.
