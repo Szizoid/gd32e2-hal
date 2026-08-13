@@ -95,6 +95,13 @@ defmt-rtt = "1.3"
 # library alone, where dev-dependencies do not apply (see the `lib` alias).
 gd32e2-hal = { path = ".", features = ["defmt", "gd32e230k8"] }
 
+# The only example tied to a part: its pins are bonded on the 48-pin package alone,
+# so on anything else cargo skips it instead of failing on a missing pin. To compile
+# it, point the dev-dependency above at `gd32e230c8`.
+[[example]]
+name = "spi1-word"
+required-features = ["gd32e230c8"]
+
 # Small, predictable binary. debug = true costs no flash — probe-rs only loads
 # the loadable sections — and is what gives symbols to `probe-rs gdb`.
 [profile.release]

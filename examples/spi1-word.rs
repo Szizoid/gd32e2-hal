@@ -1,7 +1,11 @@
 //! SPI1 in 16-bit master mode, verified by loopback.
 //!
-//! Wire `MOSI` (PB15) straight to `MISO` (PB14). SPI1 exists only on the x8
-//! variant, and its AF0 pins are PB13/14/15. Results go to the RTT log.
+//! Needs a 48-pin x8 part (`gd32e230c8`): SPI1 exists only on x8, and its AF0 pins
+//! PB13/14/15 are bonded only on the 48-pin package. Smaller packages reach SPI1
+//! through PB1 plus PA13/PA14 — the SWD pins, so at the cost of the debug port and
+//! the RTT log with it.
+//!
+//! Wire `MOSI` (PB15) straight to `MISO` (PB14). Results go to the RTT log.
 //!
 //! Covers: `Spi::new_word`, `transfer_word`, the `SpiBus<u16>` impl, and
 //! `Spi::release`.

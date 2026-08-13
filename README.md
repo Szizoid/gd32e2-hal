@@ -14,7 +14,9 @@ Rust from scratch on top of the [`gd32e2`](https://crates.io/crates/gd32e2) PAC.
 > `rcu`, `spi`, `time`, `timer`, `usart`) plus on-hardware binaries in `examples/`.
 > All 16 examples have been flashed and verified on the board — RCU, GPIO, USART
 > (8/9-bit and parity), SPI0/SPI1, ADC, a one-shot DMA transfer, TIMER, blocking
-> delays, PWM, input capture, I²C, RTT.
+> delays, PWM, input capture, I²C, RTT. SPI1 was verified over the SWD pins with a
+> USART log, the only pins it has on a 32-pin part; `spi1-word` as it stands is
+> written for a 48-pin one.
 
 ### Principles
 
@@ -144,7 +146,9 @@ SPI1, `BYTEN` derived from the width). Buffer operations are inherent —
 the `_words` variants — with the `SpiBus` impls delegating to them. Errors are
 `spi::Error` (`Overrun` / `ModeFault` / `Crc` / `Framing`), `Crc` mapping to
 `ErrorKind::Other`. `release()` returns the peripheral and pins. Hardware NSS and
-CRC are deliberately not implemented.
+CRC are deliberately not implemented. SPI1 exists on x8 parts only, and below 48
+pins its sole bonded pins are `PB1` plus `PA13`/`PA14` — the SWD pair. Hence
+`examples/spi1-word.rs` is `required-features = ["gd32e230c8"]`.
 
 **DMA** (`src/dma.rs`) — one-shot transfers, verified on hardware.
 `dp.dma.split(&mut rcu)` (`DmaExt`) hands out `Channel<0>`…`Channel<4>`, each a
@@ -357,7 +361,9 @@ HAL для микроконтроллера **GD32E230K8U6** (Cortex-M23), на�
 > `timer`, `usart`) плюс тестовые бинарники на железо в `examples/`. Все 16
 > примеров прошиты и проверены на плате — RCU, GPIO, USART (8/9-бит и чётность),
 > SPI0/SPI1, ADC, разовая передача по DMA, TIMER, блокирующие задержки, PWM,
-> input capture, I²C, RTT.
+> input capture, I²C, RTT. SPI1 проверялся на ногах SWD с логом по USART — других
+> ног у него на 32-выводном чипе нет; `spi1-word` в нынешнем виде написан под
+> 48-выводный.
 
 ### Принципы
 
@@ -485,7 +491,9 @@ Mode 0 / MSB-first). Ширина слова — typestate: `transfer_word` и `
 же в `_words`-варианте, — impl'ы `SpiBus` делегируют к ним. Ошибки —
 `spi::Error` (`Overrun` / `ModeFault` / `Crc` / `Framing`), `Crc` ложится на
 `ErrorKind::Other`. `release()` возвращает периферию и пины. Аппаратный NSS и CRC
-сознательно не реализованы.
+сознательно не реализованы. SPI1 есть только на x8, и ниже 48 выводов из его ног
+разварены лишь `PB1` плюс `PA13`/`PA14` — пара SWD. Поэтому у
+`examples/spi1-word.rs` стоит `required-features = ["gd32e230c8"]`.
 
 **DMA** (`src/dma.rs`) — разовые передачи, проверены на железе.
 `dp.dma.split(&mut rcu)` (`DmaExt`) раздаёт `Channel<0>`…`Channel<4>` — каждый
