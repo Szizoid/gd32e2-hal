@@ -331,10 +331,26 @@ impl embedded_hal_nb::serial::Error for Error {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Event {
     /// A byte arrived in `RDATA`, cleared by reading it.
+    ///
+    /// Also carries overrun: `ORERR` reaches the NVIC through this enable as
+    /// well as through [`Error`](Self::Error), and
+    /// [`read_byte`](Usart::read_byte) acknowledges it either way.
     Rbne,
     /// The transmit buffer is free — true at idle, so listening for this needs
     /// `unlisten` from inside the handler once nothing is left to send.
     Tbe,
+    /// A framing, noise or overrun error.
+    ///
+    /// Reaches the NVIC **only while receiving through DMA**: in hardware the
+    /// enable is ANDed with the DMA request line, so without it the interrupt
+    /// never fires. Cleared by [`take_error`](Usart::take_error), which a
+    /// handler must call — nothing else drains these flags on the DMA path.
+    Error,
+    /// The parity check failed.
+    ///
+    /// Its own enable, separate from [`Error`](Self::Error) and not gated by
+    /// DMA. Cleared by [`take_error`](Usart::take_error).
+    ParityError,
 }
 
 /// A configured USART, owning the peripheral and both pins.
@@ -355,7 +371,14 @@ impl<USARTX, TX, RX, WORD> Usart<USARTX, TX, RX, WORD>
 where
     USARTX: Deref<Target = pac::usart0::RegisterBlock>,
 {
-    fn take_error(&self) -> Option<Error> {
+    /// Returns the pending receive error, if any, and clears it.
+    ///
+    /// The acknowledge for [`Event::Error`] and [`Event::ParityError`]: those
+    /// flags are what hold the interrupt request up, and on the DMA receive path
+    /// nothing else drains them, so a handler that skips this re-enters forever.
+    /// One error per call — with two pending, the second survives for the next.
+    /// Also drains `RDATA`, the frame having been lost or corrupted either way.
+    pub fn take_error(&self) -> Option<Error> {
         let stat = self.usart.stat().read();
         let error = if stat.orerr().bit_is_set() {
             self.usart.intc().write(|w| w.orec().clear());
@@ -418,16 +441,18 @@ where
     /// peripheral's [`Interrupt`](crate::pac::Interrupt) — is the caller's, this
     /// crate does not touch core registers.
     ///
-    /// Neither event needs a separate clear: `Rbne` is acknowledged by
-    /// [`read_byte`](Usart::read_byte), `Tbe` by
-    /// [`write_byte`](Usart::write_byte) — the same call a handler makes to do
-    /// its work. `Tbe` is set whenever nothing is queued, so a handler that
-    /// listens for it must call `unlisten` once it has nothing left to send, or
-    /// it re-enters at once.
+    /// No event needs a separate clear — each is acknowledged by the same call a
+    /// handler makes to do its work: `Rbne` by [`read_byte`](Usart::read_byte),
+    /// `Tbe` by [`write_byte`](Usart::write_byte), both error events by
+    /// [`take_error`](Usart::take_error). `Tbe` is set whenever nothing is
+    /// queued, so a handler that listens for it must call `unlisten` once it has
+    /// nothing left to send, or it re-enters at once.
     pub fn listen(&mut self, event: Event) {
         match event {
             Event::Rbne => self.usart.ctl0().modify(|_, w| w.rbneie().enabled()),
             Event::Tbe => self.usart.ctl0().modify(|_, w| w.tbeie().enabled()),
+            Event::Error => self.usart.ctl2().modify(|_, w| w.errie().enabled()),
+            Event::ParityError => self.usart.ctl0().modify(|_, w| w.perrie().enabled()),
         }
     }
     /// Stops `event` from raising an interrupt. Leaves the NVIC alone.
@@ -435,17 +460,21 @@ where
         match event {
             Event::Rbne => self.usart.ctl0().modify(|_, w| w.rbneie().disabled()),
             Event::Tbe => self.usart.ctl0().modify(|_, w| w.tbeie().disabled()),
+            Event::Error => self.usart.ctl2().modify(|_, w| w.errie().disabled()),
+            Event::ParityError => self.usart.ctl0().modify(|_, w| w.perrie().disabled()),
         }
     }
     /// Whether `event` currently raises an interrupt.
     ///
-    /// `Rbne` and `Tbe` share one NVIC line, so a handler needs this to tell
-    /// which of the two woke it: the flag alone is not enough, since `Tbe` is
-    /// set at idle regardless of whether it is being listened for.
+    /// Every event here shares one NVIC line, so a handler needs this to tell
+    /// which of them woke it: the flag alone is not enough, since `Tbe` is set
+    /// at idle regardless of whether it is being listened for.
     pub fn is_listening(&self, event: Event) -> bool {
         match event {
             Event::Rbne => self.usart.ctl0().read().rbneie().is_enabled(),
             Event::Tbe => self.usart.ctl0().read().tbeie().is_enabled(),
+            Event::Error => self.usart.ctl2().read().errie().is_enabled(),
+            Event::ParityError => self.usart.ctl0().read().perrie().is_enabled(),
         }
     }
 

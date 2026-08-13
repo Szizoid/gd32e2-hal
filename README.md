@@ -119,15 +119,22 @@ same width: `embedded-hal-nb` `Read<u8>` / `Write<u8>` and `embedded-io`
 `read_exact` / `write_all` / `write_fmt` as defaults. `flush`, `read_ready` and
 `write_ready` exist in both layers; the inherent ones win method-call syntax on an
 owned or `&` receiver, the trait ones on `&mut` — reach the other one by path.
-`listen` / `unlisten` (`Event::Rbne` / `Event::Tbe`) toggle `RBNEIE` / `TBEIE`;
-both share one NVIC line, so a handler checks `is_listening` before trusting
-either flag. `Rbne` clears on `read_byte`, `Tbe` on `write_byte` — no separate
-clear, and `Tbe` is set at idle, so a handler listening for it must `unlisten`
-once nothing is left to send. Unmasking the line in the NVIC is the caller's.
+`listen` / `unlisten` / `is_listening` toggle `RBNEIE` (`Event::Rbne`), `TBEIE`
+(`Event::Tbe`), `ERRIE` (`Event::Error`) and `PERRIE` (`Event::ParityError`);
+all four share one NVIC line, so a handler checks `is_listening` before trusting
+any flag. None needs a separate clear — `Rbne` clears on `read_byte`, `Tbe` on
+`write_byte`, both error events on `take_error` — and `Tbe` is set at idle, so a
+handler listening for it must `unlisten` once nothing is left to send. `Error`
+covers framing, noise and overrun, and in hardware its enable is ANDed with the
+DMA request line: without DMA reception it never fires. Overrun additionally
+arrives through `RBNEIE`. Unmasking the line in the NVIC is the caller's. The two
+error events have not been on hardware — a loopback cannot raise either, the one
+peripheral generating the parity it then checks.
 Raw 9-bit words via `new_word` / `write_word` /
 `write_words` / `read_word` / `read_words` on the `Word` typestate
 (`UsartConfig9`). RX errors are `usart::Error` (`Overrun` / `Noise` / `Framing` /
-`Parity`), cleared through `USART_INTC`, with `ErrorKind` from the
+`Parity`), taken and cleared by `take_error` through `USART_INTC`, with
+`ErrorKind` from the
 `serial::Error` and `embedded_io::Error` impls. `release()` returns the
 peripheral and both pins.
 
@@ -224,14 +231,28 @@ does not decide it.
 `into_capture(psc)` gives a fifth type, `Capture`, whose counter free runs at the
 full `u16` range — only the prescaler is a choice. `channel(pin, edge)` returns a
 `CaptureChannel`, bound by the same `ChannelPin<TIMERX, C>` map, with operations
-in `CaptureOps<C>`; `ChannelEnable<C>` carries `CHxEN`, shared by both roles.
+in `CaptureOps<C>`; `ChannelEnable<C>` carries `CHxEN`, `CHxIE` and `CHxIF`,
+shared by both roles.
 `Edge` is `Rising` or `Falling` — both edges at once is reserved on this part.
 `read()` returns `nb::Result<u16, Error>`: `WouldBlock` until an edge is latched,
 `Error::Overcapture` when one overwrote a timestamp not yet read.
 `interval(from, to)` converts a span into a duration of any scale, wrapping with
 the counter; `select_edge` changes the edge on a live channel. `into_timer()` /
-`release()` leave the role on `Pwm` and `Capture` alike. Complementary outputs,
-break inputs, dead time and interrupts are not implemented.
+`release()` leave the role on `Pwm` and `Capture` alike.
+
+Interrupts: `listen` / `unlisten` / `is_listening` / `is_pending` /
+`clear_interrupt` take an `Event` on whichever role owns the counter —
+`CountDownTimer`, `Pwm` and `Capture` alike, `Event::Update` being the rollover.
+Channels carry the same set without an argument, having exactly one event each,
+and the type says which it is: a compare match on `PwmChannel`, a capture on
+`CaptureChannel`. Only `PwmChannel` needs `clear_interrupt` — a capture is
+acknowledged by `read()`, a compare match yields nothing to consume. All of a
+timer's events share one NVIC line, so a handler pairs `is_listening` with
+`is_pending`; the flag alone will not do, since an untouched channel compares
+against zero after reset and raises its flag once per rollover. Unmasking the
+line is the caller's. `examples/capture-interrupt.rs` measures intervals past one
+counter cycle by counting rollovers alongside the timestamps. Complementary
+outputs, break inputs and dead time are not implemented.
 
 **Prelude** (`src/prelude.rs`) — split per peripheral: `prelude::gpio` (`GpioExt`,
 `OutputPin` / `InputPin` / `StatefulOutputPin`), `prelude::rcu`, `prelude::dma`,
@@ -491,15 +512,22 @@ open-drain; `embedded-hal` 1.0 `OutputPin` / `InputPin` / `StatefulOutputPin`
 `write_all` / `write_fmt` дефолтами. `flush`, `read_ready` и `write_ready` есть в
 обоих слоях — точечную запись на владении или `&` выигрывает инхерентный, на
 `&mut` — трейтовый; другой доступен по пути.
-`listen` / `unlisten` (`Event::Rbne` / `Event::Tbe`) переключают `RBNEIE` /
-`TBEIE`; оба флага висят на одной линии NVIC, поэтому обработчик сверяет
-`is_listening`, прежде чем доверять флагу. `Rbne` гасится `read_byte`, `Tbe` —
-`write_byte`, отдельного сброса нет; `Tbe` взведён в покое, поэтому слушающий
-его обработчик обязан звать `unlisten`, когда слать больше нечего.
-Размаскирование линии в NVIC — за вызывающим.
+`listen` / `unlisten` / `is_listening` переключают `RBNEIE` (`Event::Rbne`),
+`TBEIE` (`Event::Tbe`), `ERRIE` (`Event::Error`) и `PERRIE`
+(`Event::ParityError`); все четыре висят на одной линии NVIC, поэтому обработчик
+сверяет `is_listening`, прежде чем доверять флагу. Отдельного сброса не нужно
+никому: `Rbne` гасится `read_byte`, `Tbe` — `write_byte`, оба события ошибок —
+`take_error`. `Tbe` взведён в покое, поэтому слушающий его обработчик обязан
+звать `unlisten`, когда слать больше нечего. `Error` покрывает framing, noise и
+overrun, и в железе его разрешение объединено по И с линией запроса DMA: без
+DMA-приёма он не сработает. Overrun приходит ещё и через `RBNEIE`.
+Размаскирование линии в NVIC — за вызывающим. Оба события ошибок на железе не
+проверялись: петля их не поднимает — чётность ставит и проверяет одна и та же
+периферия.
 Сырой 9-битный режим — `new_word` / `write_word` / `write_words` / `read_word` /
 `read_words` на typestate `Word` (`UsartConfig9`). Ошибки приёма — `usart::Error`
-(`Overrun` / `Noise` / `Framing` / `Parity`), сбрасываются через `USART_INTC`,
+(`Overrun` / `Noise` / `Framing` / `Parity`), забираются и сбрасываются
+`take_error` через `USART_INTC`,
 `ErrorKind` дают impl'ы `serial::Error` и `embedded_io::Error`. `release()`
 возвращает периферию и оба пина.
 
@@ -596,14 +624,28 @@ typestate периферии. Общий супертрейт `DmaPeriph<N>` з�
 `into_capture(psc)` даёт пятый тип, `Capture`, счётчик которого свободно бежит на
 полном диапазоне `u16` — выбором остаётся только делитель. `channel(pin, edge)`
 возвращает `CaptureChannel`, гейтится той же картой `ChannelPin<TIMERX, C>`,
-операции лежат в `CaptureOps<C>`; `CHxEN` вынесен в `ChannelEnable<C>`, общий для
-обеих ролей. `Edge` — `Rising` или `Falling`, захват по обоим фронтам на этом
+операции лежат в `CaptureOps<C>`; `CHxEN`, `CHxIE` и `CHxIF` вынесены в
+`ChannelEnable<C>`, общий для обеих ролей. `Edge` — `Rising` или `Falling`,
+захват по обоим фронтам на этом
 чипе зарезервирован. `read()` возвращает `nb::Result<u16, Error>`: `WouldBlock`,
 пока фронт не защёлкнут, и `Error::Overcapture`, когда фронт затёр непрочитанную
 отметку. `interval(from, to)` переводит промежуток в длительность любой шкалы,
 заворачиваясь вместе со счётчиком; `select_edge` меняет фронт на живом канале.
 `into_timer()` / `release()` выводят из роли и `Pwm`, и `Capture`.
-Комплементарные выходы, break, dead time и прерывания не реализованы.
+
+Прерывания: `listen` / `unlisten` / `is_listening` / `is_pending` /
+`clear_interrupt` принимают `Event` у любой роли, владеющей счётчиком, —
+`CountDownTimer`, `Pwm` и `Capture` одинаково; `Event::Update` — переполнение.
+У каналов тот же набор без аргумента: событие у канала ровно одно, и какое
+именно — сказано типом (совпадение у `PwmChannel`, захват у `CaptureChannel`).
+`clear_interrupt` нужен только `PwmChannel`: захват подтверждается вызовом
+`read()`, а у совпадения потреблять нечего. Все события таймера сидят на одной
+линии NVIC, поэтому обработчик сверяет `is_listening` вместе с `is_pending` —
+одного флага мало, нетронутый канал сравнивает с нулём после сброса и взводит
+флаг раз в оборот. Размаскирование линии — за вызывающим.
+`examples/capture-interrupt.rs` меряет промежутки длиннее одного оборота, считая
+переполнения рядом с отметками. Комплементарные выходы, break и dead time не
+реализованы.
 
 **Прелюдия** (`src/prelude.rs`) — разбита по периферии: `prelude::gpio` (`GpioExt`,
 `OutputPin` / `InputPin` / `StatefulOutputPin`), `prelude::rcu`, `prelude::dma`,

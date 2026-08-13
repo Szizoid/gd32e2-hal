@@ -16,6 +16,11 @@
 //! microseconds spent between writing the pin and reading the capture — visible
 //! at the short end, negligible at the long one.
 //!
+//! This is the blocking side of capture: the core waits on every edge in
+//! `nb::block!`. `capture-interrupt.rs` is the same peripheral driven the other
+//! way — the edge wakes the core instead — and counts rollovers so that
+//! intervals longer than one counter cycle come out right.
+//!
 //! Covers: `Timer::into_capture`, `Capture::channel` with an `Edge`,
 //! `CaptureChannel::read` through `nb::block!` including the overcapture error,
 //! `select_edge` and `interval`.
