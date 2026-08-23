@@ -623,6 +623,7 @@ bus_en! {
     pac::Gpiob => ahben, pben,
     pac::Gpiof => ahben, pfen,
     pac::Dma => ahben, dmaen,
+    pac::Crc => ahben, crcen,
     pac::Usart1 => apb1en, usart1en,
     pac::Spi1 => apb1en, spi1en,
     pac::Timer2 => apb1en, timer2en,

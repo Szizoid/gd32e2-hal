@@ -129,6 +129,11 @@ impl Adc {
             .modify(|_, w| w.eterc().enabled().etsrc().swrcst());
         Self { adc, clocks }
     }
+    /// The clock is left enabled and no reset is performed — a later `new()`
+    /// does both anyway.
+    pub fn release(self) -> pac::Adc {
+        self.adc
+    }
 
     fn set_channel(&self, channel: u8) {
         self.adc.rsq0().modify(|_, w| w.rl().bits(0b0));

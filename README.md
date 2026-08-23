@@ -10,11 +10,11 @@ A hardware abstraction layer for the **GD32E230K8U6** (Cortex-M23), written in
 Rust from scratch on top of the [`gd32e2`](https://crates.io/crates/gd32e2) PAC.
 
 > ⚠️ **Work in progress.** Written by hand, incrementally; the API is unstable.
-> The package is a library (`src/lib.rs` → `adc`, `dma`, `gpio`, `i2c`, `prelude`,
+> The package is a library (`src/lib.rs` → `adc`, `crc`, `dma`, `gpio`, `i2c`, `prelude`,
 > `rcu`, `spi`, `time`, `timer`, `usart`) plus on-hardware binaries in `examples/`.
-> All 16 examples have been flashed and verified on the board — RCU, GPIO, USART
+> All 17 examples have been flashed and verified on the board — RCU, GPIO, USART
 > (8/9-bit and parity), SPI0/SPI1, ADC, a one-shot DMA transfer, TIMER, blocking
-> delays, PWM, input capture, I²C, RTT. SPI1 was verified over the SWD pins with a
+> delays, PWM, input capture, I²C, CRC, RTT. SPI1 was verified over the SWD pins with a
 > USART log, the only pins it has on a 32-pin part; `spi1-word` as it stands is
 > written for a 48-pin one.
 
@@ -283,6 +283,18 @@ bytes from the first device that answers, sending nothing but a register index;
 at 50 kHz against an RP2040 in I²C target mode; fast and fast plus have not been
 on hardware yet.
 
+**CRC** (`src/crc.rs`) — hardware CRC, verified on hardware. `Crc<PS>` is generic
+over the polynomial width (`B32`/`B16`/`B8`/`B7`), fixed by which constructor
+built it: `new_32bit` / `new_16bit` / `new_8bit` / `new_7bit(rcu, crc, poly,
+CrcConfig)` set `POLY`, `PS` and `REV_I`/`REV_O` in one write; `CrcConfig` carries
+the last two. `write_*bit` feeds one word — `DATA` combines it with whatever
+result is already there rather than replacing it — through a raw `write_volatile`
+at the bus width matching `PS`: a plain 32-bit write to a narrower register is
+split by hardware into several sub-width feeds MSB-first, corrupting every write
+past the first. `read` / `read_*bit()` return the running result; `reset_with(seed)`
+sets `IDATA` and pulses `RST`, so the next write starts from `seed` instead of
+whatever was left over. `set_fdata` / `fdata` reach the unrelated scratch byte.
+
 ### Usage
 
 ```rust
@@ -402,11 +414,11 @@ HAL для микроконтроллера **GD32E230K8U6** (Cortex-M23), на�
 нуля поверх PAC-крейта [`gd32e2`](https://crates.io/crates/gd32e2).
 
 > ⚠️ **Работа в процессе.** Пишется вручную и постепенно; API нестабилен. Пакет —
-> библиотека (`src/lib.rs` → `adc`, `dma`, `gpio`, `i2c`, `prelude`, `rcu`, `spi`, `time`,
-> `timer`, `usart`) плюс тестовые бинарники на железо в `examples/`. Все 16
+> библиотека (`src/lib.rs` → `adc`, `crc`, `dma`, `gpio`, `i2c`, `prelude`, `rcu`, `spi`, `time`,
+> `timer`, `usart`) плюс тестовые бинарники на железо в `examples/`. Все 17
 > примеров прошиты и проверены на плате — RCU, GPIO, USART (8/9-бит и чётность),
 > SPI0/SPI1, ADC, разовая передача по DMA, TIMER, блокирующие задержки, PWM,
-> input capture, I²C, RTT. SPI1 проверялся на ногах SWD с логом по USART — других
+> input capture, I²C, CRC, RTT. SPI1 проверялся на ногах SWD с логом по USART — других
 > ног у него на 32-выводном чипе нет; `spi1-word` в нынешнем виде написан под
 > 48-выводный.
 
@@ -674,6 +686,20 @@ typestate периферии. Общий супертрейт `DmaPeriph<N>` з�
 только индекс регистра; `examples/i2c-registers.rs` пишет два байта и читает их
 обратно. Оба прогнаны на 50 кГц против RP2040 в режиме I²C target; fast и fast
 plus на железе пока не были.
+
+**CRC** (`src/crc.rs`) — аппаратный CRC, проверен на железе. `Crc<PS>` — дженерик
+по ширине полинома (`B32`/`B16`/`B8`/`B7`), фиксируется тем, какой конструктор
+построил значение: `new_32bit` / `new_16bit` / `new_8bit` /
+`new_7bit(rcu, crc, poly, CrcConfig)` одним заходом пишут `POLY`, `PS` и
+`REV_I`/`REV_O`; `CrcConfig` несёт последние два. `write_*bit` скармливает одно
+слово — `DATA` комбинирует его с уже накопленным результатом, а не заменяет —
+через сырой `write_volatile` на ширине шины, совпадающей с `PS`: обычная
+32-битная запись в более узкий регистр разбивается железом на несколько
+подширинных фидов от старшего байта к младшему, портя каждую запись кроме
+первой. `read` / `read_*bit()` возвращают текущий результат; `reset_with(seed)`
+выставляет `IDATA` и дёргает `RST`, поэтому следующая запись стартует с `seed`,
+а не с того, что осталось. `set_fdata` / `fdata` — доступ к несвязанному
+scratch-байту.
 
 ### Пример
 

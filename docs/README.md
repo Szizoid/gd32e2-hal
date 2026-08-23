@@ -2,7 +2,7 @@
 
 The PDFs are git-ignored; download them into this folder.
 
-- [GD32E23x User Manual](https://www.gd32mcu.com/en/download/0?kw=GD32E2) —
+- [GD32E23x User Manual](https://www.gd32mcu.com/download/down/document_id/212/path_type/1) —
   register reference.
-- [GD32E230xx Datasheet, Rev 2.6](https://www.gd32mcu.com/data/documents/datasheet/GD32E230xx_Datasheet_Rev2.6.pdf) —
+- [GD32E230xx Datasheet, Rev 3.1](https://www.gd32mcu.com/download/down/document_id/202/path_type/1) —
   pinout, alternate-function map, electrical limits.
