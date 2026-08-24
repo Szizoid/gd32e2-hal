@@ -287,11 +287,10 @@ on hardware yet.
 over the polynomial width (`B32`/`B16`/`B8`/`B7`), fixed by which constructor
 built it: `new_32bit` / `new_16bit` / `new_8bit` / `new_7bit(rcu, crc, poly,
 CrcConfig)` set `POLY`, `PS` and `REV_I`/`REV_O` in one write; `CrcConfig` carries
-the last two. `write_*bit` feeds one word — `DATA` combines it with whatever
-result is already there rather than replacing it — through a raw `write_volatile`
-at the bus width matching `PS`: a plain 32-bit write to a narrower register is
-split by hardware into several sub-width feeds MSB-first, corrupting every write
-past the first. `read` / `read_*bit()` return the running result; `reset_with(seed)`
+the last two and defaults to no reversal either way. `write_*bit` feeds one word
+at the bus width matching `PS`; `DATA` combines it with whatever result is
+already there rather than replacing it. `read` / `read_*bit()` return the
+running result; `reset_with(seed)`
 sets `IDATA` and pulses `RST`, so the next write starts from `seed` instead of
 whatever was left over. `set_fdata` / `fdata` reach the unrelated scratch byte.
 
@@ -691,12 +690,10 @@ plus на железе пока не были.
 по ширине полинома (`B32`/`B16`/`B8`/`B7`), фиксируется тем, какой конструктор
 построил значение: `new_32bit` / `new_16bit` / `new_8bit` /
 `new_7bit(rcu, crc, poly, CrcConfig)` одним заходом пишут `POLY`, `PS` и
-`REV_I`/`REV_O`; `CrcConfig` несёт последние два. `write_*bit` скармливает одно
-слово — `DATA` комбинирует его с уже накопленным результатом, а не заменяет —
-через сырой `write_volatile` на ширине шины, совпадающей с `PS`: обычная
-32-битная запись в более узкий регистр разбивается железом на несколько
-подширинных фидов от старшего байта к младшему, портя каждую запись кроме
-первой. `read` / `read_*bit()` возвращают текущий результат; `reset_with(seed)`
+`REV_I`/`REV_O`; `CrcConfig` несёт последние два, по умолчанию — без реверса в
+обе стороны. `write_*bit` скармливает одно слово на ширине шины, совпадающей с
+`PS`; `DATA` комбинирует его с уже накопленным результатом, а не заменяет.
+`read` / `read_*bit()` возвращают текущий результат; `reset_with(seed)`
 выставляет `IDATA` и дёргает `RST`, поэтому следующая запись стартует с `seed`,
 а не с того, что осталось. `set_fdata` / `fdata` — доступ к несвязанному
 scratch-байту.

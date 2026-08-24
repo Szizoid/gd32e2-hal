@@ -50,13 +50,13 @@ impl CrcConfig {
     }
 }
 
-/// Hardware CRC calculation unit.
-///
-/// `PS` ([`B32`]/[`B16`]/[`B8`]/[`B7`]) fixes the polynomial width for the
-/// lifetime of the value, selected by which constructor built it.
-pub struct Crc<PS> {
-    crc: pac::Crc,
-    _poly_size: PhantomData<PS>,
+impl Default for CrcConfig {
+    fn default() -> Self {
+        Self {
+            reverse_input: ReverseInput::Disabled,
+            reverse_output: ReverseOutput::Disabled,
+        }
+    }
 }
 
 /// Writes the fields shared by every polynomial size.
@@ -72,9 +72,19 @@ fn configure(crc: &pac::Crc, ps: u8, poly: u32, config: CrcConfig) {
     crc.poly().write(|w| unsafe { w.bits(poly) });
 }
 
+/// Loads `idata` into the result register through a pulse of `RST`.
 fn new_seed(crc: &pac::Crc, idata: u32) {
     crc.idata().write(|w| w.idata().bits(idata));
     crc.ctl().modify(|_, w| w.rst().reset());
+}
+
+/// Hardware CRC calculation unit.
+///
+/// `PS` ([`B32`]/[`B16`]/[`B8`]/[`B7`]) fixes the polynomial width for the
+/// lifetime of the value, selected by which constructor built it.
+pub struct Crc<PS> {
+    crc: pac::Crc,
+    _poly_size: PhantomData<PS>,
 }
 
 impl Crc<B32> {
