@@ -520,6 +520,30 @@ pub enum CkOutDiv {
     Div128,
 }
 
+/// What brought the chip up, as recorded in `RSTSCK`.
+///
+/// Independent flags rather than one cause: several can stand after a single
+/// reset, and nothing clears any of them but
+/// [`clear_reset_flags`](Rcu::clear_reset_flags).
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ResetFlag {
+    /// Deep-sleep or standby reset.
+    LowPower,
+    /// The window watchdog timed out.
+    WindowWatchdog,
+    /// The free watchdog timed out.
+    FreeWatchdog,
+    /// A software reset was requested.
+    Software,
+    /// Power reset.
+    Power,
+    /// The external reset pin was pulled.
+    ExternalPin,
+    /// The option byte loader ran.
+    OptionByteLoader,
+}
+
 /// Owns the RCU peripheral; obtained from [`RcuExt::constrain`].
 pub struct Rcu {
     rcu: pac::Rcu,
@@ -568,6 +592,29 @@ impl Rcu {
     pub fn enable_irc40k(&mut self) {
         self.rcu.rstsck().modify(|_, w| w.irc40ken().on());
         while self.rcu.rstsck().read().irc40kstb().is_not_ready() {}
+    }
+
+    /// Whether `flag` took part in the last reset.
+    ///
+    /// Reads the flag as it stands; more than one can answer `true`.
+    pub fn reset_flag(&self, flag: ResetFlag) -> bool {
+        let rstsck = self.rcu.rstsck().read();
+        match flag {
+            ResetFlag::LowPower => rstsck.lprstf().is_reset(),
+            ResetFlag::WindowWatchdog => rstsck.wwdgtrstf().is_reset(),
+            ResetFlag::FreeWatchdog => rstsck.fwdgtrstf().is_reset(),
+            ResetFlag::Software => rstsck.swrstf().is_reset(),
+            ResetFlag::Power => rstsck.porrstf().is_reset(),
+            ResetFlag::ExternalPin => rstsck.eprstf().is_reset(),
+            ResetFlag::OptionByteLoader => rstsck.oblrstf().is_reset(),
+        }
+    }
+    /// Clears every reset flag at once; `RSTFC` has no per-flag granularity.
+    ///
+    /// Until this is called the flags accumulate across resets, so a later
+    /// reading cannot tell which reset set them.
+    pub fn clear_reset_flags(&mut self) {
+        self.rcu.rstsck().modify(|_, w| w.rstfc().clear());
     }
 }
 

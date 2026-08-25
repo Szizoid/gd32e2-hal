@@ -103,6 +103,9 @@ are set from the new `hclk` before the source switch. `Usart0Sel` and `AdcSel` /
 node onto `PA8`/`PA9` (`CkOutSrc` / `CkOutDiv`) for measurement.
 `rcu.enable_irc40k()` starts the internal 40 kHz oscillator and waits for it to
 stabilise; its frequency is fixed, so nothing is recorded in `Clocks`.
+`rcu.reset_flag(ResetFlag::…)` reports what brought the chip up; several flags
+can stand at once, and they accumulate until `rcu.clear_reset_flags()` drops all
+seven — `RSTFC` has no per-flag granularity.
 `pclk1_tim` / `pclk2_tim` carry the timer branch: `hclk` at an undivided APB,
 twice the bus clock otherwise. Frequencies are `fugit` aliases from `src/time.rs`
 (`Hertz`), re-exported. `HXTAL` is out of scope — no crystal on this board.
@@ -511,7 +514,9 @@ open-drain; `embedded-hal` 1.0 `OutputPin` / `InputPin` / `StatefulOutputPin`
 `rcu.ck_out(src, div)` выводит внутренний тактовый узел на `PA8`/`PA9`
 (`CkOutSrc` / `CkOutDiv`) для замера. `rcu.enable_irc40k()` запускает внутренний
 генератор 40 кГц и ждёт стабилизации; частота фиксирована, в `Clocks` не
-попадает. `pclk1_tim` / `pclk2_tim` несут тактовую ветку таймеров: `hclk` при
+попадает. `rcu.reset_flag(ResetFlag::…)` сообщает, что подняло чип; флагов может
+стоять несколько сразу, и они накапливаются, пока `rcu.clear_reset_flags()` не
+погасит все семь — выборочно `RSTFC` не умеет. `pclk1_tim` / `pclk2_tim` несут тактовую ветку таймеров: `hclk` при
 неделённой APB, удвоенная частота шины иначе. Частоты — псевдонимы `fugit` из
 `src/time.rs` (`Hertz`), крейт реэкспортируется. `HXTAL` вне скоупа — кварц на
 плате не запаян.
