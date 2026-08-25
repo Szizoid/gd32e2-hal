@@ -26,7 +26,7 @@ const IRC8M: u32 = 8_000_000;
 const IRC28M: u32 = 28_000_000;
 const LXTAL: u32 = 32_768;
 const PLL_SRC: u32 = IRC8M / 2;
-const IRC40K: u32 = 40_000;
+pub(crate) const IRC40K: u32 = 40_000;
 
 const IRC28MDIV_DIV1: bool = true;
 const IRC28MDIV_DIV2: bool = false;
