@@ -10,13 +10,13 @@ A hardware abstraction layer for the **GD32E230K8U6** (Cortex-M23), written in
 Rust from scratch on top of the [`gd32e2`](https://crates.io/crates/gd32e2) PAC.
 
 > ⚠️ **Work in progress.** Written by hand, incrementally; the API is unstable.
-> The package is a library (`src/lib.rs` → `adc`, `crc`, `dma`, `fwdgt`, `gpio`, `i2c`,
-> `prelude`, `rcu`, `spi`, `time`, `timer`, `usart`) plus on-hardware binaries in
-> `examples/`. All 18 examples have been flashed and verified on the board — RCU,
-> GPIO, USART (8/9-bit and parity), SPI0/SPI1, ADC, a one-shot DMA transfer, TIMER,
-> blocking delays, PWM, input capture, I²C, CRC, the free watchdog, RTT. SPI1 was verified over the SWD pins with a
-> USART log, the only pins it has on a 32-pin part; `spi1-word` as it stands is
-> written for a 48-pin one.
+> The package is a library (`src/lib.rs` → `adc`, `crc`, `dma`, `gpio`, `i2c`,
+> `prelude`, `rcu`, `spi`, `time`, `timer`, `usart`, `watchdog`) plus on-hardware
+> binaries in `examples/`. All 19 examples have been flashed and verified on the
+> board — RCU, GPIO, USART (8/9-bit and parity), SPI0/SPI1, ADC, a one-shot DMA
+> transfer, TIMER, blocking delays, PWM, input capture, I²C, CRC, both watchdogs,
+> RTT. SPI1 was verified over the SWD pins with a USART log, the only pins it has
+> on a 32-pin part; `spi1-word` as it stands is written for a 48-pin one.
 
 ### Principles
 
@@ -302,14 +302,32 @@ running result; `reset_with(seed)`
 sets `IDATA` and pulses `RST`, so the next write starts from `seed` instead of
 whatever was left over. `set_fdata` / `fdata` reach the unrelated scratch byte.
 
-**FWDGT** (`src/fwdgt.rs`) — free watchdog, verified on hardware. `Fwdgt::new(rcu, fwdgt)` starts
-IRC40K, which clocks the counter; no bus clock is involved. Starting is
+**Watchdogs** (`src/watchdog/`) — both verified on hardware. Neither can be
+stopped once started, so each is a pair of types with no way back.
+
+**FWDGT**: `Fwdgt::new(rcu, fwdgt)` starts IRC40K, which clocks the counter; no
+bus clock is involved. Starting is
 irreversible in hardware, so it is irreversible in the type: `start(psc, rld)`
 and `start_timeout(2.secs())` consume `Fwdgt` and return `FwdgtRunning`, whose
 only method is `feed()`. `start_timeout` picks the smallest `FwdgtPsc` that
 spans the request, truncating, and saturates at 26 s; `start` panics on an `rld`
 past 12 bits. The manual asks for 7 or more IRC40K cycles between two reloads,
 which is not enforced. Window mode (`WND`) is not implemented.
+
+**WWDGT**: clocked from `PCLK1 / 4096 / WwdgtPsc`, spanning tens of
+milliseconds. `Wwdgt::new(rcu, wwdgt)` clocks and resets the peripheral;
+`start(psc, cnt, win)` consumes it into `WwdgtRunning` with `feed()`. Period and
+window are given in counter ticks, 0 to 63 — the register's top bit is added by
+the HAL, so a value meaning "reset now" cannot be passed in; `start` panics if
+either exceeds 6 bits or if the window outlasts the period. Feeding before the
+window opens resets the chip just as a missed deadline does.
+`set_period(cnt, win)` takes effect at the next feed, the counter being left
+alone because writing it would itself count as a feed. `listen()` enables the
+early wakeup interrupt one tick before the reset and has no `unlisten` — `EWIE`
+ignores a written zero; `is_listening` / `is_pending` / `clear_interrupt` round
+it out, and the flag is set by hardware whether or not the interrupt is enabled.
+The flag also re-arms while the counter sits at `0x40`, so a handler that only
+clears it is entered again until the reset lands.
 
 ### Usage
 
@@ -403,8 +421,8 @@ cargo build --release --no-default-features --features gd32e230x4
 - [ ] SPI: half-duplex / single-wire modes (`BDEN`/`BDOEN`/`RO`).
 - [ ] SPI: hardware NSS, CRC, TI mode, slave — low priority.
 - [ ] USART: hardware flow control (`CTS`/`RTS`).
-- [ ] FWDGT: window mode (`WND`), and `FWDGT_HOLD` in the DBG module so the
-      watchdog stops while a debugger holds the core.
+- [ ] FWDGT: window mode (`WND`), and `FWDGT_HOLD` in the DBG module so both
+      watchdogs stop while a debugger holds the core.
 - [ ] RCU: `HXTAL` (needs an external crystal on the board).
 - [ ] GPIO: port F alternate functions (no `AFSEL` register — needs its own study).
 - [ ] GPIO: port C (`PC13`–`PC15`, 48-pin parts only) — needs its own `Parts`.
@@ -432,11 +450,11 @@ HAL для микроконтроллера **GD32E230K8U6** (Cortex-M23), на�
 нуля поверх PAC-крейта [`gd32e2`](https://crates.io/crates/gd32e2).
 
 > ⚠️ **Работа в процессе.** Пишется вручную и постепенно; API нестабилен. Пакет —
-> библиотека (`src/lib.rs` → `adc`, `crc`, `dma`, `fwdgt`, `gpio`, `i2c`, `prelude`, `rcu`,
-> `spi`, `time`, `timer`, `usart`) плюс тестовые бинарники на железо в `examples/`.
-> Все 18 примеров прошиты и проверены на плате — RCU, GPIO, USART (8/9-бит и
+> библиотека (`src/lib.rs` → `adc`, `crc`, `dma`, `gpio`, `i2c`, `prelude`, `rcu`,
+> `spi`, `time`, `timer`, `usart`, `watchdog`) плюс тестовые бинарники на железо в `examples/`.
+> Все 19 примеров прошиты и проверены на плате — RCU, GPIO, USART (8/9-бит и
 > чётность), SPI0/SPI1, ADC, разовая передача по DMA, TIMER, блокирующие задержки,
-> PWM, input capture, I²C, CRC, сторожевой таймер, RTT. SPI1 проверялся на ногах SWD с логом по USART — других
+> PWM, input capture, I²C, CRC, оба сторожевых таймера, RTT. SPI1 проверялся на ногах SWD с логом по USART — других
 > ног у него на 32-выводном чипе нет; `spi1-word` в нынешнем виде написан под
 > 48-выводный.
 
@@ -724,14 +742,32 @@ plus на железе пока не были.
 а не с того, что осталось. `set_fdata` / `fdata` — доступ к несвязанному
 scratch-байту.
 
-**FWDGT** (`src/fwdgt.rs`) — сторожевой таймер, проверен на железе. `Fwdgt::new(rcu, fwdgt)`
-запускает IRC40K, от которого счётчик и тактуется; шинного такта у него нет.
+**Сторожевые таймеры** (`src/watchdog/`) — оба проверены на железе. Ни один
+нельзя остановить после запуска, поэтому каждый — пара типов без пути назад.
+
+**FWDGT**: `Fwdgt::new(rcu, fwdgt)` запускает IRC40K, от которого счётчик и
+тактуется; шинного такта у него нет.
 Пуск необратим в железе, поэтому необратим и в типе: `start(psc, rld)` и
 `start_timeout(2.secs())` съедают `Fwdgt` и возвращают `FwdgtRunning`, у
 которого есть единственный метод `feed()`. `start_timeout` берёт наименьший
 `FwdgtPsc`, покрывающий запрос, с усечением, и насыщается на 26 с; `start`
 паникует на `rld` шире 12 бит. Требование мануала о 7 и более тактах IRC40K
 между двумя перезагрузками не проверяется. Оконный режим (`WND`) не реализован.
+
+**WWDGT**: тактуется от `PCLK1 / 4096 / WwdgtPsc`, диапазон — десятки
+миллисекунд. `Wwdgt::new(rcu, wwdgt)` включает такт и сбрасывает периферию,
+`start(psc, cnt, win)` съедает её и возвращает `WwdgtRunning` с `feed()`. Период
+и окно задаются в тиках счётчика, от 0 до 63 — старший бит регистра HAL
+добавляет сам, поэтому значение со смыслом «сбросить сейчас» передать нельзя;
+`start` паникует, если любое из них шире 6 бит или окно длиннее периода.
+Кормление до открытия окна сбрасывает чип так же, как пропущенный дедлайн.
+`set_period(cnt, win)` вступает в силу со следующим кормлением, счётчик при этом
+не трогается — запись в него сама считалась бы кормлением. `listen()` разрешает
+прерывание раннего пробуждения за тик до сброса и не имеет пары `unlisten`:
+`EWIE` игнорирует запись нуля; рядом `is_listening` / `is_pending` /
+`clear_interrupt`, причём флаг взводится независимо от разрешения прерывания.
+Пока счётчик стоит на `0x40`, флаг взводится снова, поэтому обработчик, который
+только гасит его, входит повторно вплоть до сброса.
 
 ### Пример
 
@@ -823,8 +859,8 @@ cargo build --release --no-default-features --features gd32e230x4
 - [ ] SPI: half-duplex / однопроводные режимы (`BDEN`/`BDOEN`/`RO`).
 - [ ] SPI: аппаратный NSS, CRC, TI mode, slave — низкий приоритет.
 - [ ] USART: аппаратное управление потоком (`CTS`/`RTS`).
-- [ ] FWDGT: оконный режим (`WND`) и `FWDGT_HOLD` в модуле DBG, чтобы сторож
-      останавливался, пока отладчик держит ядро.
+- [ ] FWDGT: оконный режим (`WND`) и `FWDGT_HOLD` в модуле DBG, чтобы сторожа
+      останавливались, пока отладчик держит ядро.
 - [ ] RCU: `HXTAL` (нужен внешний кварц на плате).
 - [ ] GPIO: альтернативные функции порта F (регистра `AFSEL` нет — нужен
       отдельный разбор).

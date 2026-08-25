@@ -104,7 +104,7 @@ impl Fwdgt {
     /// If `rld` exceeds 12 bits. Masking it silently would hand back a working
     /// watchdog with a period nobody asked for.
     pub fn start(self, psc: FwdgtPsc, rld: u16) -> FwdgtRunning {
-        assert!(rld <= RLD_MAX);
+        assert!(rld <= RLD_MAX, "FWDGT reload must fit in 12 bits");
         self.fwdgt.ctl().write(|w| w.cmd().enable());
         self.fwdgt.psc().write(|w| w.psc().bits(psc as u8));
         self.fwdgt.rld().write(|w| w.rld().bits(rld));

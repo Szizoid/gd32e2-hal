@@ -25,11 +25,11 @@ use cortex_m_rt::entry;
 use defmt_rtt as _;
 use panic_halt as _;
 
-use gd32e2_hal::fwdgt::Fwdgt;
 use gd32e2_hal::pac;
 use gd32e2_hal::prelude::*;
 use gd32e2_hal::rcu::{ClockConfig, PllFreq, ResetFlag, SysClk};
 use gd32e2_hal::time::SecsDuration;
+use gd32e2_hal::watchdog::Fwdgt;
 
 const TIMEOUT: SecsDuration = SecsDuration::from_secs(2);
 const MEALS: u32 = 5;
