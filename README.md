@@ -288,8 +288,8 @@ frequency panics in the constructor. 10-bit addressing, SMBus, slave mode and
 DMA are not implemented. `examples/i2c.rs` scans the bus and reads 1, 2, 3 and 4
 bytes from the first device that answers, sending nothing but a register index;
 `examples/i2c-registers.rs` writes two bytes and reads them back. Both were run
-at 50 kHz against an RP2040 in I²C target mode; fast and fast plus have not been
-on hardware yet.
+at 50 kHz against an RP2040 in I²C target mode. Fast and fast plus are
+implemented but unverified.
 
 **CRC** (`src/crc.rs`) — hardware CRC, verified on hardware. `Crc<PS>` is generic
 over the polynomial width (`B32`/`B16`/`B8`/`B7`), fixed by which constructor
@@ -412,23 +412,44 @@ cargo build --release --no-default-features --features gd32e230x4
 
 ### Roadmap
 
-- [ ] DMA: circular mode and `M2M`.
-- [ ] Timers: complementary outputs, break and dead time.
-- [ ] I²C: fast and fast plus on hardware, 10-bit addressing, SMBus, slave, DMA.
-- [ ] Interrupt-driven operation for the rest of the peripherals (SPI, I²C, DMA)
-      and `EXTI` — TIMER, USART and ADC have `listen`/`unlisten` now; unmasking
-      the NVIC line stays the caller's.
-- [ ] SPI: half-duplex / single-wire modes (`BDEN`/`BDOEN`/`RO`).
-- [ ] SPI: hardware NSS, CRC, TI mode, slave — low priority.
-- [ ] USART: hardware flow control (`CTS`/`RTS`).
-- [ ] FWDGT: window mode (`WND`), and `FWDGT_HOLD` in the DBG module so both
-      watchdogs stop while a debugger holds the core.
-- [ ] RCU: `HXTAL` (needs an external crystal on the board).
-- [ ] GPIO: port F alternate functions (no `AFSEL` register — needs its own study).
-- [ ] GPIO: port C (`PC13`–`PC15`, 48-pin parts only) — needs its own `Parts`.
-- [ ] GPIO: the `PA11`/`PA12` remap onto the `PA9`/`PA10` pads below 32 pins
-      (`SYSCFG`, which nothing uses yet).
-- [ ] `embedded-dma` for the DMA buffers.
+**Peripherals not covered at all**
+
+- [ ] `EXTI` and `SYSCFG` — external events on pins, the wakeup source for sleep
+      modes, and the `EXTI` source select that lives in `SYSCFG`. The same module
+      carries the `PA11`/`PA12` remap onto the `PA9`/`PA10` pads below 32 pins
+      and the second DMA channel map.
+- [ ] `PMU` — sleep / deep-sleep / standby, the wakeup pin, LDO. Waking needs
+      `EXTI` first.
+- [ ] `FMC` program and erase, with `embedded-storage` on top.
+- [ ] `RTC` — the calendar. Runs off IRC40K without a crystal, at IRC40K accuracy.
+- [ ] `CMP` — the analog comparator; its `CMP_OUT` is already in the AF map.
+
+**Finishing what is there**
+
+- [ ] Interrupts for SPI, I²C and DMA — TIMER, USART, ADC and WWDGT have theirs;
+      the `Event` / `listen` shape is settled, so this is mostly mechanical.
+- [ ] DMA: circular mode, `M2M`, and `embedded-dma` for the buffers.
+- [ ] ADC: scan mode across several channels, which needs DMA to keep the
+      intermediate results.
+- [ ] Timers: complementary outputs, break and dead time; `TRGO` on `TIMER5`, so
+      it can trigger DMA.
+- [ ] I²C: 10-bit addressing, SMBus, slave, DMA.
+- [ ] SPI: half-duplex / single-wire modes (`BDEN`/`BDOEN`/`RO`); hardware NSS,
+      CRC, TI mode and slave are low priority.
+- [ ] USART: hardware flow control (`CTS`/`RTS`); a non-blocking API for 9-bit
+      words.
+- [ ] FWDGT: window mode (`WND`); `FWDGT_HOLD` and `WWDGT_HOLD` in the DBG
+      module, so neither watchdog runs while a debugger holds the core.
+- [ ] GPIO: port C (`PC13`–`PC15`, 48-pin parts only) — needs its own `Parts`;
+      port F alternate functions (no `AFSEL` register — needs its own study).
+- [ ] RCU: `HXTAL` and `LXTAL` (neither crystal is fitted on this board).
+
+**Infrastructure**
+
+- [ ] Async: `embedded-hal-async` / `embedded-io-async`, starting with a time
+      driver over one of the timers, which is what Embassy needs from a HAL.
+- [ ] Tests on the host and CI — there are none; the crate does not build for the
+      host, so this needs mocks.
 - [ ] Extract the HAL into its own standalone crate/repo (not just `examples/` —
       splitting the library out entirely).
 
@@ -727,8 +748,8 @@ typestate периферии. Общий супертрейт `DmaPeriph<N>` з�
 10-битная адресация, SMBus, slave и DMA не реализованы. `examples/i2c.rs`
 сканирует шину и читает у первого ответившего 1, 2, 3 и 4 байта, отправляя
 только индекс регистра; `examples/i2c-registers.rs` пишет два байта и читает их
-обратно. Оба прогнаны на 50 кГц против RP2040 в режиме I²C target; fast и fast
-plus на железе пока не были.
+обратно. Оба прогнаны на 50 кГц против RP2040 в режиме I²C target. Fast и fast
+plus реализованы, но не проверены.
 
 **CRC** (`src/crc.rs`) — аппаратный CRC, проверен на железе. `Crc<PS>` — дженерик
 по ширине полинома (`B32`/`B16`/`B8`/`B7`), фиксируется тем, какой конструктор
@@ -850,24 +871,45 @@ cargo build --release --no-default-features --features gd32e230x4
 
 ### Roadmap
 
-- [ ] DMA: циклический режим и `M2M`.
-- [ ] Таймеры: комплементарные выходы, break, dead time.
-- [ ] I²C: fast и fast plus на железе, 10-битная адресация, SMBus, slave, DMA.
-- [ ] Работа на прерываниях для остальных периферий (SPI, I²C, DMA) и `EXTI` —
-      у TIMER, USART и ADC уже есть `listen`/`unlisten`; размаскирование линии
-      в NVIC остаётся за вызывающим.
-- [ ] SPI: half-duplex / однопроводные режимы (`BDEN`/`BDOEN`/`RO`).
-- [ ] SPI: аппаратный NSS, CRC, TI mode, slave — низкий приоритет.
-- [ ] USART: аппаратное управление потоком (`CTS`/`RTS`).
-- [ ] FWDGT: оконный режим (`WND`) и `FWDGT_HOLD` в модуле DBG, чтобы сторожа
-      останавливались, пока отладчик держит ядро.
-- [ ] RCU: `HXTAL` (нужен внешний кварц на плате).
-- [ ] GPIO: альтернативные функции порта F (регистра `AFSEL` нет — нужен
-      отдельный разбор).
-- [ ] GPIO: порт C (`PC13`–`PC15`, только 48-выводные) — нужен свой `Parts`.
-- [ ] GPIO: ремап `PA11`/`PA12` на площадки `PA9`/`PA10` ниже 32 выводов
-      (`SYSCFG`, который пока никем не используется).
-- [ ] `embedded-dma` для буферов DMA.
+**Периферия, которой нет вовсе**
+
+- [ ] `EXTI` и `SYSCFG` — внешние события на ногах, источник пробуждения для
+      режимов сна и выбор линии `EXTI`, который живёт в `SYSCFG`. Там же ремап
+      `PA11`/`PA12` на площадки `PA9`/`PA10` ниже 32 выводов и вторая карта
+      каналов DMA.
+- [ ] `PMU` — sleep / deep-sleep / standby, wakeup-нога, LDO. Пробуждение
+      требует сначала `EXTI`.
+- [ ] Запись и стирание `FMC`, сверху `embedded-storage`.
+- [ ] `RTC` — календарь. Без кварца пойдёт от IRC40K, с его же точностью.
+- [ ] `CMP` — аналоговый компаратор; его `CMP_OUT` уже есть в карте AF.
+
+**Доводка того, что есть**
+
+- [ ] Прерывания у SPI, I²C и DMA — у TIMER, USART, ADC и WWDGT они уже есть;
+      форма `Event` / `listen` устоялась, так что это почти механика.
+- [ ] DMA: циклический режим, `M2M` и `embedded-dma` для буферов.
+- [ ] ADC: scan по нескольким каналам — нужен DMA, иначе промежуточные
+      результаты теряются.
+- [ ] Таймеры: комплементарные выходы, break, dead time; `TRGO` у `TIMER5`,
+      чтобы он мог запускать DMA.
+- [ ] I²C: 10-битная адресация, SMBus, slave, DMA.
+- [ ] SPI: half-duplex / однопроводные режимы (`BDEN`/`BDOEN`/`RO`); аппаратный
+      NSS, CRC, TI mode и slave — низкий приоритет.
+- [ ] USART: аппаратное управление потоком (`CTS`/`RTS`); неблокирующий API для
+      9-битных слов.
+- [ ] FWDGT: оконный режим (`WND`); `FWDGT_HOLD` и `WWDGT_HOLD` в модуле DBG,
+      чтобы ни один сторож не считал, пока отладчик держит ядро.
+- [ ] GPIO: порт C (`PC13`–`PC15`, только 48-выводные) — нужен свой `Parts`;
+      альтернативные функции порта F (регистра `AFSEL` нет — нужен отдельный
+      разбор).
+- [ ] RCU: `HXTAL` и `LXTAL` (ни один кварц на плате не запаян).
+
+**Инфраструктура**
+
+- [ ] Async: `embedded-hal-async` / `embedded-io-async`, начиная с драйвера
+      времени поверх одного из таймеров — именно его Embassy ждёт от HAL.
+- [ ] Тесты на хосте и CI — их нет вовсе; крейт под хост не собирается, поэтому
+      нужны моки.
 - [ ] Вынос HAL в полностью отдельный крейт/репозиторий (не просто `examples/` —
       разделение самой библиотеки).
 
