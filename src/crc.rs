@@ -100,7 +100,7 @@ impl Crc<B32> {
 
     /// Feeds one 32-bit word into the running CRC, combining it with the
     /// current result rather than replacing it.
-    pub fn write_32bit(&self, data: u32) {
+    pub fn write_32bit(&mut self, data: u32) {
         let data_reg = self.crc.data().as_ptr();
         unsafe { data_reg.write_volatile(data) };
     }
@@ -111,7 +111,7 @@ impl Crc<B32> {
 
     /// Sets `IDATA` to `seed` and pulses `RST`, so the result reads back as
     /// `seed` until the next [`write_32bit`](Self::write_32bit).
-    pub fn reset_with(&self, seed: u32) {
+    pub fn reset_with(&mut self, seed: u32) {
         new_seed(&self.crc, seed);
     }
 }
@@ -129,7 +129,7 @@ impl Crc<B16> {
 
     /// Feeds one 16-bit word into the running CRC, combining it with the
     /// current result rather than replacing it.
-    pub fn write_16bit(&self, data: u16) {
+    pub fn write_16bit(&mut self, data: u16) {
         let data_reg = self.crc.data().as_ptr() as *mut u16;
         unsafe { data_reg.write_volatile(data) };
     }
@@ -140,7 +140,7 @@ impl Crc<B16> {
 
     /// Sets `IDATA` to `seed` and pulses `RST`, so the result reads back as
     /// `seed` until the next [`write_16bit`](Self::write_16bit).
-    pub fn reset_with(&self, seed: u16) {
+    pub fn reset_with(&mut self, seed: u16) {
         new_seed(&self.crc, seed as u32);
     }
 }
@@ -158,7 +158,7 @@ impl Crc<B8> {
 
     /// Feeds one byte into the running CRC, combining it with the current
     /// result rather than replacing it.
-    pub fn write_8bit(&self, data: u8) {
+    pub fn write_8bit(&mut self, data: u8) {
         let data_reg = self.crc.data().as_ptr() as *mut u8;
         unsafe { data_reg.write_volatile(data) };
     }
@@ -169,7 +169,7 @@ impl Crc<B8> {
 
     /// Sets `IDATA` to `seed` and pulses `RST`, so the result reads back as
     /// `seed` until the next [`write_8bit`](Self::write_8bit).
-    pub fn reset_with(&self, seed: u8) {
+    pub fn reset_with(&mut self, seed: u8) {
         new_seed(&self.crc, seed as u32);
     }
 }
@@ -188,7 +188,7 @@ impl Crc<B7> {
     /// Feeds the low 7 bits of `data` into the running CRC, combining them
     /// with the current result rather than replacing it. The top bit is
     /// ignored by hardware.
-    pub fn write_7bit(&self, data: u8) {
+    pub fn write_7bit(&mut self, data: u8) {
         let data_reg = self.crc.data().as_ptr() as *mut u8;
         unsafe { data_reg.write_volatile(data) };
     }
@@ -199,7 +199,7 @@ impl Crc<B7> {
 
     /// Sets `IDATA` to `seed` and pulses `RST`, so the result reads back as
     /// `seed` until the next [`write_7bit`](Self::write_7bit).
-    pub fn reset_with(&self, seed: u8) {
+    pub fn reset_with(&mut self, seed: u8) {
         new_seed(&self.crc, seed as u32);
     }
 }
@@ -217,7 +217,7 @@ impl<PS> Crc<PS> {
 
     /// Writes an arbitrary byte to the scratch `FDATA` register. Unrelated to
     /// the CRC calculation — hardware never reads or modifies it on its own.
-    pub fn set_fdata(&self, fdata: u8) {
+    pub fn set_fdata(&mut self, fdata: u8) {
         self.crc.fdata().write(|w| w.fdata().bits(fdata));
     }
     /// Reads back the byte last written with [`set_fdata`](Self::set_fdata).

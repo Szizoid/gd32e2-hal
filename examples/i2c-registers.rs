@@ -45,8 +45,8 @@ fn main() -> ! {
         .freeze(&mut rcu, &mut dp.fmc);
 
     let gpiob = dp.gpiob.split(&mut rcu);
-    let scl = gpiob.pb6.into_alternate_open_drain::<1>();
-    let sda = gpiob.pb7.into_alternate_open_drain::<1>();
+    let mut scl = gpiob.pb6.into_alternate_open_drain::<1>();
+    let mut sda = gpiob.pb7.into_alternate_open_drain::<1>();
     scl.set_pull(Pull::Up);
     sda.set_pull(Pull::Up);
     let mut i2c = I2c::new(

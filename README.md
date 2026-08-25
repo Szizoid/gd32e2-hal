@@ -24,6 +24,9 @@ Rust from scratch on top of the [`gd32e2`](https://crates.io/crates/gd32e2) PAC.
   type: `Pin<'A', 5, Input>` has no `set_high`, an invalid AF number doesn't
   compile, and ownership prevents reconfiguring a pin twice or using a port
   before its clock is on.
+- **A method that changes hardware takes `&mut self`.** `&self` is for reads that
+  leave the peripheral as it was, so the borrow checker rejects two concurrent
+  users of one peripheral in safe code.
 - **Zero-cost.** The same register writes as hand-written PAC code; `Pin` is a ZST.
 - **`#![no_std]`, no heap.**
 
@@ -98,6 +101,8 @@ unreachable frequency is a compile error, not a silent rounding; flash wait stat
 are set from the new `hclk` before the source switch. `Usart0Sel` and `AdcSel` /
 `AdcPsc` resolve into `Clocks`. `rcu.ck_out(src, div)` routes an internal clock
 node onto `PA8`/`PA9` (`CkOutSrc` / `CkOutDiv`) for measurement.
+`rcu.enable_irc40k()` starts the internal 40 kHz oscillator and waits for it to
+stabilise; its frequency is fixed, so nothing is recorded in `Clocks`.
 `pclk1_tim` / `pclk2_tim` carry the timer branch: `hclk` at an undivided APB,
 twice the bus clock otherwise. Frequencies are `fugit` aliases from `src/time.rs`
 (`Hertz`), re-exported. `HXTAL` is out of scope — no crystal on this board.
@@ -309,12 +314,12 @@ let clocks = ClockConfig::default()
     .freeze(&mut rcu, &mut dp.fmc);
 let parts = dp.gpioa.split(&mut rcu);        // enables the GPIOA clock
 
-let led = parts.pa5.into_output();
+let mut led = parts.pa5.into_output();
 led.set_high();
 
 let tx = parts.pa9.into_alternate::<1>();    // USART0_TX; ::<3>() wouldn't compile
 let rx = parts.pa10.into_alternate::<1>();
-let usart0 = Usart::new(&mut rcu, dp.usart0, tx, rx, clocks, UsartConfig::default());
+let mut usart0 = Usart::new(&mut rcu, dp.usart0, tx, rx, clocks, UsartConfig::default());
 if let Ok(byte) = usart0.read_byte() {
     usart0.write_byte(byte);                 // verified on hardware: echoes back
 }
@@ -427,6 +432,9 @@ HAL для микроконтроллера **GD32E230K8U6** (Cortex-M23), на�
   типе: у `Pin<'A', 5, Input>` нет `set_high`, неверный номер AF не
   компилируется, а система владения не даст перенастроить ногу дважды или
   использовать порт до включения такта.
+- **Метод, меняющий железо, берёт `&mut self`.** `&self` — у чтений, оставляющих
+  периферию прежней, поэтому borrow checker отсекает двух одновременных
+  пользователей одной периферии в safe-коде.
 - **Zero-cost.** Те же записи в регистры, что и ручной PAC-код; `Pin` — ZST.
 - **`#![no_std]`, без кучи.**
 
@@ -501,10 +509,12 @@ open-drain; `embedded-hal` 1.0 `OutputPin` / `InputPin` / `StatefulOutputPin`
 округление; wait state'ы flash выставляются от нового `hclk` до переключения
 источника. `Usart0Sel` и `AdcSel` / `AdcPsc` оседают в `Clocks`.
 `rcu.ck_out(src, div)` выводит внутренний тактовый узел на `PA8`/`PA9`
-(`CkOutSrc` / `CkOutDiv`) для замера. `pclk1_tim` / `pclk2_tim` несут тактовую
-ветку таймеров: `hclk` при неделённой APB, удвоенная частота шины иначе. Частоты
-— псевдонимы `fugit` из `src/time.rs` (`Hertz`), крейт реэкспортируется. `HXTAL`
-вне скоупа — кварц на плате не запаян.
+(`CkOutSrc` / `CkOutDiv`) для замера. `rcu.enable_irc40k()` запускает внутренний
+генератор 40 кГц и ждёт стабилизации; частота фиксирована, в `Clocks` не
+попадает. `pclk1_tim` / `pclk2_tim` несут тактовую ветку таймеров: `hclk` при
+неделённой APB, удвоенная частота шины иначе. Частоты — псевдонимы `fugit` из
+`src/time.rs` (`Hertz`), крейт реэкспортируется. `HXTAL` вне скоупа — кварц на
+плате не запаян.
 
 **USART** (`src/usart.rs`) — `Usart<USARTX, TX, RX, WORD = Byte>` владеет
 периферией и обоими пинами. Маркеры `TxPin` / `RxPin` (из `usart_pins!`)
@@ -713,12 +723,12 @@ let clocks = ClockConfig::default()
     .freeze(&mut rcu, &mut dp.fmc);
 let parts = dp.gpioa.split(&mut rcu);        // включает такт GPIOA
 
-let led = parts.pa5.into_output();
+let mut led = parts.pa5.into_output();
 led.set_high();
 
 let tx = parts.pa9.into_alternate::<1>();    // USART0_TX; ::<3>() не скомпилируется
 let rx = parts.pa10.into_alternate::<1>();
-let usart0 = Usart::new(&mut rcu, dp.usart0, tx, rx, clocks, UsartConfig::default());
+let mut usart0 = Usart::new(&mut rcu, dp.usart0, tx, rx, clocks, UsartConfig::default());
 if let Ok(byte) = usart0.read_byte() {
     usart0.write_byte(byte);                 // проверено на железе: приходит эхом
 }

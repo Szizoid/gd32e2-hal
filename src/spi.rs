@@ -12,7 +12,7 @@
 //! let sck = parts.pa5.into_alternate::<0>();
 //! let miso = parts.pa6.into_alternate::<0>();
 //! let mosi = parts.pa7.into_alternate::<0>();
-//! let spi = Spi::new(&mut rcu, dp.spi0, sck, miso, mosi, SpiConfig::new(SpiPsc::Div8));
+//! let mut spi = Spi::new(&mut rcu, dp.spi0, sck, miso, mosi, SpiConfig::new(SpiPsc::Div8));
 //! ```
 
 use core::marker::PhantomData;
@@ -206,23 +206,23 @@ pub trait Instance: Enable + Reset {
     ///
     /// `wide` selects the frame width, and the impl handles what follows from it
     /// (on SPI1 the FIFO access size must match, or reception stalls).
-    fn apply_config(&self, config: SpiConfig, wide: bool);
+    fn apply_config(&mut self, config: SpiConfig, wide: bool);
     /// Transmit buffer empty — ready to accept the next word.
     fn tbe(&self) -> bool;
     /// Receive buffer not empty — a word has arrived.
     fn rbne(&self) -> bool;
     /// Writes a word to the data register, which starts the clock in master mode.
-    fn write_data(&self, word: u16);
+    fn write_data(&mut self, word: u16);
     /// Reads the received word from the data register.
-    fn read_data(&self) -> u16;
+    fn read_data(&mut self) -> u16;
     /// Returns the first pending error, if any, clearing it as the manual requires.
-    fn take_error(&self) -> Option<Error>;
+    fn take_error(&mut self) -> Option<Error>;
     /// Enables or disables the peripheral (`SPIEN`).
-    fn set_enabled(&self, on: bool);
+    fn set_enabled(&mut self, on: bool);
 }
 
 impl Instance for pac::Spi0 {
-    fn apply_config(&self, config: SpiConfig, wide: bool) {
+    fn apply_config(&mut self, config: SpiConfig, wide: bool) {
         self.ctl0().modify(|_, w| {
             let w = w
                 .mstmod()
@@ -250,13 +250,13 @@ impl Instance for pac::Spi0 {
     fn rbne(&self) -> bool {
         self.stat().read().rbne().bit_is_set()
     }
-    fn write_data(&self, word: u16) {
+    fn write_data(&mut self, word: u16) {
         self.data().write(|w| unsafe { w.data().bits(word) });
     }
-    fn read_data(&self) -> u16 {
+    fn read_data(&mut self) -> u16 {
         self.data().read().data().bits()
     }
-    fn take_error(&self) -> Option<Error> {
+    fn take_error(&mut self) -> Option<Error> {
         let stat = self.stat().read();
         if stat.rxorerr().bit_is_set() {
             // clear: read DATA (done in transfer_byte) + read STAT (above)
@@ -275,13 +275,13 @@ impl Instance for pac::Spi0 {
             None
         }
     }
-    fn set_enabled(&self, on: bool) {
+    fn set_enabled(&mut self, on: bool) {
         self.ctl0().modify(|_, w| w.spien().bit(on));
     }
 }
 
 impl Instance for pac::Spi1 {
-    fn apply_config(&self, config: SpiConfig, wide: bool) {
+    fn apply_config(&mut self, config: SpiConfig, wide: bool) {
         self.ctl1().modify(|_, w| {
             let w = w.byten().bit(!wide);
             unsafe { w.dz().bits(if wide { DZ_16BIT } else { DZ_8BIT }) }
@@ -311,13 +311,13 @@ impl Instance for pac::Spi1 {
     fn rbne(&self) -> bool {
         self.stat().read().rbne().bit_is_set()
     }
-    fn write_data(&self, word: u16) {
+    fn write_data(&mut self, word: u16) {
         self.data().write(|w| unsafe { w.data().bits(word) });
     }
-    fn read_data(&self) -> u16 {
+    fn read_data(&mut self) -> u16 {
         self.data().read().data().bits()
     }
-    fn take_error(&self) -> Option<Error> {
+    fn take_error(&mut self) -> Option<Error> {
         let stat = self.stat().read();
         if stat.rxorerr().bit_is_set() {
             // clear: read DATA (done in transfer_byte) + read STAT (above)
@@ -336,7 +336,7 @@ impl Instance for pac::Spi1 {
             None
         }
     }
-    fn set_enabled(&self, on: bool) {
+    fn set_enabled(&mut self, on: bool) {
         self.ctl0().modify(|_, w| w.spien().bit(on));
     }
 }
@@ -373,7 +373,7 @@ where
     /// back.
     pub fn new(
         rcu: &mut Rcu,
-        spi: SPIX,
+        mut spi: SPIX,
         sck_pin: SCK,
         miso_pin: MISO,
         mosi_pin: MOSI,
@@ -402,7 +402,7 @@ where
     /// Same as [`new`](Spi::new), but configures 16-bit frames.
     pub fn new_word(
         rcu: &mut Rcu,
-        spi: SPIX,
+        mut spi: SPIX,
         sck_pin: SCK,
         miso_pin: MISO,
         mosi_pin: MOSI,
@@ -429,7 +429,7 @@ where
     ///
     /// The clock is left enabled and no reset is performed — a later `new()`
     /// does both anyway.
-    pub fn release(self) -> (SPIX, SCK, MISO, MOSI) {
+    pub fn release(mut self) -> (SPIX, SCK, MISO, MOSI) {
         self.spi.set_enabled(false);
         (self.spi, self.sck_pin, self.miso_pin, self.mosi_pin)
     }
@@ -443,7 +443,7 @@ where
     ///
     /// Blocks until the exchange has completed, so nothing is left pending on the
     /// bus when it returns.
-    pub fn transfer_byte(&self, byte: u8) -> Result<u8, Error> {
+    pub fn transfer_byte(&mut self, byte: u8) -> Result<u8, Error> {
         while !self.spi.tbe() {}
         self.spi.write_data(byte as u16);
         while !self.spi.rbne() {}
@@ -459,7 +459,7 @@ where
     /// The bus clocks `max(read.len(), write.len())` bytes either way: once
     /// `write` runs out `0x00` is sent, and once `read` is full the incoming
     /// bytes are discarded.
-    pub fn transfer_bytes(&self, read: &mut [u8], write: &[u8]) -> Result<(), Error> {
+    pub fn transfer_bytes(&mut self, read: &mut [u8], write: &[u8]) -> Result<(), Error> {
         let n = read.len().max(write.len());
         for i in 0..n {
             let sent = write.get(i).copied().unwrap_or(0x00);
@@ -471,21 +471,21 @@ where
         Ok(())
     }
     /// Exchanges `words` against itself: each byte is replaced by what came back.
-    pub fn transfer_bytes_in_place(&self, words: &mut [u8]) -> Result<(), Error> {
+    pub fn transfer_bytes_in_place(&mut self, words: &mut [u8]) -> Result<(), Error> {
         for word in words {
             *word = self.transfer_byte(*word)?;
         }
         Ok(())
     }
     /// Clocks `words.len()` bytes in, sending `0x00` to drive the bus.
-    pub fn read_bytes(&self, words: &mut [u8]) -> Result<(), Error> {
+    pub fn read_bytes(&mut self, words: &mut [u8]) -> Result<(), Error> {
         for slot in words {
             *slot = self.transfer_byte(0x00)?;
         }
         Ok(())
     }
     /// Clocks `words` out, discarding whatever arrives on MISO.
-    pub fn write_bytes(&self, words: &[u8]) -> Result<(), Error> {
+    pub fn write_bytes(&mut self, words: &[u8]) -> Result<(), Error> {
         for &b in words {
             self.transfer_byte(b)?;
         }
@@ -501,7 +501,7 @@ where
     ///
     /// Blocks until the exchange has completed, so nothing is left pending on the
     /// bus when it returns.
-    pub fn transfer_word(&self, word: u16) -> Result<u16, Error> {
+    pub fn transfer_word(&mut self, word: u16) -> Result<u16, Error> {
         while !self.spi.tbe() {}
         self.spi.write_data(word);
         while !self.spi.rbne() {}
@@ -517,7 +517,7 @@ where
     /// The bus clocks `max(read.len(), write.len())` words either way: once
     /// `write` runs out `0x0000` is sent, and once `read` is full the incoming
     /// words are discarded.
-    pub fn transfer_words(&self, read: &mut [u16], write: &[u16]) -> Result<(), Error> {
+    pub fn transfer_words(&mut self, read: &mut [u16], write: &[u16]) -> Result<(), Error> {
         let n = read.len().max(write.len());
         for i in 0..n {
             let sent = write.get(i).copied().unwrap_or(0x0000);
@@ -529,21 +529,21 @@ where
         Ok(())
     }
     /// Exchanges `words` against itself: each word is replaced by what came back.
-    pub fn transfer_words_in_place(&self, words: &mut [u16]) -> Result<(), Error> {
+    pub fn transfer_words_in_place(&mut self, words: &mut [u16]) -> Result<(), Error> {
         for word in words {
             *word = self.transfer_word(*word)?;
         }
         Ok(())
     }
     /// Clocks `words.len()` words in, sending `0x0000` to drive the bus.
-    pub fn read_words(&self, words: &mut [u16]) -> Result<(), Error> {
+    pub fn read_words(&mut self, words: &mut [u16]) -> Result<(), Error> {
         for slot in words {
             *slot = self.transfer_word(0x0000)?;
         }
         Ok(())
     }
     /// Clocks `words` out, discarding whatever arrives on MISO.
-    pub fn write_words(&self, words: &[u16]) -> Result<(), Error> {
+    pub fn write_words(&mut self, words: &[u16]) -> Result<(), Error> {
         for &w in words {
             self.transfer_word(w)?;
         }

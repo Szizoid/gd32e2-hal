@@ -70,16 +70,16 @@ fn main() -> ! {
         .freeze(&mut rcu, &mut dp.fmc);
 
     let gpioa = dp.gpioa.split(&mut rcu);
-    let source = gpioa.pa2.into_push_pull_output();
+    let mut source = gpioa.pa2.into_push_pull_output();
     let sense_pin = gpioa.pa3.into_alternate::<0>();
 
     let mut delay = dp.timer5.constrain(&mut rcu, clocks).into_delay();
 
-    let capture = dp
+    let mut capture = dp
         .timer14
         .constrain(&mut rcu, clocks)
         .into_capture(CAPTURE_PSC);
-    let sense = capture.channel(sense_pin, Edge::Rising);
+    let mut sense = capture.channel(sense_pin, Edge::Rising);
     sense.enable();
 
     defmt::info!("driving PA2, capturing PA3, 1 us per tick");

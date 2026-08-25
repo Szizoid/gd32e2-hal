@@ -38,7 +38,7 @@ fn main() -> ! {
     // A pin must go through into_analog() before it satisfies `Channel`.
     let ain = gpioa.pa0.into_analog();
 
-    let adc = Adc::new(&mut rcu, dp.adc, clocks);
+    let mut adc = Adc::new(&mut rcu, dp.adc, clocks);
 
     defmt::info!("ADC test, CK_ADC = {} Hz", clocks.ck_adc().to_Hz());
 

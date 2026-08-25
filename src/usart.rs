@@ -8,7 +8,7 @@
 //! ```ignore
 //! let tx = parts.pa9.into_alternate::<1>();
 //! let rx = parts.pa10.into_alternate::<1>();
-//! let serial = Usart::new(&mut rcu, dp.usart0, tx, rx, clocks, UsartConfig::default());
+//! let mut serial = Usart::new(&mut rcu, dp.usart0, tx, rx, clocks, UsartConfig::default());
 //! serial.write_byte(b'x');
 //! ```
 //!
@@ -378,7 +378,7 @@ where
     /// nothing else drains them, so a handler that skips this re-enters forever.
     /// One error per call — with two pending, the second survives for the next.
     /// Also drains `RDATA`, the frame having been lost or corrupted either way.
-    pub fn take_error(&self) -> Option<Error> {
+    pub fn take_error(&mut self) -> Option<Error> {
         let stat = self.usart.stat().read();
         let error = if stat.orerr().bit_is_set() {
             self.usart.intc().write(|w| w.orec().clear());
@@ -492,7 +492,7 @@ impl<USARTX, TX, RX> Usart<USARTX, TX, RX, Byte>
 where
     USARTX: Deref<Target = pac::usart0::RegisterBlock>,
 {
-    fn received_byte(&self) -> u8 {
+    fn received_byte(&mut self) -> u8 {
         let raw = self.usart.rdata().read().bits() as u8;
         match self.frame_format {
             FrameFormat::E7 | FrameFormat::O7 => raw & DATA_7BIT_MASK,
@@ -504,7 +504,7 @@ where
     ///
     /// Returning does not mean the byte has left the wire — for that, see
     /// [`flush`](Usart::flush).
-    pub fn write_byte(&self, byte: u8) {
+    pub fn write_byte(&mut self, byte: u8) {
         while !self.tbe() {}
         self.usart.tdata().write(|w| unsafe { w.bits(byte as u32) });
     }
@@ -512,7 +512,7 @@ where
     ///
     /// Returning does not mean the buffer has left the wire — for that see
     /// [`flush`](Usart::flush). Cannot fail.
-    pub fn write_bytes(&self, buf: &[u8]) {
+    pub fn write_bytes(&mut self, buf: &[u8]) {
         for &byte in buf {
             self.write_byte(byte);
         }
@@ -521,7 +521,7 @@ where
     ///
     /// A line error consumes the offending frame and is reported instead of the
     /// data, so a damaged byte is never mistaken for a good one.
-    pub fn read_byte(&self) -> Result<u8, Error> {
+    pub fn read_byte(&mut self) -> Result<u8, Error> {
         while !self.rbne() {}
         if let Some(e) = self.take_error() {
             Err(e)
@@ -536,7 +536,7 @@ where
     /// deadlock against a peer waiting for its answer. Returns `0` only for an
     /// empty `buf`. A line error ends the call at once, losing the bytes copied
     /// before it: the count is not reported alongside an error.
-    pub fn read_bytes(&self, buf: &mut [u8]) -> Result<usize, Error> {
+    pub fn read_bytes(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
         if buf.is_empty() {
             return Ok(0);
         }
@@ -596,7 +596,7 @@ where
     /// Sends one 9-bit word, blocking until the transmit buffer can accept it.
     ///
     /// Bits above the ninth are discarded.
-    pub fn write_word(&self, word: u16) {
+    pub fn write_word(&mut self, word: u16) {
         while !self.tbe() {}
         self.usart
             .tdata()
@@ -606,13 +606,13 @@ where
     ///
     /// Returning does not mean the buffer has left the wire — for that see
     /// [`flush`](Usart::flush). Cannot fail.
-    pub fn write_words(&self, buf: &[u16]) {
+    pub fn write_words(&mut self, buf: &[u16]) {
         for &word in buf {
             self.write_word(word);
         }
     }
     /// Receives one 9-bit word, blocking until one arrives.
-    pub fn read_word(&self) -> Result<u16, Error> {
+    pub fn read_word(&mut self) -> Result<u16, Error> {
         while !self.rbne() {}
         if let Some(e) = self.take_error() {
             Err(e)
@@ -624,7 +624,7 @@ where
     ///
     /// Same blocking rule as [`read_bytes`](Usart::read_bytes): waits for the
     /// first word, then takes only what is already waiting.
-    pub fn read_words(&self, buf: &mut [u16]) -> Result<usize, Error> {
+    pub fn read_words(&mut self, buf: &mut [u16]) -> Result<usize, Error> {
         if buf.is_empty() {
             return Ok(0);
         }

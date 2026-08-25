@@ -37,7 +37,7 @@ fn main() -> ! {
         .freeze(&mut rcu, &mut dp.fmc);
 
     let period: SecsDuration = 5u32.secs();
-    let timer = dp.timer5.constrain(&mut rcu, clocks).start_interval(period);
+    let mut timer = dp.timer5.constrain(&mut rcu, clocks).start_interval(period);
     let mut delay = dp.timer13.constrain(&mut rcu, clocks).into_delay();
 
     let raw_period = period.as_secs();

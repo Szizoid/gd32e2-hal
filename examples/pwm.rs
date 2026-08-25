@@ -45,7 +45,7 @@ fn main() -> ! {
     let sense = gpioa.pa3.into_input();
     let pwm_pin = gpioa.pa2.into_alternate::<0>();
 
-    let pwm = dp
+    let mut pwm = dp
         .timer14
         .constrain(&mut rcu, clocks)
         .into_pwm_interval(MicrosDuration::from_micros(100));

@@ -26,6 +26,7 @@ const IRC8M: u32 = 8_000_000;
 const IRC28M: u32 = 28_000_000;
 const LXTAL: u32 = 32_768;
 const PLL_SRC: u32 = IRC8M / 2;
+const IRC40K: u32 = 40_000;
 
 const IRC28MDIV_DIV1: bool = true;
 const IRC28MDIV_DIV2: bool = false;
@@ -558,6 +559,15 @@ impl Rcu {
                 }
             }
         });
+    }
+
+    /// Starts the internal 40 kHz oscillator and blocks until it is stable.
+    ///
+    /// Its frequency is fixed and does not depend on the clock tree, so nothing
+    /// is recorded in [`Clocks`].
+    pub fn enable_irc40k(&mut self) {
+        self.rcu.rstsck().modify(|_, w| w.irc40ken().on());
+        while self.rcu.rstsck().read().irc40kstb().is_not_ready() {}
     }
 }
 

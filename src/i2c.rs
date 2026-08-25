@@ -346,7 +346,7 @@ where
     /// Every path out of a transaction goes through here, failures included: a
     /// skipped STOP leaves the master holding SCL, and the bus never goes idle
     /// again.
-    fn stop(&self) {
+    fn stop(&mut self) {
         self.i2c.ctl0().modify(|_, w| w.stop().stop());
     }
 
@@ -365,7 +365,7 @@ where
     /// a short read has to write `ACKEN` before
     /// [`clear_addsend`](Self::clear_addsend) opens the data phase. Failures
     /// release the bus, so callers can propagate with `?`.
-    fn start(&self, address: u8, read: bool) -> Result<(), Error> {
+    fn start(&mut self, address: u8, read: bool) -> Result<(), Error> {
         self.i2c.ctl0().modify(|_, w| w.start().start());
 
         while self.i2c.stat0().read().sbsend().is_no_start() {
@@ -392,12 +392,12 @@ where
     ///
     /// Goes down on a read of `STAT0` then a read of `STAT1`, in that order;
     /// skipping either leaves the transfer stalled.
-    fn clear_addsend(&self) {
+    fn clear_addsend(&mut self) {
         self.i2c.stat0().read();
         self.i2c.stat1().read();
     }
     /// Waits for a received byte to reach `DATA`, releasing the bus on error.
-    fn wait_rbne(&self) -> Result<(), Error> {
+    fn wait_rbne(&mut self) -> Result<(), Error> {
         while self.i2c.stat0().read().rbne().is_empty() {
             if let Some(err) = self.take_error(NoAcknowledgeSource::Data) {
                 self.stop();
@@ -411,7 +411,7 @@ where
     ///
     /// While receiving, `BTC` means a byte arrived behind the one still unread in
     /// `DATA`, and the peripheral holds SCL low until software catches up.
-    fn wait_btc(&self) -> Result<(), Error> {
+    fn wait_btc(&mut self) -> Result<(), Error> {
         while self.i2c.stat0().read().btc().is_not_finished() {
             if let Some(err) = self.take_error(NoAcknowledgeSource::Data) {
                 self.stop();
@@ -421,7 +421,7 @@ where
         Ok(())
     }
     /// Takes the received byte out of `DATA`, which also clears `RBNE`.
-    fn read_data(&self) -> u8 {
+    fn read_data(&mut self) -> u8 {
         self.i2c.data().read().trb().bits()
     }
 
@@ -432,7 +432,7 @@ where
     ///
     /// `STAT0` flags are `rc_w0`, so clearing goes through `modify` — a `write`
     /// would zero the flags it does not name and wipe them all.
-    fn take_error(&self, source: NoAcknowledgeSource) -> Option<Error> {
+    fn take_error(&mut self, source: NoAcknowledgeSource) -> Option<Error> {
         let stat = self.i2c.stat0().read();
         if stat.berr().is_error() {
             self.i2c.stat0().modify(|_, w| w.berr().no_error());

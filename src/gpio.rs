@@ -349,7 +349,7 @@ impl<const N: u8, MODE> HasLock for Pin<'B', N, MODE> {}
 /// the name is there to announce.
 impl<const P: char, const N: u8> Pin<P, N, Debugger> {
     /// Releases the pin as a digital input.
-    pub fn activate_into_input(self) -> Pin<P, N, Input> {
+    pub fn activate_into_input(mut self) -> Pin<P, N, Input> {
         self.set_mode(Ctl::Input);
         Pin { _mode: PhantomData }
     }
@@ -359,13 +359,13 @@ impl<const P: char, const N: u8> Pin<P, N, Debugger> {
         self.activate_into_input()
     }
     /// Releases the pin as a push-pull output.
-    pub fn activate_into_push_pull_output(self) -> Pin<P, N, Output<PushPull>> {
+    pub fn activate_into_push_pull_output(mut self) -> Pin<P, N, Output<PushPull>> {
         self.set_mode(Ctl::Output);
         self.set_omode(Omode::PushPull);
         Pin { _mode: PhantomData }
     }
     /// Releases the pin as an open-drain output.
-    pub fn activate_into_open_drain_output(self) -> Pin<P, N, Output<OpenDrain>> {
+    pub fn activate_into_open_drain_output(mut self) -> Pin<P, N, Output<OpenDrain>> {
         self.set_mode(Ctl::Output);
         self.set_omode(Omode::OpenDrain);
         Pin { _mode: PhantomData }
@@ -375,7 +375,7 @@ impl<const P: char, const N: u8> Pin<P, N, Debugger> {
         self.activate_into_push_pull_output()
     }
     /// Releases the pin as an analog input, as required by the ADC.
-    pub fn activate_into_analog(self) -> Pin<P, N, Analog> {
+    pub fn activate_into_analog(mut self) -> Pin<P, N, Analog> {
         self.set_mode(Ctl::Analog);
         Pin { _mode: PhantomData }
     }
@@ -384,7 +384,7 @@ impl<const P: char, const N: u8> Pin<P, N, Debugger> {
     ///
     /// Gated by [`ValidAf`] exactly as
     /// [`into_alternate`](Pin::into_alternate) is.
-    pub fn activate_into_alternate<const AF: u8>(self) -> Pin<P, N, Alternate<AF>>
+    pub fn activate_into_alternate<const AF: u8>(mut self) -> Pin<P, N, Alternate<AF>>
     where
         Self: ValidAf<AF>,
     {
@@ -393,7 +393,7 @@ impl<const P: char, const N: u8> Pin<P, N, Debugger> {
     }
     /// Same, but leaves the pin open-drain, as I²C requires.
     pub fn activate_into_alternate_open_drain<const AF: u8>(
-        self,
+        mut self,
     ) -> Pin<P, N, Alternate<AF, OpenDrain>>
     where
         Self: ValidAf<AF>,
@@ -449,15 +449,15 @@ impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
     fn read_octl(&self) -> bool {
         read_octl(Port::from_char(P), N)
     }
-    fn set_bop(&self) {
+    fn set_bop(&mut self) {
         set_bop(Port::from_char(P), N);
     }
 
-    fn set_bc(&self) {
+    fn set_bc(&mut self) {
         set_bc(Port::from_char(P), N);
     }
 
-    fn set_tg(&self) {
+    fn set_tg(&mut self) {
         set_tg(Port::from_char(P), N);
     }
 }
@@ -466,13 +466,13 @@ impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
 // call them: `Debugger` is not `Active`, yet leaving that mode is itself a mode
 // write, and the bounded block is invisible from outside it.
 impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
-    fn set_mode(&self, mode: Ctl) {
+    fn set_mode(&mut self, mode: Ctl) {
         let offset = N * 2;
         self.reg().ctl().modify(|r, w| unsafe {
             w.bits((r.bits() & !(0b11 << offset)) | ((mode as u32) << offset))
         });
     }
-    fn set_af(&self, af: u32) {
+    fn set_af(&mut self, af: u32) {
         let is_afsel0 = N < 8;
         let offset = (N % 8) * 4;
         if is_afsel0 {
@@ -485,19 +485,19 @@ impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
             });
         }
     }
-    fn set_pud(&self, bits: u32) {
+    fn set_pud(&mut self, bits: u32) {
         let offset = N * 2;
         self.reg()
             .pud()
             .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (bits << offset)) });
     }
-    fn set_ospd(&self, bits: u32) {
+    fn set_ospd(&mut self, bits: u32) {
         let offset = N * 2;
         self.reg()
             .ospd()
             .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (bits << offset)) });
     }
-    fn set_omode(&self, omode: Omode) {
+    fn set_omode(&mut self, omode: Omode) {
         let offset = N;
         self.reg().omode().modify(|r, w| unsafe {
             w.bits((r.bits() & !(0b1 << offset)) | ((omode as u32) << offset))
@@ -506,12 +506,12 @@ impl<const P: char, const N: u8, MODE> Pin<P, N, MODE> {
     /// Routes the pin to `af` and drives it as `omode`, the two halves of every
     /// `*_alternate*` method — the output type is part of the resulting mode, so
     /// it is written here rather than left at whatever the previous mode used.
-    fn set_alternate(&self, af: u32, omode: Omode) {
+    fn set_alternate(&mut self, af: u32, omode: Omode) {
         self.set_mode(Ctl::Af);
         self.set_af(af);
         self.set_omode(omode);
     }
-    fn set_lk(&self, lkk: bool) {
+    fn set_lk(&mut self, lkk: bool) {
         self.reg().lock().modify(|_, w| {
             let w = match N {
                 0 => w.lk0().locked(),
@@ -546,12 +546,12 @@ where
     MODE: Active,
 {
     /// Reconfigures the pin as a digital input.
-    pub fn into_input(self) -> Pin<P, N, Input> {
+    pub fn into_input(mut self) -> Pin<P, N, Input> {
         self.set_mode(Ctl::Input);
         Pin { _mode: PhantomData }
     }
     /// Reconfigures the pin as a push-pull output.
-    pub fn into_push_pull_output(self) -> Pin<P, N, Output<PushPull>> {
+    pub fn into_push_pull_output(mut self) -> Pin<P, N, Output<PushPull>> {
         self.set_mode(Ctl::Output);
         self.set_omode(Omode::PushPull);
         Pin { _mode: PhantomData }
@@ -560,7 +560,7 @@ where
     ///
     /// The pin can also be read back in this mode, which shared buses such as
     /// I²C rely on.
-    pub fn into_open_drain_output(self) -> Pin<P, N, Output<OpenDrain>> {
+    pub fn into_open_drain_output(mut self) -> Pin<P, N, Output<OpenDrain>> {
         self.set_mode(Ctl::Output);
         self.set_omode(Omode::OpenDrain);
         Pin { _mode: PhantomData }
@@ -570,7 +570,7 @@ where
         self.into_push_pull_output()
     }
     /// Reconfigures the pin as an analog input, as required by the ADC.
-    pub fn into_analog(self) -> Pin<P, N, Analog> {
+    pub fn into_analog(mut self) -> Pin<P, N, Analog> {
         self.set_mode(Ctl::Analog);
         Pin { _mode: PhantomData }
     }
@@ -579,7 +579,7 @@ where
     ///
     /// Only numbers this pin has will compile — see [`ValidAf`] — and the number
     /// stays in the returned type, so a driver can demand the exact function.
-    pub fn into_alternate<const AF: u8>(self) -> Pin<P, N, Alternate<AF>>
+    pub fn into_alternate<const AF: u8>(mut self) -> Pin<P, N, Alternate<AF>>
     where
         Self: ValidAf<AF>,
     {
@@ -588,7 +588,7 @@ where
     }
     /// Same, but leaves the pin open-drain: [`I2c`](crate::i2c::I2c) accepts only
     /// pins that went through here.
-    pub fn into_alternate_open_drain<const AF: u8>(self) -> Pin<P, N, Alternate<AF, OpenDrain>>
+    pub fn into_alternate_open_drain<const AF: u8>(mut self) -> Pin<P, N, Alternate<AF, OpenDrain>>
     where
         Self: ValidAf<AF>,
     {
@@ -601,7 +601,7 @@ where
     /// writes, with no way back in hardware or in the type: a [`Locked`] pin is
     /// still read and written, never reconfigured. Ports with a `LOCK` register
     /// only.
-    pub fn lock(self) -> Pin<P, N, Locked<MODE>>
+    pub fn lock(mut self) -> Pin<P, N, Locked<MODE>>
     where
         Self: HasLock,
     {
@@ -629,26 +629,26 @@ where
     }
 
     /// Selects the internal pull resistor.
-    pub fn set_pull(&self, p: Pull) {
+    pub fn set_pull(&mut self, p: Pull) {
         self.set_pud(p as u32);
     }
     /// Selects the output slew rate.
-    pub fn set_speed(&self, s: Speed) {
+    pub fn set_speed(&mut self, s: Speed) {
         self.set_ospd(s as u32);
     }
 }
 
 impl<const P: char, const N: u8, OTYPE> Pin<P, N, Output<OTYPE>> {
     /// Drives the pin high.
-    pub fn set_high(&self) {
+    pub fn set_high(&mut self) {
         self.set_bop();
     }
     /// Drives the pin low.
-    pub fn set_low(&self) {
+    pub fn set_low(&mut self) {
         self.set_bc();
     }
     /// Inverts the driven level.
-    pub fn toggle(&self) {
+    pub fn toggle(&mut self) {
         self.set_tg();
     }
     /// Returns whether the pin is *being driven* high.
@@ -702,15 +702,15 @@ impl<MODE> ErasedPin<MODE> {
 
 impl<OTYPE> ErasedPin<Output<OTYPE>> {
     /// Drives the pin high.
-    pub fn set_high(&self) {
+    pub fn set_high(&mut self) {
         set_bop(self.port, self.number);
     }
     /// Drives the pin low.
-    pub fn set_low(&self) {
+    pub fn set_low(&mut self) {
         set_bc(self.port, self.number);
     }
     /// Flips the pin, atomically against the rest of the port.
-    pub fn toggle(&self) {
+    pub fn toggle(&mut self) {
         set_tg(self.port, self.number);
     }
     /// Returns whether the pin is *being driven* high.
@@ -852,11 +852,11 @@ where
     Pin<P, N, MODE>: OutputPin,
 {
     /// Drives the pin high.
-    pub fn set_high(&self) {
+    pub fn set_high(&mut self) {
         self.set_bop();
     }
     /// Drives the pin low.
-    pub fn set_low(&self) {
+    pub fn set_low(&mut self) {
         self.set_bc();
     }
 }
@@ -866,7 +866,7 @@ where
     Pin<P, N, MODE>: StatefulOutputPin,
 {
     /// Inverts the driven level.
-    pub fn toggle(&self) {
+    pub fn toggle(&mut self) {
         self.set_tg();
     }
     /// Returns whether the pin is *being driven* high, read back from `OCTL`.

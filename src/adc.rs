@@ -10,7 +10,7 @@
 //! let clocks = ClockConfig::default()
 //!     .adc_sel(AdcSel::Prescaled(AdcPsc::Apb2Div8))
 //!     .freeze(&mut rcu, &mut dp.fmc);
-//! let adc = Adc::new(&mut rcu, dp.adc, clocks);
+//! let mut adc = Adc::new(&mut rcu, dp.adc, clocks);
 //! let pin = parts.pa0.into_analog();
 //! let raw = adc.read(&pin, SampTime::Cycles55_5);
 //! ```
@@ -135,13 +135,13 @@ impl Adc {
         self.adc
     }
 
-    fn set_channel(&self, channel: u8) {
+    fn set_channel(&mut self, channel: u8) {
         self.adc.rsq0().modify(|_, w| w.rl().bits(0b0));
         self.adc
             .rsq2()
             .modify(|_, w| unsafe { w.rsq0().bits(channel) });
     }
-    fn set_sample_time(&self, channel: u8, time: SampTime) {
+    fn set_sample_time(&mut self, channel: u8, time: SampTime) {
         self.adc.sampt1().modify(|_, w| match channel {
             0 => w.spt0().bits(time as u8),
             1 => w.spt1().bits(time as u8),
@@ -156,7 +156,7 @@ impl Adc {
             _ => unreachable!(),
         });
     }
-    fn set_internal_channel(&self, channel: u8) {
+    fn set_internal_channel(&mut self, channel: u8) {
         self.set_channel(channel);
     }
     // Cycles239_5 / ck_adc >= 17.1 us, with both sides scaled by 10 to stay integer.
@@ -164,26 +164,26 @@ impl Adc {
         TEMP_MIN_SAMPTIME_US_X10 * self.clocks.ck_adc().to_Hz() as u64
             <= MAX_SAMPTIME_CYCLES_X10 * US_PER_S
     }
-    fn set_internal_sample_time(&self, channel: u8, time: SampTime) {
+    fn set_internal_sample_time(&mut self, channel: u8, time: SampTime) {
         self.adc.sampt0().modify(|_, w| match channel {
             TEMP_CHANNEL => w.spt16().bits(time as u8),
             VREF_CHANNEL => w.spt17().bits(time as u8),
             _ => unreachable!(),
         });
     }
-    fn convert(&self) -> u16 {
+    fn convert(&mut self) -> u16 {
         self.start_conversion();
         while self.adc.stat().read().eoc().is_not_complete() {}
         self.read_result()
     }
-    fn start_conversion(&self) {
+    fn start_conversion(&mut self) {
         self.adc.ctl1().modify(|_, w| w.swrcst().start());
         while self.adc.ctl1().read().swrcst().is_not_started() {}
     }
-    fn read_result(&self) -> u16 {
+    fn read_result(&mut self) -> u16 {
         self.adc.rdata().read().rdata().bits()
     }
-    fn with_internal<R>(&self, f: impl FnOnce(&Self) -> R) -> R {
+    fn with_internal<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
         let was_enabled = self.adc.ctl1().read().tsvren().is_enabled();
         if !was_enabled {
             self.adc.ctl1().modify(|_, w| w.tsvren().enabled());
@@ -199,7 +199,7 @@ impl Adc {
     /// — not until it finishes. Pairs with [`listen`](Self::listen) and
     /// [`result`](Self::result) for the interrupt-driven path: this starts a
     /// conversion without blocking on `EOC` at all.
-    pub fn start<PIN: Channel>(&self, _pin: &PIN, time: SampTime) {
+    pub fn start<PIN: Channel>(&mut self, _pin: &PIN, time: SampTime) {
         self.set_channel(PIN::CHANNEL);
         self.set_sample_time(PIN::CHANNEL, time);
         self.start_conversion();
@@ -208,7 +208,7 @@ impl Adc {
     ///
     /// Does not check `EOC` itself — call this once notified of it (an `Eoc`
     /// handler after [`listen`](Self::listen)), not on a guess.
-    pub fn result(&self) -> u16 {
+    pub fn result(&mut self) -> u16 {
         self.read_result()
     }
 
@@ -230,7 +230,7 @@ impl Adc {
     ///
     /// The pin is borrowed only to identify the channel — nothing is read from
     /// the value itself. Blocks until the conversion finishes.
-    pub fn read<PIN: Channel>(&self, _pin: &PIN, time: SampTime) -> u16 {
+    pub fn read<PIN: Channel>(&mut self, _pin: &PIN, time: SampTime) -> u16 {
         self.set_channel(PIN::CHANNEL);
         self.set_sample_time(PIN::CHANNEL, time);
         self.convert()
@@ -243,7 +243,7 @@ impl Adc {
     /// Returns `None` when `CK_ADC` runs too fast for the sensor's minimum
     /// sampling time: [`SampTime`] is counted in cycles, so above roughly 14 MHz
     /// even the longest no longer spans the required 17.1 µs.
-    pub fn read_temperature(&self) -> Option<i32> {
+    pub fn read_temperature(&mut self) -> Option<i32> {
         if !self.sample_time_sufficient() {
             return None;
         }
@@ -265,7 +265,7 @@ impl Adc {
     ///
     /// If that calibration is blank (`0xFFFF`, seen on some parts), falls back to
     /// the typical VREFINT of ~1.2 V: less accurate, but not wildly wrong.
-    pub fn read_vref(&self) -> i32 {
+    pub fn read_vref(&mut self) -> i32 {
         let vrefint_cal = unsafe { core::ptr::read_volatile(VREFINT_CAL_ADDR) };
         let raw = self.with_internal(|s| {
             s.set_internal_channel(VREF_CHANNEL);

@@ -78,7 +78,7 @@ fn main() -> ! {
     let pwm_pin = gpioa.pa2.into_alternate::<0>();
     let adc_pin = gpioa.pa3.into_analog();
 
-    let pwm = dp
+    let mut pwm = dp
         .timer14
         .constrain(&mut rcu, clocks)
         .into_pwm_interval(PWM_PERIOD);

@@ -29,7 +29,7 @@ fn main() -> ! {
     let mut rcu = dp.rcu.constrain();
 
     let config = CrcConfig::new(ReverseInput::Disabled, ReverseOutput::Disabled);
-    let crc = Crc::new_8bit(&mut rcu, dp.crc, 0x07, config);
+    let mut crc = Crc::new_8bit(&mut rcu, dp.crc, 0x07, config);
 
     // new_8bit doesn't touch IDATA/RST, so start from a known seed explicitly.
     crc.reset_with(0);

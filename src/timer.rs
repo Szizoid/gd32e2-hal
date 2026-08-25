@@ -6,7 +6,7 @@
 //!
 //! ```ignore
 //! let timer = dp.timer5.constrain(&mut rcu, clocks);
-//! let timer = timer.start_interval(500.millis());
+//! let mut timer = timer.start_interval(500.millis());
 //! timer.wait();
 //! ```
 
@@ -73,7 +73,7 @@ fn ticks_to_interval<const NOM: u64, const DENOM: u64>(
 ///
 /// `UPG` loads them out of their shadow registers; the update event it raises is
 /// consumed here, so the first wait afterwards sees a real rollover.
-fn start_counter<TIMERX: Instance>(timer: &TIMERX, psc: u16, car: u16) {
+fn start_counter<TIMERX: Instance>(timer: &mut TIMERX, psc: u16, car: u16) {
     timer.set_psc(psc);
     timer.set_car(car);
     timer.set_ups(true);
@@ -83,7 +83,7 @@ fn start_counter<TIMERX: Instance>(timer: &TIMERX, psc: u16, car: u16) {
 
 /// Blocks until the counter rolls over, then clears the flag it raised —
 /// hardware never clears `UPIF` itself, so the next wait measures a fresh cycle.
-fn wait_update<TIMERX: Instance>(timer: &TIMERX) {
+fn wait_update<TIMERX: Instance>(timer: &mut TIMERX) {
     while !timer.read_upif() {}
     timer.clear_upif();
 }
@@ -102,7 +102,7 @@ pub enum Event {
 
 // Every role of a timer answers the same way about its events, so the mapping
 // from `Event` to registers lives here once rather than in each of them.
-fn set_listening<TIMERX: Instance>(timer: &TIMERX, event: Event, on: bool) {
+fn set_listening<TIMERX: Instance>(timer: &mut TIMERX, event: Event, on: bool) {
     match event {
         Event::Update => timer.set_upie(on),
     }
@@ -120,7 +120,7 @@ fn is_pending<TIMERX: Instance>(timer: &TIMERX, event: Event) -> bool {
     }
 }
 
-fn clear_pending<TIMERX: Instance>(timer: &TIMERX, event: Event) {
+fn clear_pending<TIMERX: Instance>(timer: &mut TIMERX, event: Event) {
     match event {
         Event::Update => timer.clear_upif(),
     }
@@ -134,30 +134,30 @@ pub trait Instance: Enable + Reset {
     /// The `CK_TIMERx` branch feeding this timer, taken from a frozen tree.
     fn clk(clocks: &Clocks) -> Hertz;
     /// Writes the prescaler, which reaches the counter on the next update event.
-    fn set_psc(&self, psc: u16);
+    fn set_psc(&mut self, psc: u16);
     /// Reads back the prescaler dividing the clock into counter ticks.
     fn read_psc(&self) -> u16;
     /// Writes the auto-reload value the counter rolls over at.
-    fn set_car(&self, car: u16);
+    fn set_car(&mut self, car: u16);
     /// Reads back the auto-reload value the counter rolls over at.
     fn read_car(&self) -> u16;
     /// Reads the counter, which advances on its own while the timer runs.
     fn read_cnt(&self) -> u16;
     /// Raises an update event in software, loading the shadowed dividers.
-    fn gen_update(&self);
+    fn gen_update(&mut self);
     /// Runs or halts the counter.
-    fn set_cen(&self, on: bool);
+    fn set_cen(&mut self, on: bool);
     /// Restricts what counts as an update event to overflow/underflow — `UPG` no
     /// longer raises `UPIF`, only the counter rolling over does.
-    fn set_ups(&self, on: bool);
+    fn set_ups(&mut self, on: bool);
     /// Lets the update event through to the NVIC. The flag is raised either way.
-    fn set_upie(&self, on: bool);
+    fn set_upie(&mut self, on: bool);
     /// Whether the update event reaches the NVIC.
     fn read_upie(&self) -> bool;
     /// Update flag — set by hardware on every rollover, never cleared by it.
     fn read_upif(&self) -> bool;
     /// Clears the update flag.
-    fn clear_upif(&self);
+    fn clear_upif(&mut self);
     /// Produces a second handle to the same peripheral.
     ///
     /// # Safety
@@ -175,7 +175,7 @@ macro_rules! timer_instance {
                 fn clk(clocks: &Clocks) -> Hertz {
                     clocks.$clk()
                 }
-                fn set_psc(&self, psc: u16) {
+                fn set_psc(&mut self, psc: u16) {
                     self.psc().write(|w| w.psc().bits(psc));
                 }
                 fn read_psc(&self) -> u16 {
@@ -185,7 +185,7 @@ macro_rules! timer_instance {
                 // in the SVD), safe on the other six; one macro body serves all.
                 // Every `u16` is a legal reload value in counting mode.
                 #[allow(unused_unsafe)]
-                fn set_car(&self, car: u16) {
+                fn set_car(&mut self, car: u16) {
                     self.car().write(|w| unsafe { w.car().bits(car) });
                 }
                 fn read_car(&self) -> u16 {
@@ -194,16 +194,16 @@ macro_rules! timer_instance {
                 fn read_cnt(&self) -> u16 {
                     self.cnt().read().cnt().bits()
                 }
-                fn gen_update(&self) {
+                fn gen_update(&mut self) {
                     self.swevg().write(|w| w.upg().set_bit());
                 }
-                fn set_cen(&self, on: bool) {
+                fn set_cen(&mut self, on: bool) {
                     self.ctl0().modify(|_, w| w.cen().bit(on));
                 }
-                fn set_ups(&self, on: bool) {
+                fn set_ups(&mut self, on: bool) {
                     self.ctl0().modify(|_, w| w.ups().bit(on));
                 }
-                fn set_upie(&self, on: bool) {
+                fn set_upie(&mut self, on: bool) {
                     self.dmainten().modify(|_, w| w.upie().bit(on));
                 }
                 fn read_upie(&self) -> bool {
@@ -214,7 +214,7 @@ macro_rules! timer_instance {
                 }
                 // In `INTF` zero clears and one leaves alone, and its reset value
                 // is zero — so `write` would clear every flag it does not name.
-                fn clear_upif(&self) {
+                fn clear_upif(&mut self) {
                     self.intf().modify(|_, w| w.upif().clear());
                 }
                 unsafe fn steal(&self) -> Self{
@@ -277,8 +277,8 @@ impl<TIMERX: Instance> Timer<TIMERX> {
     ///
     /// The dividers reach the counter before it runs, so the first
     /// [`wait`](CountDownTimer::wait) already measures the full interval.
-    pub fn start(self, psc: u16, car: u16) -> CountDownTimer<TIMERX> {
-        start_counter(&self.timer, psc, car);
+    pub fn start(mut self, psc: u16, car: u16) -> CountDownTimer<TIMERX> {
+        start_counter(&mut self.timer, psc, car);
         CountDownTimer {
             timer: self.timer,
             clk: self.clk,
@@ -309,8 +309,8 @@ impl<TIMERX: Instance> Timer<TIMERX> {
     ///
     /// The counter cycle is shared by every channel, and `car + 1` is also their
     /// duty resolution: a larger reload buys finer steps at a lower frequency.
-    pub fn into_pwm(self, psc: u16, car: u16) -> Pwm<TIMERX> {
-        start_counter(&self.timer, psc, car);
+    pub fn into_pwm(mut self, psc: u16, car: u16) -> Pwm<TIMERX> {
+        start_counter(&mut self.timer, psc, car);
         Pwm {
             timer: self.timer,
             clk: self.clk,
@@ -332,8 +332,8 @@ impl<TIMERX: Instance> Timer<TIMERX> {
     /// Only the prescaler is a choice: it trades resolution against the longest
     /// interval that still fits between two rollovers. Capture reads the counter
     /// as a clock rather than a period, so the reload is pinned to the maximum.
-    pub fn into_capture(self, psc: u16) -> Capture<TIMERX> {
-        start_counter(&self.timer, psc, u16::MAX);
+    pub fn into_capture(mut self, psc: u16) -> Capture<TIMERX> {
+        start_counter(&mut self.timer, psc, u16::MAX);
         Capture {
             timer: self.timer,
             clk: self.clk,
@@ -391,11 +391,11 @@ impl<TIMERX: Instance> CountDownTimer<TIMERX> {
     /// peripheral's [`Interrupt`](crate::pac::Interrupt) — is the caller's, this
     /// crate does not touch core registers.
     pub fn listen(&mut self, event: Event) {
-        set_listening(&self.timer, event, true);
+        set_listening(&mut self.timer, event, true);
     }
     /// Stops `event` from raising an interrupt. Leaves the NVIC alone.
     pub fn unlisten(&mut self, event: Event) {
-        set_listening(&self.timer, event, false);
+        set_listening(&mut self.timer, event, false);
     }
     /// Whether `event` reaches the NVIC.
     pub fn is_listening(&self, event: Event) -> bool {
@@ -414,22 +414,22 @@ impl<TIMERX: Instance> CountDownTimer<TIMERX> {
     /// and hardware never clears it, so returning with it still set re-enters
     /// the handler at once and starves everything else.
     pub fn clear_interrupt(&mut self, event: Event) {
-        clear_pending(&self.timer, event);
+        clear_pending(&mut self.timer, event);
     }
 
     /// Blocks until the counter rolls over, then clears the update flag.
     ///
     /// Leaves the timer running, so calling this in a loop yields one full
     /// interval per call.
-    pub fn wait(&self) {
-        wait_update(&self.timer);
+    pub fn wait(&mut self) {
+        wait_update(&mut self.timer);
     }
 
     /// Halts the counter and hands the timer back in its stopped form.
     ///
     /// The counter keeps its current value; a later [`start`](Timer::start)
     /// reloads the dividers and restarts from zero.
-    pub fn stop(self) -> Timer<TIMERX> {
+    pub fn stop(mut self) -> Timer<TIMERX> {
         self.timer.set_cen(false);
         Timer {
             timer: self.timer,
@@ -459,8 +459,8 @@ impl<TIMERX: Instance> Delay<TIMERX> {
     /// [`Timer::start_interval`], the dividers being derived the same way.
     pub fn delay<const NOM: u64, const DENOM: u64>(&mut self, interval: Duration<u32, NOM, DENOM>) {
         let (psc, car) = dividers(interval_to_ticks(interval, self.clk));
-        start_counter(&self.timer, psc, car);
-        wait_update(&self.timer);
+        start_counter(&mut self.timer, psc, car);
+        wait_update(&mut self.timer);
         self.timer.set_cen(false);
     }
 
@@ -500,7 +500,7 @@ impl<TIMERX: Instance> Pwm<TIMERX> {
     /// Several pins can reach one channel (`TIMER2` channel 0 answers on `PA6`
     /// and `PB4`), and handing over both yields two channels writing one compare
     /// register: same signal on both pins, and the last duty written wins.
-    pub fn channel<PIN, const C: u8>(&self, pin: PIN) -> PwmChannel<TIMERX, PIN, C>
+    pub fn channel<PIN, const C: u8>(&mut self, pin: PIN) -> PwmChannel<TIMERX, PIN, C>
     where
         PIN: ChannelPin<TIMERX, C>,
         TIMERX: PwmOps<C>,
@@ -521,11 +521,11 @@ impl<TIMERX: Instance> Pwm<TIMERX> {
     /// effect. Channels raise their own, through
     /// [`PwmChannel::listen`]. Unmasking the line in the NVIC is the caller's.
     pub fn listen(&mut self, event: Event) {
-        set_listening(&self.timer, event, true);
+        set_listening(&mut self.timer, event, true);
     }
     /// Stops `event` from raising an interrupt. Leaves the NVIC alone.
     pub fn unlisten(&mut self, event: Event) {
-        set_listening(&self.timer, event, false);
+        set_listening(&mut self.timer, event, false);
     }
     /// Whether `event` reaches the NVIC.
     pub fn is_listening(&self, event: Event) -> bool {
@@ -537,7 +537,7 @@ impl<TIMERX: Instance> Pwm<TIMERX> {
     }
     /// Clears the flag `event` raised, which hardware never does on its own.
     pub fn clear_interrupt(&mut self, event: Event) {
-        clear_pending(&self.timer, event);
+        clear_pending(&mut self.timer, event);
     }
 
     /// Changes the period without disturbing the running counter.
@@ -547,7 +547,7 @@ impl<TIMERX: Instance> Pwm<TIMERX> {
     /// Set the duties again, or scale them by the new
     /// [`max_duty`](PwmChannel::max_duty). The prescaler reaches the counter at
     /// the next update event, so the cycle in flight runs on the old one.
-    pub fn set_period(&self, psc: u16, car: u16) {
+    pub fn set_period(&mut self, psc: u16, car: u16) {
         self.timer.set_psc(psc);
         self.timer.set_car(car);
     }
@@ -555,7 +555,7 @@ impl<TIMERX: Instance> Pwm<TIMERX> {
     ///
     /// Splits it like [`into_pwm_interval`](Timer::into_pwm_interval).
     pub fn set_period_interval<const NOM: u64, const DENOM: u64>(
-        &self,
+        &mut self,
         interval: Duration<u32, NOM, DENOM>,
     ) {
         let (psc, car) = dividers(interval_to_ticks(interval, self.clk));
@@ -567,7 +567,7 @@ impl<TIMERX: Instance> Pwm<TIMERX> {
     /// Channels keep their stolen handles and pins, so they outlive this and go
     /// on reaching the registers; their outputs hold the level the counter
     /// stopped at.
-    pub fn into_timer(self) -> Timer<TIMERX> {
+    pub fn into_timer(mut self) -> Timer<TIMERX> {
         self.timer.set_cen(false);
         Timer {
             timer: self.timer,
@@ -589,11 +589,11 @@ where
     /// Timers with a `CCHP` register keep their outputs behind this switch, and
     /// it starts off — such a channel stays silent however it is configured until
     /// this is called. Timers without the register need nothing.
-    pub fn enable_output(&self) {
+    pub fn enable_output(&mut self) {
         self.timer.set_poen(true);
     }
     /// Cuts every channel off from its pin at once, keeping them configured.
-    pub fn disable_output(&self) {
+    pub fn disable_output(&mut self) {
         self.timer.set_poen(false);
     }
 }
@@ -616,7 +616,11 @@ impl<TIMERX: Instance> Capture<TIMERX> {
     /// and holds the pin for as long as it lives. The edge is taken here so a
     /// channel is never half configured;
     /// [`select_edge`](CaptureChannel::select_edge) changes it later.
-    pub fn channel<PIN, const C: u8>(&self, pin: PIN, edge: Edge) -> CaptureChannel<TIMERX, PIN, C>
+    pub fn channel<PIN, const C: u8>(
+        &mut self,
+        pin: PIN,
+        edge: Edge,
+    ) -> CaptureChannel<TIMERX, PIN, C>
     where
         PIN: ChannelPin<TIMERX, C>,
         TIMERX: CaptureOps<C>,
@@ -642,11 +646,11 @@ impl<TIMERX: Instance> Capture<TIMERX> {
     /// Captures raise their own event, through [`CaptureChannel::listen`].
     /// Unmasking the line in the NVIC is the caller's.
     pub fn listen(&mut self, event: Event) {
-        set_listening(&self.timer, event, true);
+        set_listening(&mut self.timer, event, true);
     }
     /// Stops `event` from raising an interrupt. Leaves the NVIC alone.
     pub fn unlisten(&mut self, event: Event) {
-        set_listening(&self.timer, event, false);
+        set_listening(&mut self.timer, event, false);
     }
     /// Whether `event` reaches the NVIC.
     pub fn is_listening(&self, event: Event) -> bool {
@@ -658,14 +662,14 @@ impl<TIMERX: Instance> Capture<TIMERX> {
     }
     /// Clears the flag `event` raised, which hardware never does on its own.
     pub fn clear_interrupt(&mut self, event: Event) {
-        clear_pending(&self.timer, event);
+        clear_pending(&mut self.timer, event);
     }
 
     /// Halts the counter and takes the timer back out of capture duty.
     ///
     /// Channels keep their stolen handles and pins and go on reaching the
     /// registers; they simply stop latching once the counter is halted.
-    pub fn into_timer(self) -> Timer<TIMERX> {
+    pub fn into_timer(mut self) -> Timer<TIMERX> {
         self.timer.set_cen(false);
         Timer {
             timer: self.timer,
@@ -712,29 +716,29 @@ impl<TIMERX: Instance> TimerExt for TIMERX {
 /// named: `TIMER13` has channel 0 alone, `TIMER5` none at all.
 pub trait ChannelEnable<const C: u8>: Instance {
     /// Enables or disables the channel, leaving its setup in place.
-    fn set_chxen(&self, on: bool);
+    fn set_chxen(&mut self, on: bool);
     /// Lets this channel's event through to the NVIC. The flag is raised either
     /// way, and every channel shares the timer's one interrupt line.
-    fn set_chxie(&self, on: bool);
+    fn set_chxie(&mut self, on: bool);
     /// Whether this channel's event reaches the NVIC.
     fn read_chxie(&self) -> bool;
     /// Channel flag — a capture latched or a compare matched, depending on the
     /// role the channel is in. Set by hardware, never cleared by it.
     fn read_chxif(&self) -> bool;
     /// Clears the channel flag.
-    fn clear_chxif(&self);
+    fn clear_chxif(&mut self);
 }
 
 macro_rules! channel_enable {
     {$($Timer:ty => [$(($Ch:expr, $chen:ident, $chie:ident, $chif:ident)$(,)?)+]$(,)?)+} => {
         $($(impl ChannelEnable<$Ch> for $Timer {
-            fn set_chxen(&self, on: bool) {
+            fn set_chxen(&mut self, on: bool) {
                 self.chctl2().modify(|_, w| match on {
                     true => w.$chen().enabled(),
                     false => w.$chen().disabled(),
                 })
             }
-            fn set_chxie(&self, on: bool) {
+            fn set_chxie(&mut self, on: bool) {
                 self.dmainten().modify(|_, w| w.$chie().bit(on));
             }
             fn read_chxie(&self) -> bool {
@@ -745,7 +749,7 @@ macro_rules! channel_enable {
             }
             // `INTF` is rc_w0, as for `UPIF`: `write` would clear the flags of
             // every other channel along with this one.
-            fn clear_chxif(&self) {
+            fn clear_chxif(&mut self) {
                 self.intf().modify(|_, w| w.$chif().clear())
             }
         })+)+
@@ -776,12 +780,12 @@ pub trait PwmOps<const C: u8>: ChannelEnable<C> {
     ///
     /// Covers direction, compare mode and polarity at once: a channel in PWM mode
     /// while still pointed at its input drives nothing.
-    fn apply_pwm_mode(&self);
+    fn apply_pwm_mode(&mut self);
     /// Writes the compare value the channel switches its output at.
     ///
     /// The output stays active while the counter is below this value, so one
     /// full period is `car() + 1` and duty is the ratio between the two.
-    fn set_chxcv(&self, cv: u16);
+    fn set_chxcv(&mut self, cv: u16);
 }
 
 macro_rules! pwm {
@@ -791,7 +795,7 @@ macro_rules! pwm {
         )+]$(,)?)+
     } => {
         $($(impl PwmOps<$Ch> for $Timer {
-            fn apply_pwm_mode(&self) {
+            fn apply_pwm_mode(&mut self) {
                 self.chctl2().modify(|_, w| w.$chp().not_inverted());
                 self.$chctl_reg().modify(|_, w| {
                     w.$chms()
@@ -803,7 +807,7 @@ macro_rules! pwm {
                 });
             }
             #[allow(unused_unsafe)]
-            fn set_chxcv(&self, cv: u16) {
+            fn set_chxcv(&mut self, cv: u16) {
                 self.$chcv().write(|w| unsafe { w.$chval().bits(cv) });
             }
         })+)+
@@ -839,13 +843,13 @@ pwm! {
 /// while the pins show nothing.
 pub trait PrimaryOutput: Instance {
     /// Enables or disables the outputs of all channels at once.
-    fn set_poen(&self, on: bool);
+    fn set_poen(&mut self, on: bool);
 }
 
 macro_rules! poen {
     ($($Timer:ty$(,)?)+) => {
         $(impl PrimaryOutput for $Timer {
-            fn set_poen(&self, on: bool) {
+            fn set_poen(&mut self, on: bool) {
                 self.cchp().modify(|_, w| match on {
                     true => w.poen().enabled(),
                     false => w.poen().disabled(),
@@ -916,11 +920,11 @@ pub struct PwmChannel<TIMERX, PIN, const C: u8> {
 
 impl<TIMERX: PwmOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8> PwmChannel<TIMERX, PIN, C> {
     /// Drives the pin from the comparison, keeping the duty already set.
-    pub fn enable(&self) {
+    pub fn enable(&mut self) {
         self.timer.set_chxen(true);
     }
     /// Stops driving the pin, leaving the channel configured.
-    pub fn disable(&self) {
+    pub fn disable(&mut self) {
         self.timer.set_chxen(false);
     }
 
@@ -929,7 +933,7 @@ impl<TIMERX: PwmOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8> PwmChannel<TIME
     /// Active for `cv` ticks out of [`max_duty`](Self::max_duty): zero is a
     /// permanently inactive pin, `max_duty` and above a permanently active one.
     /// The value reaches the output at the next rollover, not mid-period.
-    pub fn set_duty(&self, cv: u16) {
+    pub fn set_duty(&mut self, cv: u16) {
         self.timer.set_chxcv(cv);
     }
     /// Returns the duty that corresponds to a fully active output.
@@ -1019,11 +1023,11 @@ impl<TIMERX: CaptureOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8>
     CaptureChannel<TIMERX, PIN, C>
 {
     /// Arms the channel, from here on latching the counter on every edge.
-    pub fn enable(&self) {
+    pub fn enable(&mut self) {
         self.timer.set_chxen(true);
     }
     /// Stops latching, leaving the channel configured and its last value intact.
-    pub fn disable(&self) {
+    pub fn disable(&mut self) {
         self.timer.set_chxen(false);
     }
 
@@ -1031,7 +1035,7 @@ impl<TIMERX: CaptureOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8>
     ///
     /// Takes effect immediately, so an edge arriving during the switch belongs to
     /// whichever setting won the race; discard measurements spanning the change.
-    pub fn select_edge(&self, edge: Edge) {
+    pub fn select_edge(&mut self, edge: Edge) {
         self.timer.select_edge(edge);
     }
 
@@ -1078,7 +1082,7 @@ impl<TIMERX: CaptureOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8>
     /// [`Error::Overcapture`] when a further edge arrived before this read: the
     /// timestamp belongs to the later edge, the earlier one is lost. The next
     /// read is sound again.
-    pub fn read(&self) -> nb::Result<u16, Error> {
+    pub fn read(&mut self) -> nb::Result<u16, Error> {
         if !self.timer.read_chxif() {
             return Err(nb::Error::WouldBlock);
         }
@@ -1166,9 +1170,9 @@ pub trait CaptureOps<const C: u8>: ChannelEnable<C> {
     ///
     /// Covers direction, input filter and capture prescaler at once: a channel
     /// still pointing at its comparator captures nothing.
-    fn apply_capture_mode(&self);
+    fn apply_capture_mode(&mut self);
     /// Chooses the edge the channel takes its snapshot on.
-    fn select_edge(&self, edge: Edge);
+    fn select_edge(&mut self, edge: Edge);
     /// Reads the counter value the last edge latched.
     ///
     /// Says nothing about whether an edge arrived — the value means something
@@ -1177,7 +1181,7 @@ pub trait CaptureOps<const C: u8>: ChannelEnable<C> {
     /// Overcapture flag — set when an edge lands on a value not yet read.
     fn read_chxof(&self) -> bool;
     /// Clears the overcapture flag.
-    fn clear_chxof(&self);
+    fn clear_chxof(&mut self);
 }
 
 macro_rules! capture {
@@ -1187,7 +1191,7 @@ macro_rules! capture {
         )+]$(,)?)+
     } => {
         $($(impl CaptureOps<$Ch> for $Timer {
-            fn apply_capture_mode(&self) {
+            fn apply_capture_mode(&mut self) {
                 // `CHxNP` exists only on channels with a complementary output;
                 // channel 3 has neither.
                 $(self.chctl2().modify(|_, w| w.$chnp().not_inverted());)?
@@ -1200,7 +1204,7 @@ macro_rules! capture {
                         .div1()
                 })
             }
-            fn select_edge(&self, edge: Edge) {
+            fn select_edge(&mut self, edge: Edge) {
                 self.chctl2().modify(|_, w| match edge {
                     Edge::Rising => w.$chp().not_inverted(),
                     Edge::Falling => w.$chp().inverted()
@@ -1212,7 +1216,7 @@ macro_rules! capture {
             fn read_chxof(&self) -> bool {
                 self.intf().read().$chof().bit_is_set()
             }
-            fn clear_chxof(&self) {
+            fn clear_chxof(&mut self) {
                 self.intf().modify(|_, w| w.$chof().clear())
             }
         })+)+

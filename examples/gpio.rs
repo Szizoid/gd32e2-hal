@@ -41,15 +41,15 @@ fn main() -> ! {
     let gpiob = dp.gpiob.split(&mut rcu);
 
     // Input with a pull-up.
-    let button = gpioa.pa0.into_input();
+    let mut button = gpioa.pa0.into_input();
     button.set_pull(Pull::Up);
 
     // Push-pull output at high slew rate.
-    let led = gpioa.pa1.into_push_pull_output();
+    let mut led = gpioa.pa1.into_push_pull_output();
     led.set_speed(Speed::Mhz50);
 
     // Open-drain output (e.g. a shared line); high = released.
-    let od = gpioa.pa4.into_open_drain_output();
+    let mut od = gpioa.pa4.into_open_drain_output();
     od.set_high();
 
     // Analog just shows the transition here — reading it is the ADC example.
@@ -67,18 +67,18 @@ fn main() -> ! {
 
     // Three outputs of two different ports, each a distinct type until erased.
     // After `erase()` they share one, which is what lets them into an array.
-    let chase = [
+    let mut chase = [
         gpioa.pa5.into_push_pull_output().erase(),
         gpioa.pa6.into_push_pull_output().erase(),
         gpiob.pb0.into_push_pull_output().erase(),
     ];
-    for pin in &chase {
+    for pin in &mut chase {
         pin.set_low();
     }
 
     // Lock PA1: the configuration is frozen until reset, but a Locked output
     // still drives — `toggle` keeps working.
-    let led = led.lock();
+    let mut led = led.lock();
 
     let mut lit = 0;
     loop {
