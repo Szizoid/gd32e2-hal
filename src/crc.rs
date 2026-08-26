@@ -15,6 +15,8 @@ pub struct B8;
 pub struct B7;
 
 /// Input data bit-reversal granularity (`REV_I`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ReverseInput {
     /// No reversal.
     Disabled = 0b00,
@@ -27,6 +29,8 @@ pub enum ReverseInput {
 }
 
 /// Output data bit reversal (`REV_O`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ReverseOutput {
     /// The result is read out as computed.
     Disabled = 0,
@@ -35,6 +39,8 @@ pub enum ReverseOutput {
 }
 
 /// Settings shared by every polynomial size.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct CrcConfig {
     reverse_input: ReverseInput,
     reverse_output: ReverseOutput,

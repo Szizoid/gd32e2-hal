@@ -32,7 +32,7 @@ const DZ_16BIT: u8 = 0b1111;
 ///
 /// Discriminants are the `PSC` register encoding. There is no universal default
 /// — the right divider depends on `pclk` and the slave's maximum clock.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum SpiPsc {
@@ -50,7 +50,7 @@ pub enum SpiPsc {
 ///
 /// Both ends of the link must agree, or every word arrives bit-reversed with no
 /// error reported. Most devices are MSB-first, which is the default.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum BitOrder {
     /// Most significant bit first.
@@ -69,6 +69,8 @@ pub enum BitOrder {
 ///     .mode(embedded_hal::spi::MODE_3)
 ///     .bit_order(BitOrder::LsbFirst)
 /// ```
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct SpiConfig {
     psc: SpiPsc,
     mode: Mode,
@@ -219,6 +221,18 @@ pub trait Instance: Enable + Reset {
     fn take_error(&mut self) -> Option<Error>;
     /// Enables or disables the peripheral (`SPIEN`).
     fn set_enabled(&mut self, on: bool);
+    /// Enables or disables the receive interrupt (`RBNEIE`).
+    fn set_rbneie(&mut self, on: bool);
+    /// Reads back `RBNEIE`.
+    fn rbneie(&self) -> bool;
+    /// Enables or disables the transmit interrupt (`TBEIE`).
+    fn set_tbeie(&mut self, on: bool);
+    /// Reads back `TBEIE`.
+    fn tbeie(&self) -> bool;
+    /// Enables or disables the error interrupt (`ERRIE`).
+    fn set_errie(&mut self, on: bool);
+    /// Reads back `ERRIE`.
+    fn errie(&self) -> bool;
 }
 
 impl Instance for pac::Spi0 {
@@ -277,6 +291,24 @@ impl Instance for pac::Spi0 {
     }
     fn set_enabled(&mut self, on: bool) {
         self.ctl0().modify(|_, w| w.spien().bit(on));
+    }
+    fn set_rbneie(&mut self, on: bool) {
+        self.ctl1().modify(|_, w| w.rbneie().bit(on));
+    }
+    fn rbneie(&self) -> bool {
+        self.ctl1().read().rbneie().bit_is_set()
+    }
+    fn set_tbeie(&mut self, on: bool) {
+        self.ctl1().modify(|_, w| w.tbeie().bit(on));
+    }
+    fn tbeie(&self) -> bool {
+        self.ctl1().read().tbeie().bit_is_set()
+    }
+    fn set_errie(&mut self, on: bool) {
+        self.ctl1().modify(|_, w| w.errie().bit(on));
+    }
+    fn errie(&self) -> bool {
+        self.ctl1().read().errie().bit_is_set()
     }
 }
 
@@ -339,6 +371,39 @@ impl Instance for pac::Spi1 {
     fn set_enabled(&mut self, on: bool) {
         self.ctl0().modify(|_, w| w.spien().bit(on));
     }
+    fn set_rbneie(&mut self, on: bool) {
+        self.ctl1().modify(|_, w| w.rbneie().bit(on));
+    }
+    fn rbneie(&self) -> bool {
+        self.ctl1().read().rbneie().bit_is_set()
+    }
+    fn set_tbeie(&mut self, on: bool) {
+        self.ctl1().modify(|_, w| w.tbeie().bit(on));
+    }
+    fn tbeie(&self) -> bool {
+        self.ctl1().read().tbeie().bit_is_set()
+    }
+    fn set_errie(&mut self, on: bool) {
+        self.ctl1().modify(|_, w| w.errie().bit(on));
+    }
+    fn errie(&self) -> bool {
+        self.ctl1().read().errie().bit_is_set()
+    }
+}
+
+/// An SPI event that can raise an interrupt.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Event {
+    /// A word arrived in `DATA`, cleared by reading it.
+    Rbne,
+    /// The transmit buffer is free — true at idle, so listening for this needs
+    /// `unlisten` from inside the handler once nothing is left to send.
+    Tbe,
+    /// Any of the `STAT` error flags, which share this one enable. Cleared by
+    /// [`take_error`](Instance::take_error), which a handler must call —
+    /// nothing else drains them.
+    Error,
 }
 
 /// A configured SPI master, owning the peripheral and its three pins.
@@ -350,7 +415,6 @@ impl Instance for pac::Spi1 {
 ///
 /// Chip select is not handled here — NSS is software-managed, so drive the
 /// slave's CS with an ordinary output pin around each transaction.
-#[derive(Debug)]
 pub struct Spi<SPIX, SCK, MISO, MOSI, WORD = Byte> {
     spi: SPIX,
     sck_pin: SCK,
@@ -425,6 +489,35 @@ impl<SPIX, SCK, MISO, MOSI, WORD> Spi<SPIX, SCK, MISO, MOSI, WORD>
 where
     SPIX: Instance,
 {
+    /// Raises an interrupt on `event`, which still has to be unmasked in the
+    /// NVIC.
+    ///
+    /// [`Event::Tbe`] is true whenever nothing is queued, so a handler that
+    /// listens for it must call `unlisten` once it has nothing left to send.
+    pub fn listen(&mut self, event: Event) {
+        match event {
+            Event::Rbne => self.spi.set_rbneie(true),
+            Event::Tbe => self.spi.set_tbeie(true),
+            Event::Error => self.spi.set_errie(true),
+        }
+    }
+    /// Stops raising an interrupt on `event`.
+    pub fn unlisten(&mut self, event: Event) {
+        match event {
+            Event::Rbne => self.spi.set_rbneie(false),
+            Event::Tbe => self.spi.set_tbeie(false),
+            Event::Error => self.spi.set_errie(false),
+        }
+    }
+    /// Whether `event` is being listened for.
+    pub fn is_listening(&self, event: Event) -> bool {
+        match event {
+            Event::Rbne => self.spi.rbneie(),
+            Event::Tbe => self.spi.tbeie(),
+            Event::Error => self.spi.errie(),
+        }
+    }
+
     /// Disables the peripheral and returns it along with the three pins.
     ///
     /// The clock is left enabled and no reset is performed — a later `new()`

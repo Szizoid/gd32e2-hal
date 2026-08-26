@@ -30,6 +30,7 @@ use crate::usart::{self, Usart};
 /// Channel priority when several channels contend for the bus.
 ///
 /// Affects only arbitration latency, never the correctness of a single transfer.
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum Prio {
@@ -48,6 +49,7 @@ pub(crate) enum Dir {
 }
 
 /// Width of one transferred unit, selecting `PWIDTH`/`MWIDTH`.
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum Width {

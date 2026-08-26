@@ -44,7 +44,7 @@ const WS2_MAX_HCLK: u32 = 72_000_000;
 /// Named by frequency rather than multiplier: the PLL source is fixed
 /// (IRC8M/2 = 4 MHz), so the two map one-to-one. Only reachable frequencies
 /// exist, so an impossible request is a compile error, not a silent rounding.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum PllFreq {
@@ -73,7 +73,7 @@ pub enum PllFreq {
 /// [`freeze`](ClockConfig::freeze) leaves `SCS` alone, because lowering the clock
 /// after the flash wait states were already set for a higher one is exactly the
 /// order that must not happen.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum SysClk {
     /// IRC8M straight through at 8 MHz, PLL off.
@@ -86,7 +86,7 @@ pub enum SysClk {
 ///
 /// Named by the divider, not the resulting frequency, because `sysclk` varies
 /// with configuration; every variant is legal at any `sysclk`.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum AhbPsc {
@@ -102,7 +102,7 @@ pub enum AhbPsc {
 }
 
 /// APB prescaler: divides `hclk` down to `pclk1` (APB1) or `pclk2` (APB2).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum ApbPsc {
@@ -114,7 +114,7 @@ pub enum ApbPsc {
 }
 
 /// Divider for the prescaled `CK_ADC` branch, including which bus it taps.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum AdcPsc {
@@ -129,7 +129,7 @@ pub enum AdcPsc {
 }
 
 /// Divider on the internal 28 MHz oscillator feeding `CK_ADC`.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum Irc28mDiv {
@@ -141,7 +141,7 @@ pub enum Irc28mDiv {
 ///
 /// Each branch carries its own divider inside the variant, so a divider can't be
 /// specified for the branch it doesn't belong to.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum AdcSel {
     /// Left as the reset state: IRC28M selected but not running, so `CK_ADC` is
@@ -154,7 +154,7 @@ pub enum AdcSel {
 }
 
 /// Source of the USART0 clock, independent of the APB2 bus clock.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Usart0Sel {
     /// The APB2 bus clock — the reset default.
@@ -176,7 +176,8 @@ pub enum Usart0Sel {
 /// Passed by value into the drivers that need it (USART for its baud divisor,
 /// ADC for its calibration delay). There are no setters — once frozen, the tree
 /// matches what was actually written to the registers.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Clocks {
     hclk: Hertz,
     pclk1: Hertz,
@@ -234,6 +235,8 @@ impl Clocks {
 /// [`Default`] holds the reset state in one place — undivided buses, IRC8M as the
 /// system clock, USART0 on APB2 and no ADC clock — and every field is written to
 /// its registers whether it was named or not.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ClockConfig {
     hclk: AhbPsc,
     pclk1: ApbPsc,
@@ -471,7 +474,7 @@ impl ClockConfig {
 }
 
 /// Divider on the PLL branch feeding `CK_OUT`, ahead of the source multiplexer.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum PllDiv {
@@ -484,7 +487,7 @@ pub enum PllDiv {
 /// The PLL branch carries its own pre-multiplexer divider inside the variant, so
 /// it cannot be set for a source it doesn't apply to. Selecting a source that
 /// isn't running simply leaves the pin quiet.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum CkOutSrc {
     /// Nothing driven out.
@@ -506,7 +509,7 @@ pub enum CkOutSrc {
 }
 
 /// Divider applied to `CK_OUT` after the source multiplexer, for any source.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum CkOutDiv {
@@ -525,7 +528,7 @@ pub enum CkOutDiv {
 /// Independent flags rather than one cause: several can stand after a single
 /// reset, and nothing clears any of them but
 /// [`clear_reset_flags`](Rcu::clear_reset_flags).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ResetFlag {
     /// Deep-sleep or standby reset.

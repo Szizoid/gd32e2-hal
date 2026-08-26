@@ -46,7 +46,7 @@ const US_PER_S: u64 = 1_000_000;
 /// Longer sampling suits higher-impedance sources; the internal temperature
 /// sensor has a minimum requirement expressed in *time*, so how long is long
 /// enough depends on the actual `CK_ADC` frequency.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum SampTime {

@@ -21,7 +21,7 @@ const ALIVE_BIT: u8 = 1 << 6;
 ///
 /// The names count that field alone: the counter runs at `PCLK1 / 4096 / N`, so
 /// even [`Div1`](Self::Div1) is already `PCLK1` divided by 4096.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum WwdgtPsc {

@@ -1153,7 +1153,7 @@ impl<TIMERX: PwmOps<C>, PIN: ChannelPin<TIMERX, C>, const C: u8> SetDutyCycle
 /// A runtime value rather than a typestate: no method signature depends on it.
 /// Capturing on both edges is not offered — that encoding is reserved on every
 /// timer of this part.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum Edge {

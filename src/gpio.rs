@@ -132,7 +132,7 @@ pub struct ErasedPin<MODE> {
 }
 
 /// Internal pull resistor.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Pull {
     /// No pull resistor.
@@ -145,7 +145,7 @@ pub enum Pull {
 
 /// Output slew rate. Slower edges radiate less; faster ones are needed for
 /// high-speed peripherals.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum Speed {

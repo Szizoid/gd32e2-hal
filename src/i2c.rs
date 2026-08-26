@@ -185,7 +185,7 @@ fn write_fast_ckcfg<I2C: Instance>(i2c: &I2C, pclk1: u32, frequency: Hertz, duty
 /// Ratio of the low to the high half of an SCL period (`DTCY`).
 ///
 /// Only the fast modes can shape it, so it is a field of their variants alone.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum DutyCycle {
@@ -196,7 +196,7 @@ pub enum DutyCycle {
 /// Bus speed, and whatever else that speed implies.
 ///
 /// Each variant has its own minimum `pclk1`: 2 / 8 / 24 MHz.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum I2cMode {
     /// Up to 100 kHz, duty cycle fixed at 1:1.

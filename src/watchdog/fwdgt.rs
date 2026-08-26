@@ -21,7 +21,7 @@ const RLD_SPAN: u32 = RLD_MAX as u32 + 1;
 ///
 /// Sets the timeout range together with the reload value: `/4` spans up to
 /// 409 ms, `/256` up to 26 s.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(missing_docs)]
 pub enum FwdgtPsc {

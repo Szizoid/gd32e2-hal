@@ -127,7 +127,7 @@ pub mod baud {
 ///
 /// ×16 is the default and more tolerant of clock error; ×8 halves the sampling
 /// rate, which allows higher bit rates from the same peripheral clock.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Oversampling {
     /// 8 samples per bit — allows twice the bit rate from the same clock.
@@ -143,7 +143,7 @@ pub enum Oversampling {
 /// keep all 8 by widening the frame to 9 bits. No `N7` exists — without parity a
 /// frame carries the full 8 bits, which is `N8`. For raw 9-bit words see
 /// [`Usart::new_word`].
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum FrameFormat {
     /// 8 data bits, no parity.
@@ -162,6 +162,8 @@ pub enum FrameFormat {
 ///
 /// [`Default`] is 115200 baud, ×16 oversampling, [`FrameFormat::N8`] — i.e. the
 /// usual "115200 8N1".
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct UsartConfig {
     baud: Bps,
     oversampling: Oversampling,
@@ -200,6 +202,8 @@ impl Default for UsartConfig {
 ///
 /// Deliberately has no frame-format field: the 9-bit path is always
 /// "9 data bits, no parity", so there would be nothing meaningful to choose.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct UsartConfig9 {
     baud: Bps,
     oversampling: Oversampling,
