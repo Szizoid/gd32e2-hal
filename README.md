@@ -177,7 +177,12 @@ SPI1, `BYTEN` derived from the width). Buffer operations are inherent —
 `transfer_bytes` / `transfer_bytes_in_place` / `read_bytes` / `write_bytes` and
 the `_words` variants — with the `SpiBus` impls delegating to them. Errors are
 `spi::Error` (`Overrun` / `ModeFault` / `Crc` / `Framing`), `Crc` mapping to
-`ErrorKind::Other`. `release()` returns the peripheral and pins. Hardware NSS and
+`ErrorKind::Other`. `listen` / `unlisten` / `is_listening` toggle `RBNEIE`
+(`Event::Rbne`), `TBEIE` (`Event::Tbe`) and `ERRIE` (`Event::Error`, which covers
+every `STAT` error flag — they share the one enable). There is no
+`clear_interrupt`: `read_data`, `write_data` and `take_error` clear the flags.
+Interrupts are implemented but unverified. `release()` returns the peripheral and
+pins. Hardware NSS and
 CRC are deliberately not implemented. SPI1 exists on x8 parts only, and below 48
 pins its sole bonded pins are `PB1` plus `PA13`/`PA14` — the SWD pair. Hence
 `examples/spi1-word.rs` is `required-features = ["gd32e230c8xx"]`.
@@ -284,12 +289,23 @@ racing software against the last byte. `embedded_hal::i2c::I2c` sits on top;
 its `transaction` merges adjacent operations of one direction and panics if a
 `Read` is not last. Errors are `i2c::Error`, one variant per `STAT0` flag, with
 `NoAcknowledge` carrying the source. A too-slow `pclk1` or an unreachable
-frequency panics in the constructor. 10-bit addressing, SMBus, slave mode and
-DMA are not implemented. `examples/i2c.rs` scans the bus and reads 1, 2, 3 and 4
+frequency panics in the constructor. `listen` / `unlisten` / `is_listening` take
+`Event::Protocol(Buffered)` (`EVIE`, plus `BUFIE` for `TBE`/`RBNE`) or
+`Event::Error` (`ERRIE`); `BUFIE` sits inside the variant because in hardware it
+does nothing without `EVIE`. `take_error` is the acknowledge for `Event::Error`.
+`start_write` / `start_read` take the peripheral and a `'static` buffer and
+return a `WriteTransfer` / `ReadTransfer`, whose `on_interrupt` — called from
+both vectors of that peripheral — advances the state machine; `is_done` reports
+completion and `release` gives back the peripheral, the buffer and the outcome.
+The outcome sits beside the pair rather than wrapping it: a failed transfer still
+returns the peripheral. `Drop` releases the bus with a STOP. There is no
+interrupt-driven `write_read`. 10-bit addressing, SMBus, slave mode and DMA are
+not implemented. `examples/i2c.rs` scans the bus and reads 1, 2, 3 and 4
 bytes from the first device that answers, sending nothing but a register index;
 `examples/i2c-registers.rs` writes two bytes and reads them back. Both were run
-at 50 kHz against an RP2040 in I²C target mode. Fast and fast plus are
-implemented but unverified.
+at 50 kHz against an RP2040 in I²C target mode; `examples/i2c-interrupt.rs` runs
+the same bench through the transfers. Fast and fast plus are implemented but
+unverified, as are the interrupts and the transfers.
 
 **CRC** (`src/crc.rs`) — hardware CRC, verified on hardware. `Crc<PS>` is generic
 over the polynomial width (`B32`/`B16`/`B8`/`B7`), fixed by which constructor
@@ -426,8 +442,8 @@ cargo build --release --no-default-features --features gd32e230x4
 
 **Finishing what is there**
 
-- [ ] Interrupts for SPI, I²C and DMA — TIMER, USART, ADC and WWDGT have theirs;
-      the `Event` / `listen` shape is settled, so this is mostly mechanical.
+- [ ] Interrupts for DMA — every other peripheral has theirs; the
+      `Event` / `listen` shape is settled, so this is mostly mechanical.
 - [ ] DMA: circular mode, `M2M`, and `embedded-dma` for the buffers.
 - [ ] ADC: scan mode across several channels, which needs DMA to keep the
       intermediate results.
@@ -637,7 +653,11 @@ Mode 0 / MSB-first). Ширина слова — typestate: `transfer_word` и `
 `transfer_bytes` / `transfer_bytes_in_place` / `read_bytes` / `write_bytes` и те
 же в `_words`-варианте, — impl'ы `SpiBus` делегируют к ним. Ошибки —
 `spi::Error` (`Overrun` / `ModeFault` / `Crc` / `Framing`), `Crc` ложится на
-`ErrorKind::Other`. `release()` возвращает периферию и пины. Аппаратный NSS и CRC
+`ErrorKind::Other`. `listen` / `unlisten` / `is_listening` переключают `RBNEIE`
+(`Event::Rbne`), `TBEIE` (`Event::Tbe`) и `ERRIE` (`Event::Error` — покрывает все
+флаги ошибок `STAT`, у них одно разрешение на всех). `clear_interrupt` нет: флаги
+гасят `read_data`, `write_data` и `take_error`. Прерывания реализованы, но не
+проверены. `release()` возвращает периферию и пины. Аппаратный NSS и CRC
 сознательно не реализованы. SPI1 есть только на x8, и ниже 48 выводов из его ног
 разварены лишь `PB1` плюс `PA13`/`PA14` — пара SWD. Поэтому у
 `examples/spi1-word.rs` стоит `required-features = ["gd32e230c8xx"]`.
@@ -745,11 +765,21 @@ typestate периферии. Общий супертрейт `DmaPeriph<N>` з�
 операции одного направления и паникует, если `Read` не последняя. Ошибки —
 `i2c::Error`, по варианту на каждый флаг `STAT0`, `NoAcknowledge` несёт источник.
 Слишком медленный `pclk1` или недостижимая частота — паника в конструкторе.
-10-битная адресация, SMBus, slave и DMA не реализованы. `examples/i2c.rs`
+`listen` / `unlisten` / `is_listening` принимают `Event::Protocol(Buffered)`
+(`EVIE`, плюс `BUFIE` для `TBE`/`RBNE`) или `Event::Error` (`ERRIE`); `BUFIE`
+лежит внутри варианта, потому что в железе он ничего не делает без `EVIE`.
+`take_error` — подтверждение для `Event::Error`. `start_write` / `start_read`
+забирают периферию и `'static`-буфер и отдают `WriteTransfer` / `ReadTransfer`;
+их `on_interrupt`, вызываемый из обоих векторов этой периферии, двигает автомат,
+`is_done` сообщает о завершении, `release` возвращает периферию, буфер и исход.
+Исход идёт рядом с парой, а не оборачивает её: провалившаяся передача обязана
+вернуть периферию. `Drop` отпускает шину STOP'ом. `write_read` по прерываниям
+нет. 10-битная адресация, SMBus, slave и DMA не реализованы. `examples/i2c.rs`
 сканирует шину и читает у первого ответившего 1, 2, 3 и 4 байта, отправляя
 только индекс регистра; `examples/i2c-registers.rs` пишет два байта и читает их
-обратно. Оба прогнаны на 50 кГц против RP2040 в режиме I²C target. Fast и fast
-plus реализованы, но не проверены.
+обратно. Оба прогнаны на 50 кГц против RP2040 в режиме I²C target;
+`examples/i2c-interrupt.rs` гоняет тот же стенд через передачи. Fast и fast plus
+реализованы, но не проверены, как и прерывания с передачами.
 
 **CRC** (`src/crc.rs`) — аппаратный CRC, проверен на железе. `Crc<PS>` — дженерик
 по ширине полинома (`B32`/`B16`/`B8`/`B7`), фиксируется тем, какой конструктор
@@ -885,8 +915,8 @@ cargo build --release --no-default-features --features gd32e230x4
 
 **Доводка того, что есть**
 
-- [ ] Прерывания у SPI, I²C и DMA — у TIMER, USART, ADC и WWDGT они уже есть;
-      форма `Event` / `listen` устоялась, так что это почти механика.
+- [ ] Прерывания у DMA — у остальных периферий они уже есть; форма
+      `Event` / `listen` устоялась, так что это почти механика.
 - [ ] DMA: циклический режим, `M2M` и `embedded-dma` для буферов.
 - [ ] ADC: scan по нескольким каналам — нужен DMA, иначе промежуточные
       результаты теряются.
