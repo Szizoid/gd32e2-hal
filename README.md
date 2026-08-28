@@ -136,9 +136,9 @@ any flag. None needs a separate clear — `Rbne` clears on `read_byte`, `Tbe` on
 handler listening for it must `unlisten` once nothing is left to send. `Error`
 covers framing, noise and overrun, and in hardware its enable is ANDed with the
 DMA request line: without DMA reception it never fires. Overrun additionally
-arrives through `RBNEIE`. Unmasking the line in the NVIC is the caller's. The two
-error events have not been on hardware — a loopback cannot raise either, the one
-peripheral generating the parity it then checks.
+arrives through `RBNEIE`. Unmasking the line in the NVIC is the caller's.
+`ParityError` is verified on hardware by `examples/usart-parity-error.rs` — two
+USARTs crossed over a `PA9`-`PA3` jumper. `Error` is unverified.
 Raw 9-bit words via `new_word` / `write_word` /
 `write_words` / `read_word` / `read_words` on the `Word` typestate
 (`UsartConfig9`). RX errors are `usart::Error` (`Overrun` / `Noise` / `Framing` /
@@ -632,9 +632,9 @@ open-drain; `embedded-hal` 1.0 `OutputPin` / `InputPin` / `StatefulOutputPin`
 звать `unlisten`, когда слать больше нечего. `Error` покрывает framing, noise и
 overrun, и в железе его разрешение объединено по И с линией запроса DMA: без
 DMA-приёма он не сработает. Overrun приходит ещё и через `RBNEIE`.
-Размаскирование линии в NVIC — за вызывающим. Оба события ошибок на железе не
-проверялись: петля их не поднимает — чётность ставит и проверяет одна и та же
-периферия.
+Размаскирование линии в NVIC — за вызывающим. `ParityError` проверен на железе
+примером `examples/usart-parity-error.rs` — два USART крест-накрест по перемычке
+`PA9`-`PA3`. `Error` не проверен.
 Сырой 9-битный режим — `new_word` / `write_word` / `write_words` / `read_word` /
 `read_words` на typestate `Word` (`UsartConfig9`). Ошибки приёма — `usart::Error`
 (`Overrun` / `Noise` / `Framing` / `Parity`), забираются и сбрасываются
