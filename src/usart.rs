@@ -412,8 +412,11 @@ where
     fn tbe(&self) -> bool {
         self.usart.stat().read().tbe().bit_is_set()
     }
+    fn tc(&self) -> bool {
+        self.usart.stat().read().tc().bit_is_set()
+    }
     fn wait_tc(&self) {
-        while self.usart.stat().read().tc().bit_is_clear() {}
+        while !self.tc() {}
     }
 
     /// Returns whether a received word is waiting to be read.
@@ -428,6 +431,13 @@ where
     /// Only guarantees that the *next* single write will not block.
     pub fn write_ready(&self) -> bool {
         self.tbe()
+    }
+    /// Returns whether everything handed to the peripheral has left the wire.
+    ///
+    /// `TC`, the flag [`flush`](Usart::flush) waits for, so this is the same
+    /// question asked without blocking.
+    pub fn flush_ready(&self) -> bool {
+        self.tc()
     }
     /// Blocks until everything handed to the peripheral has left the wire.
     ///
@@ -720,10 +730,10 @@ where
         }
     }
     fn flush(&mut self) -> nb::Result<(), Self::Error> {
-        if self.usart.stat().read().tc().bit_is_clear() {
-            Err(nb::Error::WouldBlock)
-        } else {
+        if self.tc() {
             Ok(())
+        } else {
+            Err(nb::Error::WouldBlock)
         }
     }
 }

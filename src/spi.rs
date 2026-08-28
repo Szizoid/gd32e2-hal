@@ -28,6 +28,20 @@ use crate::rcu::{Enable, Rcu, Reset};
 const DZ_8BIT: u8 = 0b0111;
 const DZ_16BIT: u8 = 0b1111;
 
+/// Named idle levels for the side of an exchange that carries no data.
+///
+/// Every transfer is simultaneous, so reading `n` words means sending `n` of
+/// them. Which value drives the wire is the target's business, not the bus's:
+/// most accept anything, SD cards want MOSI high. Purely a readability aid —
+/// any value is legal.
+#[allow(missing_docs)]
+pub mod fill {
+    pub const LOW: u8 = 0x00;
+    pub const HIGH: u8 = 0xFF;
+    pub const LOW_WORD: u16 = 0x0000;
+    pub const HIGH_WORD: u16 = 0xFFFF;
+}
+
 /// SCK prescaler: divides `pclk` down to the serial clock.
 ///
 /// Discriminants are the `PSC` register encoding. There is no universal default
@@ -489,6 +503,30 @@ impl<SPIX, SCK, MISO, MOSI, WORD> Spi<SPIX, SCK, MISO, MOSI, WORD>
 where
     SPIX: Instance,
 {
+    /// Returns whether a received word is waiting in `DATA` (`RBNE`).
+    ///
+    /// Only guarantees that the next single read will not block.
+    pub fn read_ready(&self) -> bool {
+        self.spi.rbne()
+    }
+    /// Returns whether `DATA` can accept the next word (`TBE`).
+    ///
+    /// True at idle, the bus having nothing queued; it says nothing about a word
+    /// still on its way back.
+    pub fn write_ready(&self) -> bool {
+        self.spi.tbe()
+    }
+    /// Returns the pending error, if any, and clears it.
+    ///
+    /// The acknowledge for [`Event::Error`]: those flags are what hold the
+    /// interrupt request up, so a handler that skips this re-enters forever.
+    /// One error per call — with two pending, the second survives for the next.
+    /// Overrun also needs `DATA` drained, which the read a handler makes to do
+    /// its work already does.
+    pub fn take_error(&mut self) -> Option<Error> {
+        self.spi.take_error()
+    }
+
     /// Raises an interrupt on `event`, which still has to be unmasked in the
     /// NVIC.
     ///
@@ -532,34 +570,53 @@ impl<SPIX, SCK, MISO, MOSI> Spi<SPIX, SCK, MISO, MOSI, Byte>
 where
     SPIX: Instance,
 {
+    /// Hands one byte to `DATA` and returns at once, the clock now running.
+    ///
+    /// Half an exchange: the answer arrives eight clocks later, on
+    /// [`Event::Rbne`]. Check [`write_ready`](Spi::write_ready) first — writing
+    /// over a full transmit buffer loses the byte.
+    pub fn write_byte(&mut self, byte: u8) {
+        self.spi.write_data(byte as u16);
+    }
+    /// Takes the byte that arrived on MISO, clearing `RBNE`.
+    ///
+    /// The other half: meaningful only once [`read_ready`](Spi::read_ready)
+    /// holds, and it reports no error — [`take_error`](Spi::take_error) drains
+    /// those.
+    pub fn read_byte(&mut self) -> u8 {
+        self.spi.read_data() as u8
+    }
+
     /// Exchanges one byte: sends `byte` on MOSI and returns what arrived on MISO.
     ///
     /// Blocks until the exchange has completed, so nothing is left pending on the
     /// bus when it returns.
     pub fn transfer_byte(&mut self, byte: u8) -> Result<u8, Error> {
-        while !self.spi.tbe() {}
-        self.spi.write_data(byte as u16);
-        while !self.spi.rbne() {}
-        let received = self.spi.read_data() as u8;
-        match self.spi.take_error() {
+        while !self.write_ready() {}
+        self.write_byte(byte);
+        while !self.read_ready() {}
+        let received = self.read_byte();
+        match self.take_error() {
             Some(e) => Err(e),
             None => Ok(received),
         }
     }
 
-    /// Exchanges two buffers of independent length.
+    /// Exchanges two buffers: byte `i` of `write` goes out and what comes back
+    /// lands at byte `i` of `read`.
     ///
-    /// The bus clocks `max(read.len(), write.len())` bytes either way: once
-    /// `write` runs out `0x00` is sent, and once `read` is full the incoming
-    /// bytes are discarded.
+    /// # Panics
+    ///
+    /// If the lengths differ. The bus trades a word for a word, so a longer
+    /// `read` would have nothing to clock out; what fills the wire is the
+    /// target's business, and [`fill`] names the usual levels.
     pub fn transfer_bytes(&mut self, read: &mut [u8], write: &[u8]) -> Result<(), Error> {
-        let n = read.len().max(write.len());
-        for i in 0..n {
-            let sent = write.get(i).copied().unwrap_or(0x00);
-            let received = self.transfer_byte(sent)?;
-            if let Some(slot) = read.get_mut(i) {
-                *slot = received;
-            }
+        assert!(
+            read.len() == write.len(),
+            "SPI transfer buffers must be the same length"
+        );
+        for (slot, &byte) in read.iter_mut().zip(write) {
+            *slot = self.transfer_byte(byte)?;
         }
         Ok(())
     }
@@ -570,54 +627,59 @@ where
         }
         Ok(())
     }
-    /// Clocks `words.len()` bytes in, sending `0x00` to drive the bus.
-    pub fn read_bytes(&mut self, words: &mut [u8]) -> Result<(), Error> {
-        for slot in words {
-            *slot = self.transfer_byte(0x00)?;
-        }
-        Ok(())
-    }
-    /// Clocks `words` out, discarding whatever arrives on MISO.
-    pub fn write_bytes(&mut self, words: &[u8]) -> Result<(), Error> {
-        for &b in words {
-            self.transfer_byte(b)?;
-        }
-        Ok(())
-    }
 }
 
 impl<SPIX, SCK, MISO, MOSI> Spi<SPIX, SCK, MISO, MOSI, Word>
 where
     SPIX: Instance,
 {
+    /// Hands one 16-bit word to `DATA` and returns at once, the clock now running.
+    ///
+    /// Half an exchange: the answer arrives sixteen clocks later, on
+    /// [`Event::Rbne`]. Check [`write_ready`](Spi::write_ready) first — writing
+    /// over a full transmit buffer loses the word.
+    pub fn write_word(&mut self, word: u16) {
+        self.spi.write_data(word);
+    }
+    /// Takes the word that arrived on MISO, clearing `RBNE`.
+    ///
+    /// The other half: meaningful only once [`read_ready`](Spi::read_ready)
+    /// holds, and it reports no error — [`take_error`](Spi::take_error) drains
+    /// those.
+    pub fn read_word(&mut self) -> u16 {
+        self.spi.read_data()
+    }
+
     /// Exchanges one 16-bit word: sends `word` on MOSI, returns what arrived on MISO.
     ///
     /// Blocks until the exchange has completed, so nothing is left pending on the
     /// bus when it returns.
     pub fn transfer_word(&mut self, word: u16) -> Result<u16, Error> {
-        while !self.spi.tbe() {}
-        self.spi.write_data(word);
-        while !self.spi.rbne() {}
-        let received = self.spi.read_data();
-        match self.spi.take_error() {
+        while !self.write_ready() {}
+        self.write_word(word);
+        while !self.read_ready() {}
+        let received = self.read_word();
+        match self.take_error() {
             Some(e) => Err(e),
             None => Ok(received),
         }
     }
 
-    /// Exchanges two buffers of independent length.
+    /// Exchanges two buffers: word `i` of `write` goes out and what comes back
+    /// lands at word `i` of `read`.
     ///
-    /// The bus clocks `max(read.len(), write.len())` words either way: once
-    /// `write` runs out `0x0000` is sent, and once `read` is full the incoming
-    /// words are discarded.
+    /// # Panics
+    ///
+    /// If the lengths differ. The bus trades a word for a word, so a longer
+    /// `read` would have nothing to clock out; what fills the wire is the
+    /// target's business, and [`fill`] names the usual levels.
     pub fn transfer_words(&mut self, read: &mut [u16], write: &[u16]) -> Result<(), Error> {
-        let n = read.len().max(write.len());
-        for i in 0..n {
-            let sent = write.get(i).copied().unwrap_or(0x0000);
-            let received = self.transfer_word(sent)?;
-            if let Some(slot) = read.get_mut(i) {
-                *slot = received;
-            }
+        assert!(
+            read.len() == write.len(),
+            "SPI transfer buffers must be the same length"
+        );
+        for (slot, &word) in read.iter_mut().zip(write) {
+            *slot = self.transfer_word(word)?;
         }
         Ok(())
     }
@@ -625,20 +687,6 @@ where
     pub fn transfer_words_in_place(&mut self, words: &mut [u16]) -> Result<(), Error> {
         for word in words {
             *word = self.transfer_word(*word)?;
-        }
-        Ok(())
-    }
-    /// Clocks `words.len()` words in, sending `0x0000` to drive the bus.
-    pub fn read_words(&mut self, words: &mut [u16]) -> Result<(), Error> {
-        for slot in words {
-            *slot = self.transfer_word(0x0000)?;
-        }
-        Ok(())
-    }
-    /// Clocks `words` out, discarding whatever arrives on MISO.
-    pub fn write_words(&mut self, words: &[u16]) -> Result<(), Error> {
-        for &w in words {
-            self.transfer_word(w)?;
         }
         Ok(())
     }
@@ -667,10 +715,16 @@ where
         Ok(())
     }
     fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
-        self.read_bytes(words)
+        for slot in words {
+            *slot = self.transfer_byte(fill::LOW)?;
+        }
+        Ok(())
     }
     fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
-        self.write_bytes(words)
+        for &byte in words {
+            self.transfer_byte(byte)?;
+        }
+        Ok(())
     }
 }
 
@@ -690,9 +744,15 @@ where
         Ok(())
     }
     fn read(&mut self, words: &mut [u16]) -> Result<(), Self::Error> {
-        self.read_words(words)
+        for slot in words {
+            *slot = self.transfer_word(fill::LOW_WORD)?;
+        }
+        Ok(())
     }
     fn write(&mut self, words: &[u16]) -> Result<(), Self::Error> {
-        self.write_words(words)
+        for &word in words {
+            self.transfer_word(word)?;
+        }
+        Ok(())
     }
 }

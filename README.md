@@ -121,7 +121,8 @@ or the standard rates named in `usart::baud`),
 width: `write_byte` / `write_bytes` / `read_byte` / `read_bytes`, plus `flush`
 (waits for `TC`, not `TBE`); transmission has no error conditions and returns no
 `Result`. `read_bytes` blocks for the first byte, then takes what is already
-waiting. `read_ready` / `write_ready` poll `RBNE` / `TBE`. Trait layers on the
+waiting. `read_ready` / `write_ready` / `flush_ready` poll `RBNE` / `TBE` / `TC`.
+Trait layers on the
 same width: `embedded-hal-nb` `Read<u8>` / `Write<u8>` and `embedded-io`
 `Read` / `Write` / `ReadReady` / `WriteReady`, the latter supplying
 `read_exact` / `write_all` / `write_fmt` as defaults. `flush`, `read_ready` and
@@ -174,14 +175,23 @@ not a signature. An `Instance` trait abstracts the peripheral at the operation
 level, so one generic `Spi<>` serves both despite their distinct `RegisterBlock`
 types and bit-level divergence (`FF16` in `CTL0` on SPI0 vs `DZ` in `CTL1` on
 SPI1, `BYTEN` derived from the width). Buffer operations are inherent —
-`transfer_bytes` / `transfer_bytes_in_place` / `read_bytes` / `write_bytes` and
-the `_words` variants — with the `SpiBus` impls delegating to them. Errors are
+`transfer_bytes` / `transfer_bytes_in_place` and the `_words` variants.
+`transfer_bytes` takes buffers of equal length and panics otherwise: the bus
+trades a word for a word, so what drives the wire is the caller's to choose, and
+`spi::fill` names the usual levels (`LOW` / `HIGH`, `_WORD` for 16 bits).
+`SpiBus::read` sends `fill::LOW`, `SpiBus::write` discards what arrives.
+`write_byte` and `read_byte` (`_word` on `Word`) are the two halves of an
+exchange: neither waits for the other side, so a handler moves one word per
+entry. State is read through `read_ready` (`RBNE`), `write_ready` (`TBE`) and
+`take_error`. Errors are
 `spi::Error` (`Overrun` / `ModeFault` / `Crc` / `Framing`), `Crc` mapping to
 `ErrorKind::Other`. `listen` / `unlisten` / `is_listening` toggle `RBNEIE`
 (`Event::Rbne`), `TBEIE` (`Event::Tbe`) and `ERRIE` (`Event::Error`, which covers
 every `STAT` error flag — they share the one enable). There is no
-`clear_interrupt`: `read_data`, `write_data` and `take_error` clear the flags.
-Interrupts are implemented but unverified. `release()` returns the peripheral and
+`clear_interrupt`: `read_byte`, `write_byte` and `take_error` clear the flags.
+Interrupts are verified on hardware (`examples/spi0-interrupt.rs`, a `PB5`-`PB4`
+loopback): `Tbe` starts the run, `Rbne` paces it — one byte in flight, the
+receive buffer being one word deep. `release()` returns the peripheral and
 pins. Hardware NSS and
 CRC are deliberately not implemented. SPI1 exists on x8 parts only, and below 48
 pins its sole bonded pins are `PB1` plus `PA13`/`PA14` — the SWD pair. Hence
@@ -598,7 +608,8 @@ open-drain; `embedded-hal` 1.0 `OutputPin` / `InputPin` / `StatefulOutputPin`
 ширине `Byte`: `write_byte` / `write_bytes` / `read_byte` / `read_bytes` плюс
 `flush` (ждёт `TC`, а не `TBE`); у передачи нет условий ошибки, `Result` она не
 возвращает. `read_bytes` блокируется до первого байта, дальше забирает только уже
-пришедшее. `read_ready` / `write_ready` опрашивают `RBNE` / `TBE`. Трейтовые слои
+пришедшее. `read_ready` / `write_ready` / `flush_ready` опрашивают `RBNE` / `TBE`
+/ `TC`. Трейтовые слои
 на той же ширине: `embedded-hal-nb` `Read<u8>` / `Write<u8>` и `embedded-io`
 `Read` / `Write` / `ReadReady` / `WriteReady`; второй даёт `read_exact` /
 `write_all` / `write_fmt` дефолтами. `flush`, `read_ready` и `write_ready` есть в
@@ -650,14 +661,21 @@ Mode 0 / MSB-first). Ширина слова — typestate: `transfer_word` и `
 поэтому один generic `Spi<>` обслуживает оба инстанса, несмотря на разные типы
 `RegisterBlock` и расхождение на уровне битов (`FF16` в `CTL0` у SPI0 против `DZ`
 в `CTL1` у SPI1, `BYTEN` выводится из ширины). Буферные операции инхерентные —
-`transfer_bytes` / `transfer_bytes_in_place` / `read_bytes` / `write_bytes` и те
-же в `_words`-варианте, — impl'ы `SpiBus` делегируют к ним. Ошибки —
+`transfer_bytes` / `transfer_bytes_in_place` и те же в `_words`-варианте.
+`transfer_bytes` требует буферы равной длины и паникует иначе: шина меняет слово
+на слово, поэтому чем гнать провод — выбор вызывающего, а `spi::fill` называет
+обычные уровни (`LOW` / `HIGH`, `_WORD` для 16 бит). `SpiBus::read` шлёт
+`fill::LOW`, `SpiBus::write` выбрасывает принятое. `write_byte` и `read_byte` (`_word` на `Word`) — половинки обмена: встречной
+стороны не ждут, поэтому обработчик двигает одно слово за вход. Состояние
+читают `read_ready` (`RBNE`), `write_ready` (`TBE`) и `take_error`. Ошибки —
 `spi::Error` (`Overrun` / `ModeFault` / `Crc` / `Framing`), `Crc` ложится на
 `ErrorKind::Other`. `listen` / `unlisten` / `is_listening` переключают `RBNEIE`
 (`Event::Rbne`), `TBEIE` (`Event::Tbe`) и `ERRIE` (`Event::Error` — покрывает все
 флаги ошибок `STAT`, у них одно разрешение на всех). `clear_interrupt` нет: флаги
-гасят `read_data`, `write_data` и `take_error`. Прерывания реализованы, но не
-проверены. `release()` возвращает периферию и пины. Аппаратный NSS и CRC
+гасят `read_byte`, `write_byte` и `take_error`. Прерывания проверены на железе
+(`examples/spi0-interrupt.rs`, петля `PB5`-`PB4`): `Tbe` запускает обмен, `Rbne`
+его пасует — в полёте один байт, приёмный буфер глубиной в слово.
+`release()` возвращает периферию и пины. Аппаратный NSS и CRC
 сознательно не реализованы. SPI1 есть только на x8, и ниже 48 выводов из его ног
 разварены лишь `PB1` плюс `PA13`/`PA14` — пара SWD. Поэтому у
 `examples/spi1-word.rs` стоит `required-features = ["gd32e230c8xx"]`.
