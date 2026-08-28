@@ -14,9 +14,8 @@
 //! `PERR` fires on all of them and no data is delivered. Phase two rebuilds the
 //! receiver on `E8`, and the same bytes arrive clean.
 //!
-//! Each phase pauses before sending: a receiver enabled microseconds earlier
-//! mangles the first frame, and with the bytes going out back to back the
-//! desync then runs through the whole burst.
+//! Each phase pauses before sending, the receiver having just been enabled; see
+//! the comment on it.
 //!
 //! `Event::Error` (framing, noise, overrun) is not covered: its enable is ANDed
 //! with the DMA request line in hardware, so it needs a DMA receive to reach the
@@ -57,7 +56,7 @@ static RECEIVER: Mutex<RefCell<Option<Shared>>> = Mutex::new(RefCell::new(None))
 
 const BAUD: Bps = baud::B9600;
 /// Two frame times at 9600 baud on a 48 MHz core.
-const SETTLE_CYCLES: u32 = 100_000;
+const IDLE_CYCLES: u32 = 100_000;
 const MESSAGE: [u8; 8] = *b"ParityOK";
 const LENGTH: usize = MESSAGE.len();
 
@@ -151,9 +150,11 @@ fn run_phase(mut receiver: Receiver, sender: &mut Sender) -> (Receiver, usize, u
             .replace(Some((receiver, [0; LENGTH], 0, 0)))
     });
 
-    // A receiver enabled moments ago has not seen the line idle yet; give it a
-    // couple of frame times before the first start bit arrives.
-    cortex_m::asm::delay(SETTLE_CYCLES);
+    // The receiver was enabled moments ago and needs the line idle before the
+    // first start bit. The first phase gets that for free — a sender raising
+    // `TEN` sends an idle frame — but the second one reuses a sender that is
+    // already up, so the idle has to come from here.
+    cortex_m::asm::delay(IDLE_CYCLES);
 
     sender.write_bytes(&MESSAGE);
     // Full path: with a `&mut` in hand the trait `flush` would win, and this one

@@ -15,6 +15,13 @@
 //! Which pins are valid depends on the chip variant — on the x8 part `PA2`/`PA3`
 //! reach USART1, not USART0 — but that is settled at compile time by the pin
 //! bounds, so a wrong pin simply fails to build.
+//!
+//! A receiver just built takes the first frame apart wrongly unless the line has
+//! been idle for a frame beforehand, and with frames arriving back to back the
+//! damage carries through the whole burst. Against a peer that comes up at the
+//! same time this never shows: raising `TEN` sends an idle frame. It bites when
+//! the peer is already transmitting — then the line has to be given that idle,
+//! by waiting a frame time before the traffic starts.
 
 use core::marker::PhantomData;
 use core::ops::Deref;
@@ -257,15 +264,25 @@ fn configure<USARTX>(
         }
     });
 
-    // UEN is left off here: WL/parity must be written while the USART is
-    // disabled, so the callers set those and enable UEN last.
-    usart.ctl0().modify(|_, w| {
-        let w = w.ten().enabled().ren().enabled();
-        match oversampling {
-            Oversampling::X16 => w.ovsmod().oversampling16(),
-            Oversampling::X8 => w.ovsmod().oversampling8(),
-        }
+    // UEN, TEN and REN are all left off here: WL and parity must be written
+    // while the USART is disabled, and the manual brings the three up in their
+    // own order afterwards (UEN, then the transmitter and receiver).
+    usart.ctl0().modify(|_, w| match oversampling {
+        Oversampling::X16 => w.ovsmod().oversampling16(),
+        Oversampling::X8 => w.ovsmod().oversampling8(),
     });
+}
+
+/// Brings the peripheral up, in the order the manual prescribes: `UEN` first,
+/// the transmitter and receiver after it.
+fn enable<USARTX>(usart: &USARTX)
+where
+    USARTX: Deref<Target = pac::usart0::RegisterBlock>,
+{
+    usart.ctl0().modify(|_, w| w.uen().enabled());
+    usart
+        .ctl0()
+        .modify(|_, w| w.ten().enabled().ren().enabled());
 }
 
 /// Word-width marker: 8-bit words ([`Usart::write_byte`], [`Usart::read_byte`]),
@@ -592,7 +609,7 @@ where
             FrameFormat::E7 => w.pcen().enabled().pm().even().wl().bit8(),
             FrameFormat::O7 => w.pcen().enabled().pm().odd().wl().bit8(),
         });
-        usart.ctl0().modify(|_, w| w.uen().enabled());
+        enable(&usart);
         Self {
             usart,
             tx_pin,
@@ -672,7 +689,7 @@ where
     ) -> Self {
         configure(rcu, &usart, &clocks, config.baud, config.oversampling);
         usart.ctl0().modify(|_, w| w.pcen().disabled().wl().bit9());
-        usart.ctl0().modify(|_, w| w.uen().enabled());
+        enable(&usart);
         Self {
             usart,
             tx_pin,
