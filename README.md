@@ -300,9 +300,17 @@ its `transaction` merges adjacent operations of one direction and panics if a
 `Read` is not last. Errors are `i2c::Error`, one variant per `STAT0` flag, with
 `NoAcknowledge` carrying the source. A too-slow `pclk1` or an unreachable
 frequency panics in the constructor. `listen` / `unlisten` / `is_listening` take
-`Event::Protocol(Buffered)` (`EVIE`, plus `BUFIE` for `TBE`/`RBNE`) or
-`Event::Error` (`ERRIE`); `BUFIE` sits inside the variant because in hardware it
-does nothing without `EVIE`. `take_error` is the acknowledge for `Event::Error`.
+`Event::Protocol` (`EVIE`), `Event::Byte` (`BUFIE`, and `EVIE` with it, which in
+hardware it needs) or `Event::Error` (`ERRIE`). `unlisten(Event::Byte)` keeps the
+phase events and drops `TBE`/`RBNE`, which is how a handler ends a write;
+`unlisten(Event::Protocol)` takes both down. `take_error` is the acknowledge for
+`Event::Error`.
+The phase flags (`sbsend` / `addsend` / `tbe` / `btc` / `rbne` / `is_busy`,
+plus blocking `wait_idle`) and the single steps a transaction is made of
+(`write_start` / `write_addr` / `write_byte` / `read_byte` / `write_stop` /
+`clear_addsend` / `set_acken` / `set_poap`) are public, so a handler can be
+written by hand; the module docs carry the order of the phases and the
+acknowledge rules, which the four read lengths differ in.
 `start_write` / `start_read` take the peripheral and a `'static` buffer and
 return a `WriteTransfer` / `ReadTransfer`, whose `on_interrupt` — called from
 both vectors of that peripheral — advances the state machine; `is_done` reports
@@ -783,10 +791,17 @@ typestate периферии. Общий супертрейт `DmaPeriph<N>` з�
 операции одного направления и паникует, если `Read` не последняя. Ошибки —
 `i2c::Error`, по варианту на каждый флаг `STAT0`, `NoAcknowledge` несёт источник.
 Слишком медленный `pclk1` или недостижимая частота — паника в конструкторе.
-`listen` / `unlisten` / `is_listening` принимают `Event::Protocol(Buffered)`
-(`EVIE`, плюс `BUFIE` для `TBE`/`RBNE`) или `Event::Error` (`ERRIE`); `BUFIE`
-лежит внутри варианта, потому что в железе он ничего не делает без `EVIE`.
-`take_error` — подтверждение для `Event::Error`. `start_write` / `start_read`
+`listen` / `unlisten` / `is_listening` принимают `Event::Protocol` (`EVIE`),
+`Event::Byte` (`BUFIE`, вместе с ним и `EVIE`, без которого он в железе не
+работает) или `Event::Error` (`ERRIE`). `unlisten(Event::Byte)` оставляет
+фазовые события и снимает `TBE`/`RBNE` — так обработчик заканчивает запись;
+`unlisten(Event::Protocol)` гасит оба. `take_error` — подтверждение для
+`Event::Error`. Флаги фаз (`sbsend` / `addsend`
+/ `tbe` / `btc` / `rbne` / `is_busy` плюс блокирующий `wait_idle`) и одиночные
+шаги транзакции (`write_start` / `write_addr` / `write_byte` / `read_byte` /
+`write_stop` / `clear_addsend` / `set_acken` / `set_poap`) публичны — обработчик
+можно написать руками; порядок фаз и правила подтверждения, которыми различаются
+четыре длины чтения, описаны в доке модуля. `start_write` / `start_read`
 забирают периферию и `'static`-буфер и отдают `WriteTransfer` / `ReadTransfer`;
 их `on_interrupt`, вызываемый из обоих векторов этой периферии, двигает автомат,
 `is_done` сообщает о завершении, `release` возвращает периферию, буфер и исход.

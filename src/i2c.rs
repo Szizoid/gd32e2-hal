@@ -10,6 +10,30 @@
 //! let mut i2c = I2c::new(&mut rcu, dp.i2c0, sda, scl, &clocks,
 //!                        I2cMode::standard(100.kHz()));
 //! ```
+//!
+//! # Driving a transaction by hand
+//!
+//! [`WriteTransfer`] and [`ReadTransfer`] are one way to do it; the primitives
+//! they are built from are public, so a handler can be written instead. A
+//! transaction is a sequence of phases, and the step a handler takes depends on
+//! which one it is in — unlike a USART, where every step is the same.
+//!
+//! Writing: [`write_start`](I2c::write_start), then on
+//! [`sbsend`](I2c::sbsend) [`write_addr`](I2c::write_addr), then on
+//! [`addsend`](I2c::addsend) [`clear_addsend`](I2c::clear_addsend), then one
+//! [`write_byte`](I2c::write_byte) per [`tbe`](I2c::tbe). `TBE` stays up with
+//! nothing left to feed, so `unlisten(Event::Byte)` after the last one and end
+//! on [`btc`](I2c::btc) with [`write_stop`](I2c::write_stop).
+//!
+//! Reading is the same up to `ADDSEND`, and then turns on the acknowledge:
+//! [`set_acken`](I2c::set_acken) governs the byte *already* being clocked in, so
+//! the NAK that ends the transaction has to be placed one byte early, and
+//! [`set_poap`](I2c::set_poap) moves it one further still. Both must stand
+//! before the START. Four lengths behave differently: one byte NAKs before
+//! `ADDSEND` is cleared; two ride on `POAP` and are taken together on `BTC`;
+//! three go straight to that tail; longer ones take bytes on
+//! [`rbne`](I2c::rbne) until three remain. Getting this wrong does not fail
+//! loudly — the target keeps driving the line and the bus hangs.
 
 use core::mem::ManuallyDrop;
 use core::ops::Deref;
@@ -286,28 +310,20 @@ impl embedded_hal::i2c::Error for Error {
     }
 }
 
-/// Whether [`Event::Protocol`] also covers the byte events `TBE` and `RBNE`
-/// (`BUFIE`).
-///
-/// Part of the variant rather than an event of its own: in hardware `BUFIE`
-/// does nothing unless `EVIE` is set too, so no value of [`Event`] can ask for
-/// it alone.
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-#[allow(missing_docs)]
-pub enum Buffered {
-    Enabled,
-    Disabled,
-}
-
 /// An I²C event that can raise an interrupt.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Event {
-    /// The protocol events `SBSEND`, `ADDSEND`, `ADD10SEND`, `STPDET` and `BTC`
-    /// (`EVIE`), plus `TBE`/`RBNE` if [`Buffered::Enabled`]. Each is cleared by
-    /// the step of the transaction that acts on it.
-    Protocol(Buffered),
+    /// The phase events `SBSEND`, `ADDSEND`, `ADD10SEND`, `STPDET` and `BTC`
+    /// (`EVIE`). Each is cleared by the step of the transaction that acts on it.
+    Protocol,
+    /// The byte events `TBE` and `RBNE` (`BUFIE`), on top of the phase ones.
+    ///
+    /// Listening raises `EVIE` as well, `BUFIE` doing nothing without it in
+    /// hardware. `TBE` is true whenever nothing is queued, so a handler feeding
+    /// a buffer must `unlisten` this once the last byte is out — which leaves
+    /// the phase events standing, and `BTC` then ends the transaction.
+    Byte,
     /// Any of the `STAT0` error flags, which share one enable (`ERRIE`).
     /// Cleared by [`take_error`](I2c::take_error), which a handler must call —
     /// nothing else drains them.
@@ -371,24 +387,106 @@ impl<I2CX, SDA, SCL> I2c<I2CX, SDA, SCL>
 where
     I2CX: Instance,
 {
+    /// Whether the bus is in use, by another master or by a transaction of this
+    /// one (`I2CBSY`).
+    pub fn is_busy(&self) -> bool {
+        self.i2c.stat1().read().i2cbsy().is_busy()
+    }
+    /// START has gone out and the bus is waiting for the address (`SBSEND`).
+    pub fn sbsend(&self) -> bool {
+        self.i2c.stat0().read().sbsend().bit_is_set()
+    }
+    /// The addressed device answered; the data phase opens on
+    /// [`clear_addsend`](Self::clear_addsend) (`ADDSEND`).
+    pub fn addsend(&self) -> bool {
+        self.i2c.stat0().read().addsend().bit_is_set()
+    }
+    /// `DATA` will take the next byte (`TBE`).
+    ///
+    /// True whenever nothing is queued, so a handler listening for it must stop
+    /// once it has nothing left to send.
+    pub fn tbe(&self) -> bool {
+        self.i2c.stat0().read().tbe().bit_is_set()
+    }
+    /// The byte behind the one in `DATA` has arrived whole, and the peripheral
+    /// holds SCL until software catches up (`BTC`).
+    pub fn btc(&self) -> bool {
+        self.i2c.stat0().read().btc().bit_is_set()
+    }
+    /// A received byte is waiting in `DATA` (`RBNE`).
+    pub fn rbne(&self) -> bool {
+        self.i2c.stat0().read().rbne().bit_is_set()
+    }
+    /// Blocks until the bus is free.
+    ///
+    /// Only the first START needs this: `I2CBSY` stays set while this master owns
+    /// the bus, so waiting again before a repeated START would wait forever.
+    pub fn wait_idle(&self) {
+        while self.is_busy() {}
+    }
+
+    /// Raises START, which goes out as soon as the bus is free.
+    ///
+    /// On a bus this master already holds it is a repeated START, and the
+    /// transaction continues without a STOP in between.
+    pub fn write_start(&mut self) {
+        self.i2c.ctl0().modify(|_, w| w.start().start());
+    }
+    /// Puts the address into `DATA` with `read` as its direction bit.
+    ///
+    /// Also the second half of clearing `SBSEND`, the first being the read of
+    /// `STAT0` that observed it.
+    ///
+    /// # Panics
+    ///
+    /// If `address` does not fit in seven bits.
+    pub fn write_addr(&mut self, address: u8, read: bool) {
+        assert!(address <= 0x7F, "I2C address must be 7-bit");
+        self.i2c
+            .data()
+            .write(|w| w.trb().bits(address << 1 | read as u8));
+    }
+    /// Puts one byte into `DATA`, which also clears `TBE`.
+    pub fn write_byte(&mut self, byte: u8) {
+        self.i2c.data().write(|w| w.trb().bits(byte));
+    }
+    /// Takes the received byte out of `DATA`, which also clears `RBNE`.
+    pub fn read_byte(&mut self) -> u8 {
+        self.i2c.data().read().trb().bits()
+    }
     /// Releases the bus with a STOP condition.
     ///
     /// Every path out of a transaction goes through here, failures included: a
     /// skipped STOP leaves the master holding SCL, and the bus never goes idle
     /// again.
-    fn stop(&mut self) {
+    pub fn write_stop(&mut self) {
         self.i2c.ctl0().modify(|_, w| w.stop().stop());
     }
-
-    /// Waits until no other master is using the bus.
+    /// Clears `ADDSEND`, which releases the bus into the data phase.
     ///
-    /// Only the first START needs this: `I2CBSY` stays set while this master owns
-    /// the bus, so waiting again before a repeated START would wait forever.
-    fn wait_idle(&self) {
-        while self.i2c.stat1().read().i2cbsy().is_busy() {}
+    /// Goes down on a read of `STAT0` then a read of `STAT1`, in that order;
+    /// skipping either leaves the transfer stalled.
+    pub fn clear_addsend(&mut self) {
+        self.i2c.stat0().read();
+        self.i2c.stat1().read();
     }
-    /// Sends START and the address with `read` as its direction bit, then waits
-    /// for the device to answer.
+    /// Acknowledges or refuses the byte currently on the wire (`ACKEN`).
+    ///
+    /// It governs the byte already being clocked in, so the NAK that ends a read
+    /// has to stand one byte early — before `ADDSEND` is cleared on a one-byte
+    /// read, and before the last `BTC` otherwise.
+    pub fn set_acken(&mut self, ack: bool) {
+        self.i2c.ctl0().modify(|_, w| w.acken().bit(ack));
+    }
+    /// Moves the acknowledge one byte further along (`POAP`), for the two-byte
+    /// read where both bytes must be taken after the NAK is already placed.
+    ///
+    /// Like `ACKEN` it must stand before the START that begins the read.
+    pub fn set_poap(&mut self, next: bool) {
+        self.i2c.ctl0().modify(|_, w| w.poap().bit(next));
+    }
+
+    /// Sends START and the address, then waits for the device to answer.
     ///
     /// On a bus this master already holds, the START is a repeated one — hence no
     /// [`wait_idle`](Self::wait_idle) here. Returns with `ADDSEND` still raised:
@@ -396,41 +494,29 @@ where
     /// [`clear_addsend`](Self::clear_addsend) opens the data phase. Failures
     /// release the bus, so callers can propagate with `?`.
     fn start(&mut self, address: u8, read: bool) -> Result<(), Error> {
-        self.i2c.ctl0().modify(|_, w| w.start().start());
+        self.write_start();
 
         while self.i2c.stat0().read().sbsend().is_no_start() {
             if let Some(err) = self.take_error_from(NoAcknowledgeSource::Unknown) {
-                self.stop();
+                self.write_stop();
                 return Err(err);
             }
         }
-        // Writing DATA is the second half of clearing SBSEND; the loop above
-        // did the first by reading STAT0.
-        self.i2c
-            .data()
-            .write(|w| w.trb().bits(address << 1 | read as u8));
+        self.write_addr(address, read);
 
         while self.i2c.stat0().read().addsend().is_not_match() {
             if let Some(err) = self.take_error_from(NoAcknowledgeSource::Address) {
-                self.stop();
+                self.write_stop();
                 return Err(err);
             }
         }
         Ok(())
     }
-    /// Clears `ADDSEND`, which releases the bus into the data phase.
-    ///
-    /// Goes down on a read of `STAT0` then a read of `STAT1`, in that order;
-    /// skipping either leaves the transfer stalled.
-    fn clear_addsend(&mut self) {
-        self.i2c.stat0().read();
-        self.i2c.stat1().read();
-    }
     /// Waits for a received byte to reach `DATA`, releasing the bus on error.
     fn wait_rbne(&mut self) -> Result<(), Error> {
         while self.i2c.stat0().read().rbne().is_empty() {
             if let Some(err) = self.take_error_from(NoAcknowledgeSource::Data) {
-                self.stop();
+                self.write_stop();
                 return Err(err);
             }
         }
@@ -444,46 +530,11 @@ where
     fn wait_btc(&mut self) -> Result<(), Error> {
         while self.i2c.stat0().read().btc().is_not_finished() {
             if let Some(err) = self.take_error_from(NoAcknowledgeSource::Data) {
-                self.stop();
+                self.write_stop();
                 return Err(err);
             }
         }
         Ok(())
-    }
-    /// Takes the received byte out of `DATA`, which also clears `RBNE`.
-    fn read_data(&mut self) -> u8 {
-        self.i2c.data().read().trb().bits()
-    }
-    /// Raises START, beginning a transfer as soon as the bus is free.
-    fn set_start(&mut self) {
-        self.i2c.ctl0().modify(|_, w| w.start().start());
-    }
-    /// Puts one byte into `DATA`, which also clears `TBE`.
-    fn write_data(&mut self, byte: u8) {
-        self.i2c.data().write(|w| w.trb().bits(byte));
-    }
-    /// Acknowledges or refuses the byte currently on the wire (`ACKEN`).
-    fn set_acken(&mut self, ack: bool) {
-        self.i2c.ctl0().modify(|_, w| w.acken().bit(ack));
-    }
-    /// Moves the acknowledge one byte along (`POAP`), for the two-byte read.
-    fn set_poap(&mut self, next: bool) {
-        self.i2c.ctl0().modify(|_, w| w.poap().bit(next));
-    }
-    fn sbsend(&self) -> bool {
-        self.i2c.stat0().read().sbsend().bit_is_set()
-    }
-    fn addsend(&self) -> bool {
-        self.i2c.stat0().read().addsend().bit_is_set()
-    }
-    fn tbe(&self) -> bool {
-        self.i2c.stat0().read().tbe().bit_is_set()
-    }
-    fn btc(&self) -> bool {
-        self.i2c.stat0().read().btc().bit_is_set()
-    }
-    fn rbne(&self) -> bool {
-        self.i2c.stat0().read().rbne().bit_is_set()
     }
 
     /// Returns the first pending error, if any, clearing its flag.
@@ -538,7 +589,7 @@ where
 
         self.wait_idle();
         self.write_phase(address, bytes)?;
-        self.stop();
+        self.write_stop();
         Ok(())
     }
 
@@ -562,7 +613,7 @@ where
         for byte in bytes {
             while self.i2c.stat0().read().tbe().is_not_empty() {
                 if let Some(err) = self.take_error_from(NoAcknowledgeSource::Data) {
-                    self.stop();
+                    self.write_stop();
                     return Err(err);
                 }
             }
@@ -623,11 +674,11 @@ where
                 // NAK has to stand before that.
                 self.i2c.ctl0().modify(|_, w| w.acken().nak());
                 self.clear_addsend();
-                self.stop();
+                self.write_stop();
 
                 self.wait_rbne()?;
                 if let Some(slot) = slots.next() {
-                    *slot = self.read_data();
+                    *slot = self.read_byte();
                 }
                 Ok(())
             }
@@ -648,7 +699,7 @@ where
                 for _ in 0..n - 3 {
                     self.wait_rbne()?;
                     if let Some(slot) = slots.next() {
-                        *slot = self.read_data();
+                        *slot = self.read_byte();
                     }
                 }
 
@@ -657,15 +708,15 @@ where
                 self.wait_btc()?;
                 self.i2c.ctl0().modify(|_, w| w.acken().nak());
                 if let Some(slot) = slots.next() {
-                    *slot = self.read_data();
+                    *slot = self.read_byte();
                 }
 
                 // Reading N-2 let the last byte in; SCL is stretched again, and
                 // STOP goes out before it is read.
                 self.wait_btc()?;
-                self.stop();
+                self.write_stop();
                 for slot in slots {
-                    *slot = self.read_data();
+                    *slot = self.read_byte();
                 }
                 Ok(())
             }
@@ -685,9 +736,9 @@ where
         // Neither byte is read until both have arrived, and STOP goes out before
         // either leaves DATA.
         self.wait_btc()?;
-        self.stop();
+        self.write_stop();
         for slot in slots {
-            *slot = self.read_data();
+            *slot = self.read_byte();
         }
         Ok(())
     }
@@ -713,7 +764,7 @@ where
         self.write_phase(address, write)?;
 
         if read.is_empty() {
-            self.stop();
+            self.write_stop();
             return Ok(());
         }
         // No STOP in between: the read phase's START is a repeated one.
@@ -734,46 +785,39 @@ where
     /// Raises an interrupt on `event`, which still has to be unmasked in the
     /// NVIC.
     ///
-    /// [`Buffered`] is written on every call, so listening for
-    /// `Protocol(Buffered::Disabled)` also drops byte events that an earlier
-    /// call had enabled.
+    /// [`Event::Byte`] raises `EVIE` along with `BUFIE`, so it covers
+    /// [`Event::Protocol`] too.
     pub fn listen(&mut self, event: Event) {
         match event {
-            Event::Protocol(Buffered::Enabled) => self
+            Event::Protocol => self.i2c.ctl1().modify(|_, w| w.evie().enabled()),
+            Event::Byte => self
                 .i2c
                 .ctl1()
                 .modify(|_, w| w.evie().enabled().bufie().enabled()),
-            Event::Protocol(Buffered::Disabled) => self
-                .i2c
-                .ctl1()
-                .modify(|_, w| w.evie().enabled().bufie().disabled()),
             Event::Error => self.i2c.ctl1().modify(|_, w| w.errie().enabled()),
         }
     }
     /// Stops raising an interrupt on `event`.
     ///
-    /// Both bits go down for [`Event::Protocol`] whatever the argument says: to
-    /// keep the protocol events and drop the byte ones, call
-    /// `listen(Event::Protocol(Buffered::Disabled))` instead.
+    /// [`Event::Protocol`] takes `BUFIE` down with it: byte events cannot stand
+    /// on their own in hardware. Dropping only those is
+    /// `unlisten(Event::Byte)`.
     pub fn unlisten(&mut self, event: Event) {
         match event {
-            Event::Protocol(_) => self
+            Event::Protocol => self
                 .i2c
                 .ctl1()
                 .modify(|_, w| w.evie().disabled().bufie().disabled()),
+            Event::Byte => self.i2c.ctl1().modify(|_, w| w.bufie().disabled()),
             Event::Error => self.i2c.ctl1().modify(|_, w| w.errie().disabled()),
         }
     }
-    /// Whether `event` is being listened for, the [`Buffered`] variant included.
+    /// Whether `event` is being listened for.
     pub fn is_listening(&self, event: Event) -> bool {
         let ctl1 = self.i2c.ctl1().read();
         match event {
-            Event::Protocol(Buffered::Enabled) => {
-                ctl1.evie().is_enabled() && ctl1.bufie().is_enabled()
-            }
-            Event::Protocol(Buffered::Disabled) => {
-                ctl1.evie().is_enabled() && ctl1.bufie().is_disabled()
-            }
+            Event::Protocol => ctl1.evie().is_enabled(),
+            Event::Byte => ctl1.evie().is_enabled() && ctl1.bufie().is_enabled(),
             Event::Error => ctl1.errie().is_enabled(),
         }
     }
@@ -785,6 +829,10 @@ where
     /// device, which is how a bus scan probes for one. Blocks only until the bus
     /// is free, then raises START and returns.
     ///
+    /// Arms the interrupts itself and keeps re-arming them as the phases change,
+    /// so `listen` beforehand is neither needed nor respected. A handler written
+    /// by hand out of the primitives arms its own instead.
+    ///
     /// # Panics
     ///
     /// If `address` does not fit in seven bits.
@@ -792,8 +840,8 @@ where
         assert!(address <= 0x7F, "I2C address must be 7-bit");
         self.wait_idle();
         self.listen(Event::Error);
-        self.listen(Event::Protocol(Buffered::Enabled));
-        self.set_start();
+        self.listen(Event::Byte);
+        self.write_start();
         WriteTransfer {
             i2c: self,
             address: address << 1,
@@ -809,6 +857,10 @@ where
     /// [`release`](ReadTransfer::release). An empty `buf` finishes immediately
     /// without touching the bus — a zero-byte read has no acknowledge to end on.
     /// Blocks only until the bus is free, then raises START and returns.
+    ///
+    /// Arms the interrupts itself and keeps re-arming them as the phases change,
+    /// so `listen` beforehand is neither needed nor respected. A handler written
+    /// by hand out of the primitives arms its own instead.
     ///
     /// # Panics
     ///
@@ -835,8 +887,8 @@ where
         self.set_acken(buf.len() > 2);
         self.set_poap(buf.len() == 2);
         self.listen(Event::Error);
-        self.listen(Event::Protocol(Buffered::Enabled));
-        self.set_start();
+        self.listen(Event::Byte);
+        self.write_start();
         ReadTransfer {
             i2c: self,
             address: address << 1 | 1,
@@ -893,38 +945,38 @@ where
             return;
         }
         if let Some(err) = self.i2c.take_error() {
-            self.i2c.stop();
+            self.i2c.write_stop();
             self.finish(Err(err));
             return;
         }
 
         match self.state {
             WriteState::Sbsend if self.i2c.sbsend() => {
-                self.i2c.write_data(self.address);
+                self.i2c.write_byte(self.address);
                 self.state = WriteState::Addsend;
             }
             WriteState::Addsend if self.i2c.addsend() => {
                 self.i2c.clear_addsend();
                 if self.buf.is_empty() {
                     // Addressing was the whole transfer; BTC never comes.
-                    self.i2c.stop();
+                    self.i2c.write_stop();
                     self.finish(Ok(()));
                 } else {
                     self.state = WriteState::Sending;
                 }
             }
             WriteState::Sending if self.i2c.tbe() => {
-                self.i2c.write_data(self.buf[self.pos]);
+                self.i2c.write_byte(self.buf[self.pos]);
                 self.pos += 1;
                 if self.pos == self.buf.len() {
                     // TBE stays up with nothing left to feed, so stop listening
                     // for it and wait out the byte in the shift register.
-                    self.i2c.listen(Event::Protocol(Buffered::Disabled));
+                    self.i2c.unlisten(Event::Byte);
                     self.state = WriteState::Btc;
                 }
             }
             WriteState::Btc if self.i2c.btc() => {
-                self.i2c.stop();
+                self.i2c.write_stop();
                 self.finish(Ok(()));
             }
             _ => {}
@@ -962,13 +1014,13 @@ where
     /// Stops every interrupt and records the outcome. The bus is released by
     /// the caller, which knows whether a STOP has gone out already.
     fn finish(&mut self, result: Result<(), Error>) {
-        self.i2c.unlisten(Event::Protocol(Buffered::Enabled));
+        self.i2c.unlisten(Event::Protocol);
         self.i2c.unlisten(Event::Error);
         self.state = WriteState::Done(result);
     }
     /// Cuts a running transfer short, leaving the bus idle.
     fn abort(&mut self) {
-        self.i2c.stop();
+        self.i2c.write_stop();
         self.finish(Ok(()));
     }
 }
@@ -1038,14 +1090,14 @@ where
             return;
         }
         if let Some(err) = self.i2c.take_error() {
-            self.i2c.stop();
+            self.i2c.write_stop();
             self.finish(Err(err));
             return;
         }
 
         match self.state {
             ReadState::Sbsend if self.i2c.sbsend() => {
-                self.i2c.write_data(self.address);
+                self.i2c.write_byte(self.address);
                 self.state = ReadState::Addsend;
             }
             ReadState::Addsend if self.i2c.addsend() => {
@@ -1055,20 +1107,20 @@ where
                         // down, so the NAK has to stand before that.
                         self.i2c.set_acken(false);
                         self.i2c.clear_addsend();
-                        self.i2c.stop();
+                        self.i2c.write_stop();
                         ReadState::Single
                     }
                     2 => {
                         self.i2c.set_acken(false);
                         self.i2c.clear_addsend();
-                        self.i2c.listen(Event::Protocol(Buffered::Disabled));
+                        self.i2c.unlisten(Event::Byte);
                         ReadState::Tail
                     }
                     3 => {
                         // Nothing to take before the tail: the three bytes are
                         // exactly what the last two steps handle.
                         self.i2c.clear_addsend();
-                        self.i2c.listen(Event::Protocol(Buffered::Disabled));
+                        self.i2c.unlisten(Event::Byte);
                         ReadState::Penultimate
                     }
                     _ => {
@@ -1078,17 +1130,17 @@ where
                 };
             }
             ReadState::Single if self.i2c.rbne() => {
-                self.buf[0] = self.i2c.read_data();
+                self.buf[0] = self.i2c.read_byte();
                 self.pos = 1;
                 self.finish(Ok(()));
             }
             ReadState::Receiving if self.i2c.rbne() => {
-                self.buf[self.pos] = self.i2c.read_data();
+                self.buf[self.pos] = self.i2c.read_byte();
                 self.pos += 1;
                 if self.pos == self.buf.len() - 3 {
                     // From here on the steps wait for BTC, and RBNE would only
                     // wake the handler between them.
-                    self.i2c.listen(Event::Protocol(Buffered::Disabled));
+                    self.i2c.unlisten(Event::Byte);
                     self.state = ReadState::Penultimate;
                 }
             }
@@ -1096,16 +1148,16 @@ where
                 // Byte N-2 stayed in DATA on purpose: with N-1 behind it the
                 // peripheral holds SCL, so this ACKEN cannot be late.
                 self.i2c.set_acken(false);
-                self.buf[self.pos] = self.i2c.read_data();
+                self.buf[self.pos] = self.i2c.read_byte();
                 self.pos += 1;
                 self.state = ReadState::Tail;
             }
             ReadState::Tail if self.i2c.btc() => {
                 // Both remaining bytes have arrived; STOP goes out before
                 // either leaves DATA.
-                self.i2c.stop();
+                self.i2c.write_stop();
                 while self.pos < self.buf.len() {
-                    self.buf[self.pos] = self.i2c.read_data();
+                    self.buf[self.pos] = self.i2c.read_byte();
                     self.pos += 1;
                 }
                 self.finish(Ok(()));
@@ -1148,13 +1200,13 @@ where
     /// already.
     fn finish(&mut self, result: Result<(), Error>) {
         self.i2c.set_poap(false);
-        self.i2c.unlisten(Event::Protocol(Buffered::Enabled));
+        self.i2c.unlisten(Event::Protocol);
         self.i2c.unlisten(Event::Error);
         self.state = ReadState::Done(result);
     }
     /// Cuts a running transfer short, leaving the bus idle.
     fn abort(&mut self) {
-        self.i2c.stop();
+        self.i2c.write_stop();
         self.finish(Ok(()));
     }
 }
@@ -1225,7 +1277,7 @@ where
                         self.wait_btc()?;
                     }
                     if last {
-                        self.stop();
+                        self.write_stop();
                     }
                 }
                 Some(Operation::Read(_)) => {
