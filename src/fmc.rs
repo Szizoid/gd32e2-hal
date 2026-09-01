@@ -17,6 +17,20 @@ use crate::pac;
 const WS0_MAX_HCLK: u32 = 24_000_000;
 const WS1_MAX_HCLK: u32 = 48_000_000;
 const WS2_MAX_HCLK: u32 = 72_000_000;
+const UNLOCK_KEY1: u32 = 0x45670123;
+const UNLOCK_KEY2: u32 = 0xCDEF89AB;
+
+/// The flash controller with `CTL` unlocked, borrowed for the body of
+/// [`Fmc::with_unlocked`] and locked again when that call returns.
+pub struct UnlockedFmc<'a> {
+    fmc: &'a mut Fmc,
+}
+
+impl<'a> UnlockedFmc<'a> {
+    fn lock(self) {
+        self.fmc.fmc.ctl().modify(|_, w| w.lk().lock());
+    }
+}
 
 /// Owns the flash memory controller.
 pub struct Fmc {
@@ -24,6 +38,23 @@ pub struct Fmc {
 }
 
 impl Fmc {
+    fn unlock(&mut self) -> UnlockedFmc<'_> {
+        self.fmc.key().write(|w| w.key().bits(UNLOCK_KEY1));
+        self.fmc.key().write(|w| w.key().bits(UNLOCK_KEY2));
+        UnlockedFmc { fmc: self }
+    }
+
+    /// Unlocks `CTL`, runs `f`, locks it again, and returns what `f` returned.
+    ///
+    /// The unlocked handle cannot outlive the call, so the flash is never left
+    /// writable.
+    pub fn with_unlocked<R>(&mut self, f: impl FnOnce(&mut UnlockedFmc) -> R) -> R {
+        let mut unlocked = self.unlock();
+        let result = f(&mut unlocked);
+        unlocked.lock();
+        result
+    }
+
     /// Returns the peripheral.
     pub fn release(self) -> pac::Fmc {
         self.fmc
