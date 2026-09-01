@@ -22,7 +22,7 @@
 //! period `cnt = 63` is ~44 ms, and the window opens ~22 ms into it. Feeding at
 //! 30 ms is inside; feeding at 5 ms is the early violation.
 //!
-//! Covers: `Wwdgt::new` / `start` / `feed`, `listen` / `is_pending` /
+//! Covers: `WwdgtExt::constrain` / `start` / `feed`, `listen` / `is_pending` /
 //! `clear_interrupt`, and `Rcu::reset_flag` / `clear_reset_flags`.
 
 #![no_std]
@@ -40,7 +40,7 @@ use panic_halt as _;
 use gd32e2_hal::pac::{self, interrupt};
 use gd32e2_hal::prelude::*;
 use gd32e2_hal::rcu::{ClockConfig, PllFreq, ResetFlag, SysClk};
-use gd32e2_hal::watchdog::{Wwdgt, WwdgtPsc, WwdgtRunning};
+use gd32e2_hal::watchdog::{WwdgtPsc, WwdgtRunning};
 
 /// Full period, in ticks: ~44 ms at `PCLK1 / 4096 / 8`.
 const PERIOD_TICKS: u8 = 63;
@@ -58,13 +58,12 @@ static WATCHDOG: Mutex<RefCell<Option<WwdgtRunning>>> = Mutex::new(RefCell::new(
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let clocks = ClockConfig::default()
-        .sysclk(SysClk::Pll(PllFreq::Mhz48))
-        .freeze(&mut rcu, &mut dp.fmc);
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
 
-    let mut delay = dp.timer5.constrain(&mut rcu, clocks).into_delay();
+    let mut delay = dp.timer5.constrain(&mut rcu).into_delay();
     delay.delay_ms(STARTUP_DELAY_MS);
 
     let after_watchdog = rcu.reset_flag(ResetFlag::WindowWatchdog);
@@ -72,8 +71,10 @@ fn main() -> ! {
     // branch whether or not the watchdog fired again.
     rcu.clear_reset_flags();
 
-    let mut wwdgt =
-        Wwdgt::new(&mut rcu, dp.wwdgt).start(WwdgtPsc::Div8, PERIOD_TICKS, WINDOW_TICKS);
+    let mut wwdgt = dp
+        .wwdgt
+        .constrain(&mut rcu)
+        .start(WwdgtPsc::Div8, PERIOD_TICKS, WINDOW_TICKS);
 
     if after_watchdog {
         defmt::info!("up after a window watchdog reset — will miss the deadline");

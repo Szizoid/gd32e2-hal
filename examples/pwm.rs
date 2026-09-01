@@ -35,11 +35,10 @@ const TOLERANCE: u32 = 5;
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let clocks = ClockConfig::default()
-        .sysclk(SysClk::Pll(PllFreq::Mhz48))
-        .freeze(&mut rcu, &mut dp.fmc);
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
 
     let gpioa = dp.gpioa.split(&mut rcu);
     let sense = gpioa.pa3.into_input();
@@ -47,7 +46,7 @@ fn main() -> ! {
 
     let mut pwm = dp
         .timer14
-        .constrain(&mut rcu, clocks)
+        .constrain(&mut rcu)
         .into_pwm_interval(MicrosDuration::from_micros(100));
     let mut channel = pwm.channel(pwm_pin);
     channel.enable();

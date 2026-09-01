@@ -47,13 +47,13 @@ const REG: u8 = 0x00;
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
     // I²C derives CLKC, RISETIME and I2CCLK from pclk1, so the tree has to be
     // frozen first. Standard mode needs pclk1 of 2 MHz, fast 8, fast plus 24.
-    let clocks = ClockConfig::default()
-        .sysclk(SysClk::Pll(PllFreq::Mhz48))
-        .freeze(&mut rcu, &mut dp.fmc);
+    let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
+    let clocks = rcu.clocks();
 
     let gpiob = dp.gpiob.split(&mut rcu);
     let mut scl = gpiob.pb6.into_alternate_open_drain::<1>();
@@ -65,7 +65,6 @@ fn main() -> ! {
         dp.i2c0,
         sda,
         scl,
-        &clocks,
         I2cMode::standard(SCL_KHZ.kHz()),
     );
 

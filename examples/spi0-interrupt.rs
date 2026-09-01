@@ -49,11 +49,10 @@ const LENGTH: usize = MESSAGE.len();
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let _clocks = ClockConfig::default()
-        .sysclk(SysClk::Pll(PllFreq::Mhz48))
-        .freeze(&mut rcu, &mut dp.fmc);
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
 
     let gpiob = dp.gpiob.split(&mut rcu);
 

@@ -47,11 +47,10 @@ const WRITE_BUF: &[u8; BUF_LENGH] = MESSAGE.first_chunk().unwrap();
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let clocks = ClockConfig::default()
-        .sysclk(SysClk::Pll(PllFreq::Mhz48))
-        .freeze(&mut rcu, &mut dp.fmc);
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
 
     let gpioa = dp.gpioa.split(&mut rcu);
 
@@ -62,7 +61,6 @@ fn main() -> ! {
         dp.usart0,
         tx,
         rx,
-        &clocks,
         UsartConfig::default().baud(baud::B110),
     );
 

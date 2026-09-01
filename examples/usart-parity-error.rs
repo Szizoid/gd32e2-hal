@@ -62,11 +62,10 @@ const LENGTH: usize = MESSAGE.len();
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let clocks = ClockConfig::default()
-        .sysclk(SysClk::Pll(PllFreq::Mhz48))
-        .freeze(&mut rcu, &mut dp.fmc);
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
 
     let gpioa = dp.gpioa.split(&mut rcu);
 
@@ -77,7 +76,6 @@ fn main() -> ! {
         dp.usart0,
         gpioa.pa9.into_alternate::<1>(),
         gpioa.pa10.into_alternate::<1>(),
-        &clocks,
         UsartConfig::default()
             .baud(BAUD)
             .frame_format(FrameFormat::E8),
@@ -87,7 +85,6 @@ fn main() -> ! {
         dp.usart1,
         gpioa.pa2.into_alternate::<1>(),
         gpioa.pa3.into_alternate::<1>(),
-        &clocks,
         UsartConfig::default()
             .baud(BAUD)
             .frame_format(FrameFormat::O8),
@@ -117,7 +114,6 @@ fn main() -> ! {
         usart1,
         tx,
         rx,
-        &clocks,
         UsartConfig::default()
             .baud(BAUD)
             .frame_format(FrameFormat::E8),

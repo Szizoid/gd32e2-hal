@@ -23,15 +23,16 @@ use gd32e2_hal::rcu::{
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let clocks = ClockConfig::default()
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default()
         .sysclk(SysClk::Pll(PllFreq::Mhz48))
         .hclk(AhbPsc::Div1) // hclk = 48 MHz
         .pclk1(ApbPsc::Div2) // pclk1 = 24 MHz
         .pclk2(ApbPsc::Div1) // pclk2 = 48 MHz
-        .usart0_sel(Usart0Sel::Sysclk) // USART0 off sysclk, not the APB2 clock
-        .freeze(&mut rcu, &mut dp.fmc);
+        .usart0_sel(Usart0Sel::Sysclk); // USART0 off sysclk, not the APB2 clock
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
+    let clocks = rcu.clocks();
 
     let gpioa = dp.gpioa.split(&mut rcu);
 

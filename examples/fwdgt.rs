@@ -15,7 +15,7 @@
 //! resets under a paused probe too. That is the hardware default: stopping it
 //! in debug mode takes the DBG module, which this HAL does not cover.
 //!
-//! Covers: `Fwdgt::new` / `start_timeout` / `FwdgtRunning::feed`, and
+//! Covers: `FwdgtExt::constrain` / `start_timeout` / `FwdgtRunning::feed`, and
 //! `Rcu::reset_flag` / `clear_reset_flags`.
 
 #![no_std]
@@ -29,7 +29,6 @@ use gd32e2_hal::pac;
 use gd32e2_hal::prelude::*;
 use gd32e2_hal::rcu::{ClockConfig, PllFreq, ResetFlag, SysClk};
 use gd32e2_hal::time::SecsDuration;
-use gd32e2_hal::watchdog::Fwdgt;
 
 const TIMEOUT: SecsDuration = SecsDuration::from_secs(2);
 const MEALS: u32 = 5;
@@ -40,13 +39,12 @@ const STARTUP_DELAY_MS: u32 = 3_000;
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let clocks = ClockConfig::default()
-        .sysclk(SysClk::Pll(PllFreq::Mhz48))
-        .freeze(&mut rcu, &mut dp.fmc);
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
 
-    let mut delay = dp.timer5.constrain(&mut rcu, clocks).into_delay();
+    let mut delay = dp.timer5.constrain(&mut rcu).into_delay();
     delay.delay_ms(STARTUP_DELAY_MS);
 
     if rcu.reset_flag(ResetFlag::FreeWatchdog) {
@@ -58,7 +56,7 @@ fn main() -> ! {
     // watchdog reset whether or not one happened.
     rcu.clear_reset_flags();
 
-    let mut fwdgt = Fwdgt::new(&mut rcu, dp.fwdgt).start_timeout(TIMEOUT);
+    let mut fwdgt = dp.fwdgt.constrain(&mut rcu).start_timeout(TIMEOUT);
     defmt::info!("watchdog started, timeout {} s", TIMEOUT.as_secs());
 
     // Fed with room to spare, so these rounds pass and prove the counter is

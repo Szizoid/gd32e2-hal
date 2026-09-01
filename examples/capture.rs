@@ -63,22 +63,18 @@ fn check(what: &str, measured: u32, expected: u32) {
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let clocks = ClockConfig::default()
-        .sysclk(SysClk::Pll(PllFreq::Mhz48))
-        .freeze(&mut rcu, &mut dp.fmc);
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
 
     let gpioa = dp.gpioa.split(&mut rcu);
     let mut source = gpioa.pa2.into_push_pull_output();
     let sense_pin = gpioa.pa3.into_alternate::<0>();
 
-    let mut delay = dp.timer5.constrain(&mut rcu, clocks).into_delay();
+    let mut delay = dp.timer5.constrain(&mut rcu).into_delay();
 
-    let mut capture = dp
-        .timer14
-        .constrain(&mut rcu, clocks)
-        .into_capture(CAPTURE_PSC);
+    let mut capture = dp.timer14.constrain(&mut rcu).into_capture(CAPTURE_PSC);
     let mut sense = capture.channel(sense_pin, Edge::Rising);
     sense.enable();
 

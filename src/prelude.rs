@@ -24,6 +24,11 @@ pub mod dma {
     pub use crate::dma::DmaExt as _;
 }
 
+/// Flash controller entry point.
+pub mod fmc {
+    pub use crate::fmc::FmcExt as _;
+}
+
 /// Port entry point and pin state.
 pub mod gpio {
     pub use crate::gpio::GpioExt as _;
@@ -58,6 +63,11 @@ pub mod timer {
     pub use nb::block;
 }
 
+/// Watchdog entry points.
+pub mod watchdog {
+    pub use crate::watchdog::{FwdgtExt as _, WwdgtExt as _};
+}
+
 /// Serial traits, in two flavours — take one.
 pub mod usart {
     /// Blocking byte streams, with `read_exact` / `write_all` / `write_fmt`.
@@ -74,6 +84,7 @@ pub mod usart {
 
 pub use self::adc::*;
 pub use self::dma::*;
+pub use self::fmc::*;
 pub use self::gpio::*;
 pub use self::i2c::*;
 pub use self::rcu::*;
@@ -81,3 +92,4 @@ pub use self::spi::*;
 pub use self::time::*;
 pub use self::timer::*;
 pub use self::usart::io::*;
+pub use self::watchdog::*;

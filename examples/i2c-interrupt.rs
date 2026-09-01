@@ -53,23 +53,15 @@ static REWIND: [u8; 1] = [REGISTER];
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let clocks = ClockConfig::default()
-        .sysclk(SysClk::Pll(PllFreq::Mhz48))
-        .freeze(&mut rcu, &mut dp.fmc);
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
 
     let gpiob = dp.gpiob.split(&mut rcu);
     let sda = gpiob.pb7.into_alternate_open_drain::<1>();
     let scl = gpiob.pb6.into_alternate_open_drain::<1>();
-    let bus = I2c::new(
-        &mut rcu,
-        dp.i2c0,
-        sda,
-        scl,
-        &clocks,
-        I2cMode::standard(50.kHz()),
-    );
+    let bus = I2c::new(&mut rcu, dp.i2c0, sda, scl, I2cMode::standard(50.kHz()));
 
     // Both vectors: `on_interrupt` reads the flags itself, so either may wake it.
     unsafe {

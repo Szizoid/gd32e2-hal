@@ -29,13 +29,12 @@ use gd32e2_hal::rcu::{ClockConfig, PllFreq, SysClk};
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
     // Nothing here reads the frequencies, but the clock tree still has to be
     // frozen: `split` needs the GPIO port clocked.
-    let _clocks = ClockConfig::default()
-        .sysclk(SysClk::Pll(PllFreq::Mhz48))
-        .freeze(&mut rcu, &mut dp.fmc);
+    let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
 
     let gpioa = dp.gpioa.split(&mut rcu);
     let gpiob = dp.gpiob.split(&mut rcu);

@@ -23,13 +23,12 @@ use gd32e2_hal::time::{MicrosDuration, MillisDuration, SecsDuration};
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let clocks = ClockConfig::default()
-        .sysclk(SysClk::Pll(PllFreq::Mhz24))
-        .freeze(&mut rcu, &mut dp.fmc);
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz24));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
 
-    let mut timer = dp.timer5.constrain(&mut rcu, clocks).into_delay();
+    let mut timer = dp.timer5.constrain(&mut rcu).into_delay();
 
     let mut spent = MillisDuration::from_ticks(0);
     defmt::info!("Starting delay cycle");

@@ -33,17 +33,16 @@ static SHARED: Mutex<RefCell<Option<Shared>>> = Mutex::new(RefCell::new(None));
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let clocks = ClockConfig::default()
-        .sysclk(SysClk::Pll(PllFreq::Mhz48))
-        .freeze(&mut rcu, &mut dp.fmc);
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
 
     let gpioa = dp.gpioa.split(&mut rcu);
     let led = gpioa.pa1.into_push_pull_output().erase();
 
     let period: SecsDuration = 1u32.secs();
-    let mut timer = dp.timer5.constrain(&mut rcu, clocks).start_interval(period);
+    let mut timer = dp.timer5.constrain(&mut rcu).start_interval(period);
     timer.listen(Event::Update);
 
     critical_section::with(|cs| {

@@ -38,11 +38,10 @@ const VALUES: [u8; 2] = [0xDE, 0xAD];
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let clocks = ClockConfig::default()
-        .sysclk(SysClk::Pll(PllFreq::Mhz48))
-        .freeze(&mut rcu, &mut dp.fmc);
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
 
     let gpiob = dp.gpiob.split(&mut rcu);
     let mut scl = gpiob.pb6.into_alternate_open_drain::<1>();
@@ -54,7 +53,6 @@ fn main() -> ! {
         dp.i2c0,
         sda,
         scl,
-        &clocks,
         I2cMode::standard(SCL_KHZ.kHz()),
     );
 

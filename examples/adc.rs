@@ -4,8 +4,8 @@
 //! read on-chip sources. The external read is on PA0; leave it floating or tie
 //! it to a known voltage. Results go over USART0 (PA9/PA10) at 115200 8N1.
 //!
-//! `adc_sel` must be set, or `CK_ADC` stays at zero and `Adc::new` would divide
-//! by it. Covers: `Adc::new`, `read`, `read_vref`, `read_temperature`,
+//! `adc_sel` must be set, or `CK_ADC` stays at zero and `constrain` would divide
+//! by it. Covers: `AdcExt::constrain`, `read`, `read_vref`, `read_temperature`,
 //! `SampTime`, and `into_analog` / the `Channel` bound.
 
 #![no_std]
@@ -15,20 +15,21 @@ use cortex_m_rt::entry;
 use defmt_rtt as _;
 use panic_halt as _;
 
-use gd32e2_hal::adc::{Adc, SampTime};
+use gd32e2_hal::adc::SampTime;
 use gd32e2_hal::pac;
 use gd32e2_hal::prelude::*;
 use gd32e2_hal::rcu::{AdcPsc, AdcSel, ClockConfig, Irc28mDiv, PllFreq, SysClk};
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let clocks = ClockConfig::default()
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default()
         .sysclk(SysClk::Pll(PllFreq::Mhz48))
         // CK_ADC = pclk2 / 8 = 6 MHz — slow enough for the temperature sensor.
-        .adc_sel(AdcSel::Prescaled(AdcPsc::Apb2Div8))
-        .freeze(&mut rcu, &mut dp.fmc);
+        .adc_sel(AdcSel::Prescaled(AdcPsc::Apb2Div8));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
+    let clocks = rcu.clocks();
 
     // The other ADC clock source is the dedicated 28 MHz oscillator, e.g.:
     let _alt_src = AdcSel::Irc28m(Irc28mDiv::Div2);
@@ -38,7 +39,7 @@ fn main() -> ! {
     // A pin must go through into_analog() before it satisfies `Channel`.
     let ain = gpioa.pa0.into_analog();
 
-    let mut adc = Adc::new(&mut rcu, dp.adc, clocks);
+    let mut adc = dp.adc.constrain(&mut rcu);
 
     defmt::info!("ADC test, CK_ADC = {} Hz", clocks.ck_adc().to_Hz());
 

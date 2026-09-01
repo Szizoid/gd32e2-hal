@@ -8,7 +8,7 @@
 //! ```ignore
 //! let tx = parts.pa9.into_alternate::<1>();
 //! let rx = parts.pa10.into_alternate::<1>();
-//! let mut serial = Usart::new(&mut rcu, dp.usart0, tx, rx, clocks, UsartConfig::default());
+//! let mut serial = Usart::new(&mut rcu, dp.usart0, tx, rx, UsartConfig::default());
 //! serial.write_byte(b'x');
 //! ```
 //!
@@ -238,18 +238,14 @@ impl Default for UsartConfig9 {
     }
 }
 
-fn configure<USARTX>(
-    rcu: &mut Rcu,
-    usart: &USARTX,
-    clocks: &Clocks,
-    baud: Bps,
-    oversampling: Oversampling,
-) where
+fn configure<USARTX>(rcu: &mut Rcu, usart: &USARTX, baud: Bps, oversampling: Oversampling)
+where
     USARTX: Deref<Target = pac::usart0::RegisterBlock> + Enable + Reset + BusClocks,
 {
+    let clocks = rcu.clocks();
     USARTX::enable(rcu);
     USARTX::reset(rcu);
-    let pclk = USARTX::clock(clocks).to_Hz();
+    let pclk = USARTX::clock(&clocks).to_Hz();
     let baud = baud.to_raw();
     // round(pclk / baud) in integers: adding half the divisor before truncating rounds.
     let usartdiv = (pclk + baud / 2) / baud;
@@ -591,16 +587,9 @@ where
     ///
     /// The pins must already be in this USART's alternate function; the bounds
     /// reject anything else at compile time. [`release`](Usart::release) hands
-    /// them back. `clocks` supplies the frequency the baud divisor comes from.
-    pub fn new(
-        rcu: &mut Rcu,
-        usart: USARTX,
-        tx_pin: TX,
-        rx_pin: RX,
-        clocks: &Clocks,
-        config: UsartConfig,
-    ) -> Self {
-        configure(rcu, &usart, &clocks, config.baud, config.oversampling);
+    /// them back. The baud divisor comes from the frozen clocks in `rcu`.
+    pub fn new(rcu: &mut Rcu, usart: USARTX, tx_pin: TX, rx_pin: RX, config: UsartConfig) -> Self {
+        configure(rcu, &usart, config.baud, config.oversampling);
 
         usart.ctl0().modify(|_, w| match config.frame_format {
             FrameFormat::N8 => w.pcen().disabled().wl().bit8(),
@@ -684,10 +673,9 @@ where
         usart: USARTX,
         tx_pin: TX,
         rx_pin: RX,
-        clocks: &Clocks,
         config: UsartConfig9,
     ) -> Self {
-        configure(rcu, &usart, &clocks, config.baud, config.oversampling);
+        configure(rcu, &usart, config.baud, config.oversampling);
         usart.ctl0().modify(|_, w| w.pcen().disabled().wl().bit9());
         enable(&usart);
         Self {

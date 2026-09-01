@@ -67,32 +67,26 @@ static SHARED: Mutex<RefCell<Option<Shared>>> = Mutex::new(RefCell::new(None));
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let clocks = ClockConfig::default()
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default()
         .sysclk(SysClk::Pll(PllFreq::Mhz48))
-        .adc_sel(AdcSel::Prescaled(AdcPsc::Apb2Div8))
-        .freeze(&mut rcu, &mut dp.fmc);
+        .adc_sel(AdcSel::Prescaled(AdcPsc::Apb2Div8));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
 
     let gpioa = dp.gpioa.split(&mut rcu);
     let pwm_pin = gpioa.pa2.into_alternate::<0>();
     let adc_pin = gpioa.pa3.into_analog();
 
-    let mut pwm = dp
-        .timer14
-        .constrain(&mut rcu, clocks)
-        .into_pwm_interval(PWM_PERIOD);
+    let mut pwm = dp.timer14.constrain(&mut rcu).into_pwm_interval(PWM_PERIOD);
     let mut channel = pwm.channel(pwm_pin);
     channel.enable();
     pwm.enable_output();
 
-    let mut adc = dp.adc.constrain(&mut rcu, clocks);
+    let mut adc = dp.adc.constrain(&mut rcu);
     adc.listen(AdcEvent::Eoc);
 
-    let mut trigger = dp
-        .timer5
-        .constrain(&mut rcu, clocks)
-        .start_interval(SAMPLE_PERIOD);
+    let mut trigger = dp.timer5.constrain(&mut rcu).start_interval(SAMPLE_PERIOD);
     trigger.listen(TimerEvent::Update);
 
     critical_section::with(|cs| {
@@ -108,7 +102,7 @@ fn main() -> ! {
 
     defmt::info!("ramping PA2, averaging {} samples of PA3 per report", BATCH);
 
-    let mut delay = dp.timer2.constrain(&mut rcu, clocks).into_delay();
+    let mut delay = dp.timer2.constrain(&mut rcu).into_delay();
     let mut duty: i32 = 0;
     let mut step: i32 = DUTY_STEP;
     loop {

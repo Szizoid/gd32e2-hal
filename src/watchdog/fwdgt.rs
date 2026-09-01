@@ -85,15 +85,6 @@ pub struct Fwdgt {
 }
 
 impl Fwdgt {
-    /// Starts IRC40K, which clocks the watchdog, and takes the peripheral.
-    ///
-    /// Nothing is written to the watchdog itself — its registers stay write
-    /// protected until [`start`](Self::start) opens them.
-    pub fn new(rcu: &mut Rcu, fwdgt: pac::Fwdgt) -> Self {
-        rcu.enable_irc40k();
-        Self { fwdgt }
-    }
-
     /// Sets the period and starts counting down; there is no way back.
     ///
     /// The timeout is `(rld + 1)` ticks of `IRC40K / psc`. Blocks while the
@@ -148,5 +139,21 @@ impl FwdgtRunning {
     /// clock it is meant to survive.
     pub fn feed(&mut self) {
         self.fwdgt.ctl().write(|w| w.cmd().reset());
+    }
+}
+
+/// Entry point on the raw peripheral, mirroring [`GpioExt`](crate::gpio::GpioExt).
+pub trait FwdgtExt {
+    /// Starts IRC40K, which clocks the watchdog, and takes the peripheral.
+    ///
+    /// Nothing is written to the watchdog itself — its registers stay write
+    /// protected until [`start`](Fwdgt::start) opens them.
+    fn constrain(self, rcu: &mut Rcu) -> Fwdgt;
+}
+
+impl FwdgtExt for pac::Fwdgt {
+    fn constrain(self, rcu: &mut Rcu) -> Fwdgt {
+        rcu.enable_irc40k();
+        Fwdgt { fwdgt: self }
     }
 }

@@ -54,16 +54,6 @@ pub struct Wwdgt {
 }
 
 impl Wwdgt {
-    /// Enables the peripheral's clock and resets it.
-    ///
-    /// Nothing is started here — the counter only begins running once
-    /// [`start`](Self::start) sets `WDGTEN`.
-    pub fn new(rcu: &mut Rcu, wwdgt: pac::Wwdgt) -> Self {
-        <pac::Wwdgt as Enable>::enable(rcu);
-        <pac::Wwdgt as Reset>::reset(rcu);
-        Self { wwdgt }
-    }
-
     /// Sets the period and the window and starts counting down; there is no way
     /// back.
     ///
@@ -151,5 +141,22 @@ impl WwdgtRunning {
     /// the request, and hardware never drops it.
     pub fn clear_interrupt(&mut self) {
         self.wwdgt.stat().write(|w| w.ewif().finished());
+    }
+}
+
+/// Entry point on the raw peripheral, mirroring [`GpioExt`](crate::gpio::GpioExt).
+pub trait WwdgtExt {
+    /// Enables the peripheral's clock and resets it.
+    ///
+    /// Nothing is started here — the counter only begins running once
+    /// [`start`](Wwdgt::start) sets `WDGTEN`.
+    fn constrain(self, rcu: &mut Rcu) -> Wwdgt;
+}
+
+impl WwdgtExt for pac::Wwdgt {
+    fn constrain(self, rcu: &mut Rcu) -> Wwdgt {
+        <pac::Wwdgt as Enable>::enable(rcu);
+        <pac::Wwdgt as Reset>::reset(rcu);
+        Wwdgt { wwdgt: self }
     }
 }

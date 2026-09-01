@@ -19,6 +19,7 @@ use panic_halt as _;
 use gd32e2_hal::pac;
 // Per-peripheral imports rather than the whole prelude: the serial traits come
 // from `usart::nb`, and the glob would bring in `usart::io`'s same-named ones.
+use gd32e2_hal::prelude::fmc::*;
 use gd32e2_hal::prelude::gpio::*;
 use gd32e2_hal::prelude::rcu::*;
 use gd32e2_hal::prelude::usart::nb::*;
@@ -27,11 +28,10 @@ use gd32e2_hal::usart::{FrameFormat, Oversampling, Usart, UsartConfig, baud};
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let clocks = ClockConfig::default()
-        .sysclk(SysClk::Pll(PllFreq::Mhz48))
-        .freeze(&mut rcu, &mut dp.fmc);
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
 
     let gpioa = dp.gpioa.split(&mut rcu);
     // USART1 TX on PA2, RX on PA3 — both AF1.
@@ -42,7 +42,7 @@ fn main() -> ! {
         .baud(baud::B9600)
         .oversampling(Oversampling::X8)
         .frame_format(FrameFormat::E8);
-    let mut usart1 = Usart::new(&mut rcu, dp.usart1, tx, rx, &clocks, config);
+    let mut usart1 = Usart::new(&mut rcu, dp.usart1, tx, rx, config);
 
     defmt::info!("USART1 E8 loopback at 9600 baud (wire PA2 -> PA3)");
 

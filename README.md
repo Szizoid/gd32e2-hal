@@ -89,11 +89,14 @@ part and not on a 32-pin one, and reaching for it is a compile error instead of 
 pin that reads nothing. Port C (`PC13`–`PC15`, 48-pin only) is not implemented
 yet.
 
-**RCU** (`src/rcu.rs`) — `dp.rcu.constrain()` (`RcuExt`). Per-peripheral `Enable`
+**RCU** (`src/rcu.rs`) — `dp.rcu.constrain()` (`RcuExt`) hands out an
+`UnfrozenRcu`, whose only method is `freeze(&mut fmc, config)`; it consumes that
+value and returns the `Rcu` every driver takes, with the resulting `Clocks`
+inside (`rcu.clocks()`). The tree is therefore frozen exactly once, and no driver
+can be built before it is. Per-peripheral `Enable`
 and `Reset` traits from the `bus_en!`/`bus_rst!` macros (separate, since not every
 peripheral has a reset bit — DMA has none), called from every driver's
-constructor, so nothing can be used unclocked. Clock tree: a `ClockConfig` builder →
-`.freeze(&mut rcu, &mut dp.fmc)` → a frozen `Clocks`. `ClockConfig::default()` is
+constructor, so nothing can be used unclocked. `ClockConfig::default()` is
 the reset state — undivided buses, `SysClk::Irc8m`, USART0 on APB2, `AdcSel::Off` —
 and every field reaches its registers whether it was named or not. PLL from IRC8M
 (`PllFreq`, 8–72 MHz) and bus prescalers (`AhbPsc` / `ApbPsc`) are typed enums, so an
@@ -109,6 +112,11 @@ seven — `RSTFC` has no per-flag granularity.
 `pclk1_tim` / `pclk2_tim` carry the timer branch: `hclk` at an undivided APB,
 twice the bus clock otherwise. Frequencies are `fugit` aliases from `src/time.rs`
 (`Hertz`), re-exported. `HXTAL` is out of scope — no crystal on this board.
+
+**FMC** (`src/fmc.rs`) — `dp.fmc.constrain()` (`FmcExt`), no clock gating: the
+flash controller is always clocked. Owns the peripheral and covers the wait
+states only, which `UnfrozenRcu::freeze` writes through a borrow. Program and
+erase are not implemented.
 
 **USART** (`src/usart.rs`) — `Usart<USARTX, TX, RX, WORD = Byte>` owns the
 peripheral and both pins. `TxPin` / `RxPin` markers (from `usart_pins!`) reject a
@@ -147,8 +155,8 @@ Raw 9-bit words via `new_word` / `write_word` /
 `serial::Error` and `embedded_io::Error` impls. `release()` returns the
 peripheral and both pins.
 
-**ADC** (`src/adc.rs`) — `Adc::new(rcu, adc, clocks)`, or `dp.adc.constrain(...)`
-through `AdcExt`, runs the manual's calibration sequence (`ADCON`, a
+**ADC** (`src/adc.rs`) — `dp.adc.constrain(rcu)` through `AdcExt` runs
+the manual's calibration sequence (`ADCON`, a
 14-`CK_ADC`-cycle delay converted to core cycles, `RSTCLB`/`CLB`).
 `read<PIN: Channel>(&pin, SampTime) -> u16` performs a single blocking,
 software-triggered conversion. `Channel` is implemented only
@@ -213,8 +221,8 @@ Dropping a `Transfer` stops the channel and loses the three owned parts.
 Circular mode and `M2M` are deferred.
 
 **TIMER** (`src/timer.rs`) — the counter core, verified on hardware. All seven
-timers. `Timer::new(rcu, timer, clocks)`, or `dp.timer5.constrain(...)` through
-`TimerExt`, clocks and resets the peripheral and records its own `CK_TIMERx`
+timers. `dp.timer5.constrain(rcu)` through `TimerExt` clocks and resets
+the peripheral and records its own `CK_TIMERx`
 through `Instance`, which binds each timer to its bus. `start(psc, car)` consumes
 the stopped `Timer` and returns a running `CountDownTimer`, so `wait()` doesn't
 exist on a timer that was never started; `stop()` goes back. `start` sets `UPS`
@@ -279,8 +287,9 @@ outputs, break inputs and dead time are not implemented.
 
 **Prelude** (`src/prelude.rs`) — split per peripheral: `prelude::gpio` (`GpioExt`,
 `OutputPin` / `InputPin` / `StatefulOutputPin`), `prelude::rcu`, `prelude::dma`,
-`prelude::adc`, `prelude::spi`, `prelude::i2c`, `prelude::timer` (`TimerExt`, `DelayNs`,
-`SetDutyCycle`, `block!`), `prelude::time` (the `fugit` suffixes `500.millis()`,
+`prelude::fmc`, `prelude::adc`, `prelude::spi`, `prelude::i2c`, `prelude::timer` (`TimerExt`, `DelayNs`,
+`SetDutyCycle`, `block!`), `prelude::watchdog` (`FwdgtExt`, `WwdgtExt`),
+`prelude::time` (the `fugit` suffixes `500.millis()`,
 `100.kHz()`) and `prelude::usart`, which has `io` and `nb` for the two serial flavours —
 one or the other, since their `read`/`write` land on the same type and two same-named
 traits in scope make the call ambiguous (`E0034`). `use gd32e2_hal::prelude::*;` takes
@@ -288,7 +297,7 @@ everything with `usart::io`; import a submodule instead to narrow it. Traits are
 re-exported as `_`, so the methods arrive without the names; types are not included.
 
 **I²C** (`src/i2c.rs`) — master, blocking, 7-bit addressing, both peripherals.
-`I2c::new(rcu, i2c, sda, scl, &clocks, mode)`
+`I2c::new(rcu, i2c, sda, scl, mode)`
 takes `I2cMode::{standard, fast, fast_plus}`, each carrying its SCL frequency and
 the fast modes their `DutyCycle`; `CLKC`, `RISETIME` and `I2CCLK` are derived
 from `pclk1`, which is why `&Clocks` is needed. Both pins must be
@@ -339,7 +348,8 @@ whatever was left over. `set_fdata` / `fdata` reach the unrelated scratch byte.
 **Watchdogs** (`src/watchdog/`) — both verified on hardware. Neither can be
 stopped once started, so each is a pair of types with no way back.
 
-**FWDGT**: `Fwdgt::new(rcu, fwdgt)` starts IRC40K, which clocks the counter; no
+**FWDGT**: `dp.fwdgt.constrain(rcu)` through `FwdgtExt` starts IRC40K, which
+clocks the counter; no
 bus clock is involved. Starting is
 irreversible in hardware, so it is irreversible in the type: `start(psc, rld)`
 and `start_timeout(2.secs())` consume `Fwdgt` and return `FwdgtRunning`, whose
@@ -349,7 +359,8 @@ past 12 bits. The manual asks for 7 or more IRC40K cycles between two reloads,
 which is not enforced. Window mode (`WND`) is not implemented.
 
 **WWDGT**: clocked from `PCLK1 / 4096 / WwdgtPsc`, spanning tens of
-milliseconds. `Wwdgt::new(rcu, wwdgt)` clocks and resets the peripheral;
+milliseconds. `dp.wwdgt.constrain(rcu)` through `WwdgtExt` clocks and resets the
+peripheral;
 `start(psc, cnt, win)` consumes it into `WwdgtRunning` with `feed()`. Period and
 window are given in counter ticks, 0 to 63 — the register's top bit is added by
 the HAL, so a value meaning "reset now" cannot be passed in; `start` panics if
@@ -371,11 +382,12 @@ use gd32e2_hal::pac;
 use gd32e2_hal::rcu::{ClockConfig, PllFreq, RcuExt, SysClk};
 use gd32e2_hal::usart::{Usart, UsartConfig};
 
-let mut dp = pac::Peripherals::take().unwrap();
-let mut rcu = dp.rcu.constrain();
-let clocks = ClockConfig::default()
-    .sysclk(SysClk::Pll(PllFreq::Mhz48))     // PLL from IRC8M -> 48 MHz
-    .freeze(&mut rcu, &mut dp.fmc);
+let dp = pac::Peripherals::take().unwrap();
+let mut fmc = dp.fmc.constrain();
+let config = ClockConfig::default()
+    .sysclk(SysClk::Pll(PllFreq::Mhz48));    // PLL from IRC8M -> 48 MHz
+let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
+let clocks = rcu.clocks();
 let parts = dp.gpioa.split(&mut rcu);        // enables the GPIOA clock
 
 let mut led = parts.pa5.into_output();
@@ -383,7 +395,7 @@ led.set_high();
 
 let tx = parts.pa9.into_alternate::<1>();    // USART0_TX; ::<3>() wouldn't compile
 let rx = parts.pa10.into_alternate::<1>();
-let mut usart0 = Usart::new(&mut rcu, dp.usart0, tx, rx, clocks, UsartConfig::default());
+let mut usart0 = Usart::new(&mut rcu, dp.usart0, tx, rx, UsartConfig::default());
 if let Ok(byte) = usart0.read_byte() {
     usart0.write_byte(byte);                 // verified on hardware: echoes back
 }
@@ -584,11 +596,14 @@ open-drain; `embedded-hal` 1.0 `OutputPin` / `InputPin` / `StatefulOutputPin`
 на 32-выводном, а обращение к нему — ошибка компиляции, а не нога, которая ничего
 не читает. Порт C (`PC13`–`PC15`, только 48 выводов) пока не реализован.
 
-**RCU** (`src/rcu.rs`) — `dp.rcu.constrain()` (`RcuExt`). Трейты `Enable` и
+**RCU** (`src/rcu.rs`) — `dp.rcu.constrain()` (`RcuExt`) отдаёт `UnfrozenRcu`, у
+которого единственный метод `freeze(&mut fmc, config)`; он съедает это значение и
+возвращает `Rcu`, который берут все драйверы, с полученным `Clocks` внутри
+(`rcu.clocks()`). Дерево замораживается ровно один раз, и ни один драйвер не
+собрать до этого. Трейты `Enable` и
 `Reset` на каждую периферию из макросов `bus_en!`/`bus_rst!` (порознь, потому что
 не у каждой периферии есть бит сброса — у DMA его нет), зовутся из конструктора
-каждого драйвера, так что без такта не поработать. Дерево тактов: билдер `ClockConfig` →
-`.freeze(&mut rcu, &mut dp.fmc)` → замороженный `Clocks`. `ClockConfig::default()` —
+каждого драйвера, так что без такта не поработать. `ClockConfig::default()` —
 это состояние после сброса (шины без делителей, `SysClk::Irc8m`, USART0 на APB2,
 `AdcSel::Off`), и каждое поле доезжает до регистров, названо оно или нет. PLL от IRC8M
 (`PllFreq`, 8–72 МГц) и прескейлеры шин (`AhbPsc` / `ApbPsc`) — типизированные
@@ -604,6 +619,11 @@ open-drain; `embedded-hal` 1.0 `OutputPin` / `InputPin` / `StatefulOutputPin`
 неделённой APB, удвоенная частота шины иначе. Частоты — псевдонимы `fugit` из
 `src/time.rs` (`Hertz`), крейт реэкспортируется. `HXTAL` вне скоупа — кварц на
 плате не запаян.
+
+**FMC** (`src/fmc.rs`) — `dp.fmc.constrain()` (`FmcExt`), без включения такта:
+контроллер флеша тактуется всегда. Владеет периферией, покрывает только wait
+states, которые пишет `UnfrozenRcu::freeze` по заимствованию. Запись и стирание
+не реализованы.
 
 **USART** (`src/usart.rs`) — `Usart<USARTX, TX, RX, WORD = Byte>` владеет
 периферией и обоими пинами. Маркеры `TxPin` / `RxPin` (из `usart_pins!`)
@@ -642,8 +662,8 @@ DMA-приёма он не сработает. Overrun приходит ещё �
 `ErrorKind` дают impl'ы `serial::Error` и `embedded_io::Error`. `release()`
 возвращает периферию и оба пина.
 
-**ADC** (`src/adc.rs`) — `Adc::new(rcu, adc, clocks)`, либо `dp.adc.constrain(...)`
-через `AdcExt`, выполняет процедуру калибровки из мануала (`ADCON`, задержка 14 тактов `CK_ADC` в пересчёте на такты
+**ADC** (`src/adc.rs`) — `dp.adc.constrain(rcu)` через `AdcExt`
+выполняет процедуру калибровки из мануала (`ADCON`, задержка 14 тактов `CK_ADC` в пересчёте на такты
 ядра, `RSTCLB`/`CLB`). `read<PIN: Channel>(&pin, SampTime) -> u16` — одиночное
 блокирующее преобразование по софт-триггеру. `Channel` реализован только для
 `Pin<P, N, Analog>`, поэтому пин обязан реально пройти через `into_analog()`.
@@ -704,8 +724,8 @@ typestate периферии. Общий супертрейт `DmaPeriph<N>` з�
 Циклический режим и `M2M` отложены.
 
 **TIMER** (`src/timer.rs`) — ядро счётчика, проверено на железе. Все семь
-таймеров. `Timer::new(rcu, timer, clocks)`, либо `dp.timer5.constrain(...)` через
-`TimerExt`, тактирует и сбрасывает периферию и запоминает свой `CK_TIMERx` через
+таймеров. `dp.timer5.constrain(rcu)` через `TimerExt` тактирует и
+сбрасывает периферию и запоминает свой `CK_TIMERx` через
 `Instance`, который привязывает каждый таймер к его шине. `start(psc, car)`
 забирает остановленный `Timer` и отдаёт запущенный `CountDownTimer`, поэтому
 `wait()` не существует у незапущенного таймера; `stop()` возвращает обратно.
@@ -771,8 +791,9 @@ typestate периферии. Общий супертрейт `DmaPeriph<N>` з�
 
 **Прелюдия** (`src/prelude.rs`) — разбита по периферии: `prelude::gpio` (`GpioExt`,
 `OutputPin` / `InputPin` / `StatefulOutputPin`), `prelude::rcu`, `prelude::dma`,
-`prelude::adc`, `prelude::spi`, `prelude::i2c`, `prelude::timer` (`TimerExt`, `DelayNs`,
-`SetDutyCycle`, `block!`), `prelude::time` (суффиксы `fugit`: `500.millis()`,
+`prelude::fmc`, `prelude::adc`, `prelude::spi`, `prelude::i2c`, `prelude::timer` (`TimerExt`, `DelayNs`,
+`SetDutyCycle`, `block!`), `prelude::watchdog` (`FwdgtExt`, `WwdgtExt`),
+`prelude::time` (суффиксы `fugit`: `500.millis()`,
 `100.kHz()`) и `prelude::usart` с подмодулями `io` и `nb` — один или другой, потому что
 их `read`/`write` живут на одном типе, а два одноимённых трейта в области видимости
 делают вызов неоднозначным (`E0034`). `use gd32e2_hal::prelude::*;` берёт всё вместе с
@@ -780,7 +801,7 @@ typestate периферии. Общий супертрейт `DmaPeriph<N>` з�
 методы приезжают, имена нет. Типы в прелюдию не входят.
 
 **I²C** (`src/i2c.rs`) — мастер, блокирующий, 7-битная адресация, обе периферии.
-`I2c::new(rcu, i2c, sda, scl, &clocks, mode)`
+`I2c::new(rcu, i2c, sda, scl, mode)`
 принимает `I2cMode::{standard, fast, fast_plus}`, каждый несёт свою частоту SCL, а
 быстрые режимы — ещё и `DutyCycle`; `CLKC`, `RISETIME` и `I2CCLK` считаются от
 `pclk1`, поэтому нужен `&Clocks`. Обе ноги обязаны быть
@@ -829,8 +850,8 @@ scratch-байту.
 **Сторожевые таймеры** (`src/watchdog/`) — оба проверены на железе. Ни один
 нельзя остановить после запуска, поэтому каждый — пара типов без пути назад.
 
-**FWDGT**: `Fwdgt::new(rcu, fwdgt)` запускает IRC40K, от которого счётчик и
-тактуется; шинного такта у него нет.
+**FWDGT**: `dp.fwdgt.constrain(rcu)` через `FwdgtExt` запускает IRC40K, от
+которого счётчик и тактуется; шинного такта у него нет.
 Пуск необратим в железе, поэтому необратим и в типе: `start(psc, rld)` и
 `start_timeout(2.secs())` съедают `Fwdgt` и возвращают `FwdgtRunning`, у
 которого есть единственный метод `feed()`. `start_timeout` берёт наименьший
@@ -839,7 +860,8 @@ scratch-байту.
 между двумя перезагрузками не проверяется. Оконный режим (`WND`) не реализован.
 
 **WWDGT**: тактуется от `PCLK1 / 4096 / WwdgtPsc`, диапазон — десятки
-миллисекунд. `Wwdgt::new(rcu, wwdgt)` включает такт и сбрасывает периферию,
+миллисекунд. `dp.wwdgt.constrain(rcu)` через `WwdgtExt` включает такт и
+сбрасывает периферию,
 `start(psc, cnt, win)` съедает её и возвращает `WwdgtRunning` с `feed()`. Период
 и окно задаются в тиках счётчика, от 0 до 63 — старший бит регистра HAL
 добавляет сам, поэтому значение со смыслом «сбросить сейчас» передать нельзя;
@@ -861,11 +883,12 @@ use gd32e2_hal::pac;
 use gd32e2_hal::rcu::{ClockConfig, PllFreq, RcuExt, SysClk};
 use gd32e2_hal::usart::{Usart, UsartConfig};
 
-let mut dp = pac::Peripherals::take().unwrap();
-let mut rcu = dp.rcu.constrain();
-let clocks = ClockConfig::default()
-    .sysclk(SysClk::Pll(PllFreq::Mhz48))     // PLL от IRC8M -> 48 МГц
-    .freeze(&mut rcu, &mut dp.fmc);
+let dp = pac::Peripherals::take().unwrap();
+let mut fmc = dp.fmc.constrain();
+let config = ClockConfig::default()
+    .sysclk(SysClk::Pll(PllFreq::Mhz48));    // PLL от IRC8M -> 48 МГц
+let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
+let clocks = rcu.clocks();
 let parts = dp.gpioa.split(&mut rcu);        // включает такт GPIOA
 
 let mut led = parts.pa5.into_output();
@@ -873,7 +896,7 @@ led.set_high();
 
 let tx = parts.pa9.into_alternate::<1>();    // USART0_TX; ::<3>() не скомпилируется
 let rx = parts.pa10.into_alternate::<1>();
-let mut usart0 = Usart::new(&mut rcu, dp.usart0, tx, rx, clocks, UsartConfig::default());
+let mut usart0 = Usart::new(&mut rcu, dp.usart0, tx, rx, UsartConfig::default());
 if let Ok(byte) = usart0.read_byte() {
     usart0.write_byte(byte);                 // проверено на железе: приходит эхом
 }

@@ -5,7 +5,7 @@
 //! capture, triggering other peripherals — is built on top of that core.
 //!
 //! ```ignore
-//! let timer = dp.timer5.constrain(&mut rcu, clocks);
+//! let timer = dp.timer5.constrain(&mut rcu);
 //! let mut timer = timer.start_interval(500.millis());
 //! timer.wait();
 //! ```
@@ -255,19 +255,10 @@ pub struct Timer<TIMERX> {
 }
 
 impl<TIMERX: Instance> Timer<TIMERX> {
-    /// Clocks the peripheral, resets it, and records the clock feeding it.
-    pub fn new(rcu: &mut Rcu, timer: TIMERX, clocks: Clocks) -> Timer<TIMERX> {
-        TIMERX::enable(rcu);
-        TIMERX::reset(rcu);
-        Timer {
-            timer,
-            clk: TIMERX::clk(&clocks),
-        }
-    }
     /// Returns the peripheral.
     ///
-    /// The clock is left enabled and no reset is performed — a later `new()`
-    /// does both anyway.
+    /// The clock is left enabled and no reset is performed — a later
+    /// [`constrain`](TimerExt::constrain) does both anyway.
     pub fn release(self) -> TIMERX {
         self.timer
     }
@@ -696,15 +687,21 @@ impl<TIMERX: Instance> DelayNs for Delay<TIMERX> {
 
 /// Entry point on the raw peripheral, mirroring `GpioExt` and `DmaExt`.
 pub trait TimerExt: Sized {
-    /// Consumes the peripheral and returns it clocked, reset and stopped.
+    /// Clocks the peripheral, resets it, and records the clock feeding it.
     ///
-    /// Same thing [`Timer::new`] does, reached from the peripheral instead.
-    fn constrain(self, rcu: &mut Rcu, clocks: Clocks) -> Timer<Self>;
+    /// The counter is left stopped.
+    fn constrain(self, rcu: &mut Rcu) -> Timer<Self>;
 }
 
 impl<TIMERX: Instance> TimerExt for TIMERX {
-    fn constrain(self, rcu: &mut Rcu, clocks: Clocks) -> Timer<Self> {
-        Timer::new(rcu, self, clocks)
+    fn constrain(self, rcu: &mut Rcu) -> Timer<Self> {
+        let clocks = rcu.clocks();
+        TIMERX::enable(rcu);
+        TIMERX::reset(rcu);
+        Timer {
+            timer: self,
+            clk: TIMERX::clk(&clocks),
+        }
     }
 }
 

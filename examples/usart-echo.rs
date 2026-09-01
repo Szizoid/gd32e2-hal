@@ -21,25 +21,17 @@ use gd32e2_hal::usart::{Usart, UsartConfig};
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let clocks = ClockConfig::default()
-        .sysclk(SysClk::Pll(PllFreq::Mhz48))
-        .freeze(&mut rcu, &mut dp.fmc);
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
     let parts = dp.gpioa.split(&mut rcu);
     let mut pa6 = parts.pa6.into_output();
     pa6.set_high();
 
     let tx_pin = parts.pa9.into_alternate::<1>();
     let rx_pin = parts.pa10.into_alternate::<1>();
-    let mut usart0 = Usart::new(
-        &mut rcu,
-        dp.usart0,
-        tx_pin,
-        rx_pin,
-        &clocks,
-        UsartConfig::default(),
-    );
+    let mut usart0 = Usart::new(&mut rcu, dp.usart0, tx_pin, rx_pin, UsartConfig::default());
 
     defmt::info!("echo ready at 115200 8N1 on PA9/PA10");
 

@@ -7,8 +7,7 @@
 //! ```ignore
 //! let sda = parts.pb7.into_alternate_open_drain::<1>();
 //! let scl = parts.pb6.into_alternate_open_drain::<1>();
-//! let mut i2c = I2c::new(&mut rcu, dp.i2c0, sda, scl, &clocks,
-//!                        I2cMode::standard(100.kHz()));
+//! let mut i2c = I2c::new(&mut rcu, dp.i2c0, sda, scl, I2cMode::standard(100.kHz()));
 //! ```
 //!
 //! # Driving a transaction by hand
@@ -43,7 +42,7 @@ use embedded_hal::i2c::{ErrorKind, ErrorType, NoAcknowledgeSource, Operation};
 
 use crate::gpio::{Alternate, OpenDrain, Pin};
 use crate::pac;
-use crate::rcu::{Clocks, Enable, Rcu, Reset};
+use crate::rcu::{Enable, Rcu, Reset};
 use crate::time::Hertz;
 
 /// Smallest `CLKC` the hardware honours.
@@ -350,24 +349,18 @@ where
     ///
     /// The pins must already be open-drain in this I²C's alternate function; the
     /// bounds reject anything else at compile time. [`release`](Self::release)
-    /// hands them back. `clocks` supplies `pclk1`, which goes into `I2CCLK`.
+    /// hands them back. `I2CCLK` comes from `pclk1` in the frozen clocks.
     ///
     /// # Panics
     ///
     /// If `pclk1` is too slow for `mode` (2 / 8 / 24 MHz), or if `mode`'s
     /// frequency is unreachable from it.
-    pub fn new(
-        rcu: &mut Rcu,
-        i2c: I2CX,
-        sda_pin: SDA,
-        scl_pin: SCL,
-        clocks: &Clocks,
-        mode: I2cMode,
-    ) -> Self {
+    pub fn new(rcu: &mut Rcu, i2c: I2CX, sda_pin: SDA, scl_pin: SCL, mode: I2cMode) -> Self {
+        let pclk1 = rcu.clocks().pclk1();
         I2CX::enable(rcu);
         I2CX::reset(rcu);
 
-        apply_config(&i2c, mode, clocks.pclk1());
+        apply_config(&i2c, mode, pclk1);
         Self {
             i2c,
             sda_pin,

@@ -29,15 +29,15 @@
 //!
 //! # Getting started
 //!
-//! Clocks come first: [`rcu`] hands out a [`Clocks`](rcu::Clocks) value that the
-//! other modules need, and enables each peripheral's clock as it is constructed.
+//! Clocks come first: freezing the tree is what produces the [`Rcu`](rcu::Rcu)
+//! every other module takes, and it enables each peripheral's clock as that
+//! peripheral is constructed.
 //!
 //! ```ignore
-//! let mut dp = pac::Peripherals::take().unwrap();
-//! let mut rcu = dp.rcu.constrain();
-//! let clocks = ClockConfig::default()
-//!     .sysclk(SysClk::Pll(PllFreq::Mhz48))
-//!     .freeze(&mut rcu, &mut dp.fmc);
+//! let dp = pac::Peripherals::take().unwrap();
+//! let mut fmc = dp.fmc.constrain();
+//! let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
+//! let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
 //! let parts = dp.gpioa.split(&mut rcu);
 //! let mut led = parts.pa5.into_output();
 //! led.set_high().unwrap();
@@ -60,6 +60,7 @@ pub use gd32e2::gd32e230 as pac;
 pub mod adc;
 pub mod crc;
 pub mod dma;
+pub mod fmc;
 pub mod gpio;
 pub mod i2c;
 pub mod prelude;

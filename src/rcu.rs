@@ -1,16 +1,17 @@
 //! Reset and clock unit: the system clock tree and per-peripheral clock gating.
 //!
-//! Start with [`RcuExt::constrain`], build the clock tree with [`ClockConfig`], then
-//! freeze it into a [`Clocks`] value that the other modules take as an argument.
-//! Freezing writes the registers once; the resulting frequencies are read-only
-//! afterwards.
+//! [`RcuExt::constrain`] hands out an [`UnfrozenRcu`], whose only method applies a
+//! [`ClockConfig`] and turns it into the [`Rcu`] every driver takes. Freezing
+//! writes the registers once and consumes the unfrozen value, so the tree is
+//! configured exactly once and the resulting [`Clocks`] are read-only afterwards.
 //!
 //! ```ignore
-//! let mut rcu = dp.rcu.constrain();
-//! let clocks = ClockConfig::default()
+//! let mut fmc = dp.fmc.constrain();
+//! let config = ClockConfig::default()
 //!     .sysclk(SysClk::Pll(PllFreq::Mhz48))
-//!     .adc_sel(AdcSel::Prescaled(AdcPsc::Apb2Div8))
-//!     .freeze(&mut rcu, &mut dp.fmc);
+//!     .adc_sel(AdcSel::Prescaled(AdcPsc::Apb2Div8));
+//! let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
+//! let clocks = rcu.clocks();
 //! ```
 //!
 //! Peripheral clocks are gated through the [`Enable`] trait, which drivers call
@@ -19,6 +20,7 @@
 //!
 //! `HXTAL` and `LXTAL` are not started — no crystal is fitted on the target board.
 
+use crate::fmc::Fmc;
 use crate::pac;
 use crate::time::Hertz;
 
@@ -34,10 +36,6 @@ const ADCSEL_IRC28M: bool = false;
 const ADCSEL_PRESCALED: bool = true;
 const ADCPSC_MSB_APB2: bool = false;
 const ADCPSC_MSB_AHB: bool = true;
-
-const WS0_MAX_HCLK: u32 = 24_000_000;
-const WS1_MAX_HCLK: u32 = 48_000_000;
-const WS2_MAX_HCLK: u32 = 72_000_000;
 
 /// Target system clock produced by the PLL, in 4 MHz steps up to the 72 MHz limit.
 ///
@@ -70,7 +68,7 @@ pub enum PllFreq {
 /// Source of the system clock.
 ///
 /// [`Irc8m`](Self::Irc8m) means the reset state rather than a switch back to it:
-/// [`freeze`](ClockConfig::freeze) leaves `SCS` alone, because lowering the clock
+/// [`freeze`](UnfrozenRcu::freeze) leaves `SCS` alone, because lowering the clock
 /// after the flash wait states were already set for a higher one is exactly the
 /// order that must not happen.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -147,7 +145,7 @@ pub enum AdcSel {
     /// Left as the reset state: IRC28M selected but not running, so `CK_ADC` is
     /// 0 Hz and [`Clocks::ck_adc`] reads zero.
     Off,
-    /// The dedicated internal 28 MHz oscillator, which [`ClockConfig::freeze`] starts.
+    /// The dedicated internal 28 MHz oscillator, which [`UnfrozenRcu::freeze`] starts.
     Irc28m(Irc28mDiv),
     /// A prescaled tap off APB2 or AHB.
     Prescaled(AdcPsc),
@@ -171,7 +169,7 @@ pub enum Usart0Sel {
     Irc8m,
 }
 
-/// Frozen clock frequencies, produced by [`ClockConfig::freeze`].
+/// Frozen clock frequencies, produced by [`UnfrozenRcu::freeze`].
 ///
 /// Passed by value into the drivers that need it (USART for its baud divisor,
 /// ADC for its calibration delay). There are no setters — once frozen, the tree
@@ -230,7 +228,7 @@ impl Clocks {
     }
 }
 
-/// Builder for the clock tree, applied by [`freeze`](ClockConfig::freeze).
+/// Builder for the clock tree, applied by [`freeze`](UnfrozenRcu::freeze).
 ///
 /// [`Default`] holds the reset state in one place — undivided buses, IRC8M as the
 /// system clock, USART0 on APB2 and no ADC clock — and every field is written to
@@ -298,18 +296,29 @@ impl ClockConfig {
         self.adc_sel = sel;
         self
     }
+}
 
-    /// Applies the configuration and returns the resulting frequencies.
+/// The RCU before its clock tree is frozen, handed out by [`RcuExt::constrain`].
+///
+/// [`freeze`](Self::freeze) is the only thing it does, and it consumes this
+/// value — so the tree is configured exactly once, and every driver, which takes
+/// [`Rcu`], can only be built afterwards.
+pub struct UnfrozenRcu {
+    rcu: pac::Rcu,
+}
+
+impl UnfrozenRcu {
+    /// Applies `config` and hands back the RCU at the resulting frequencies.
     ///
     /// Flash wait states are raised from the new `hclk` *before* the system clock
     /// switches over, so the flash is never read faster than it can respond.
     /// `fmc` is taken because those wait states live in a separate peripheral.
-    pub fn freeze(self, rcu: &mut Rcu, fmc: &mut pac::Fmc) -> Clocks {
-        let sysclk = match self.sysclk {
+    pub fn freeze(self, fmc: &mut Fmc, config: ClockConfig) -> Rcu {
+        let sysclk = match config.sysclk {
             SysClk::Irc8m => IRC8M,
             SysClk::Pll(desired) => {
-                let mul = Self::pll_mul(desired);
-                rcu.rcu.cfg0().modify(|_, w| {
+                let mul = ClockConfig::pll_mul(desired);
+                self.rcu.cfg0().modify(|_, w| {
                     let w = w.pllsel().irc8m_2();
                     match mul {
                         2 => w.pllmf().mul2().pllmf_msb().none(),
@@ -332,39 +341,39 @@ impl ClockConfig {
                         _ => unreachable!(),
                     }
                 });
-                rcu.rcu.ctl0().modify(|_, w| w.pllen().on());
-                while rcu.rcu.ctl0().read().pllstb().is_not_ready() {}
+                self.rcu.ctl0().modify(|_, w| w.pllen().on());
+                while self.rcu.ctl0().read().pllstb().is_not_ready() {}
                 desired as u32
             }
         };
 
-        let ahb_psc = self.hclk;
+        let ahb_psc = config.hclk;
         let hclk = sysclk / (ahb_psc as u32);
-        let apb1_psc = self.pclk1;
+        let apb1_psc = config.pclk1;
         let pclk1 = hclk / (apb1_psc as u32);
-        let apb2_psc = self.pclk2;
+        let apb2_psc = config.pclk2;
         let pclk2 = hclk / (apb2_psc as u32);
 
-        let usart0_sel = self.usart0_sel;
+        let usart0_sel = config.usart0_sel;
         let usart0 = match usart0_sel {
             Usart0Sel::Apb2 => pclk2,
             Usart0Sel::Sysclk => sysclk,
             Usart0Sel::Lxtal => LXTAL,
             Usart0Sel::Irc8m => IRC8M,
         };
-        rcu.rcu.cfg2().modify(|_, w| match usart0_sel {
+        self.rcu.cfg2().modify(|_, w| match usart0_sel {
             Usart0Sel::Apb2 => w.usart0sel().apb2(),
             Usart0Sel::Sysclk => w.usart0sel().sys(),
             Usart0Sel::Lxtal => w.usart0sel().lxtal(),
             Usart0Sel::Irc8m => w.usart0sel().irc8m(),
         });
 
-        let ck_adc = match self.adc_sel {
+        let ck_adc = match config.adc_sel {
             AdcSel::Off => 0,
             AdcSel::Irc28m(div) => {
-                rcu.rcu.ctl1().modify(|_, w| w.irc28men().on());
-                while rcu.rcu.ctl1().read().irc28mstb().is_not_ready() {}
-                rcu.rcu.cfg2().modify(|_, w| {
+                self.rcu.ctl1().modify(|_, w| w.irc28men().on());
+                while self.rcu.ctl1().read().irc28mstb().is_not_ready() {}
+                self.rcu.cfg2().modify(|_, w| {
                     let w = match div {
                         Irc28mDiv::Div1 => w.irc28mdiv().bit(IRC28MDIV_DIV1),
                         Irc28mDiv::Div2 => w.irc28mdiv().bit(IRC28MDIV_DIV2),
@@ -378,13 +387,13 @@ impl ClockConfig {
             }
             AdcSel::Prescaled(psc) => {
                 // ADCPSC = 3-bit code split CFG0[15:14] + CFG2[31] (like PLLMF+MSB)
-                rcu.rcu.cfg0().modify(|_, w| match psc {
+                self.rcu.cfg0().modify(|_, w| match psc {
                     AdcPsc::Apb2Div2 | AdcPsc::AhbDiv3 => w.adcpsc().div2(),
                     AdcPsc::Apb2Div4 | AdcPsc::AhbDiv5 => w.adcpsc().div4(),
                     AdcPsc::Apb2Div6 | AdcPsc::AhbDiv7 => w.adcpsc().div6(),
                     AdcPsc::Apb2Div8 | AdcPsc::AhbDiv9 => w.adcpsc().div8(),
                 });
-                rcu.rcu.cfg2().modify(|_, w| {
+                self.rcu.cfg2().modify(|_, w| {
                     let w = match psc {
                         AdcPsc::Apb2Div2
                         | AdcPsc::Apb2Div4
@@ -409,19 +418,9 @@ impl ClockConfig {
             }
         };
 
-        fmc.ws().modify(|_, w| {
-            if hclk <= WS0_MAX_HCLK {
-                w.wscnt().ws0()
-            } else if hclk <= WS1_MAX_HCLK {
-                w.wscnt().ws1()
-            } else if hclk <= WS2_MAX_HCLK {
-                w.wscnt().ws2()
-            } else {
-                unreachable!()
-            }
-        });
+        fmc.set_ws(hclk);
 
-        rcu.rcu.cfg0().modify(|_, w| {
+        self.rcu.cfg0().modify(|_, w| {
             let w = match ahb_psc {
                 AhbPsc::Div1 => w.ahbpsc().div1(),
                 AhbPsc::Div2 => w.ahbpsc().div2(),
@@ -447,14 +446,14 @@ impl ClockConfig {
                 ApbPsc::Div8 => w.apb2psc().div8(),
                 ApbPsc::Div16 => w.apb2psc().div16(),
             };
-            match self.sysclk {
+            match config.sysclk {
                 SysClk::Pll(_) => w.scs().pll(),
                 // SCS is left alone: switching down after the wait states were
                 // set for a higher hclk would read the flash too fast.
                 SysClk::Irc8m => w,
             }
         });
-        Clocks {
+        let clocks = Clocks {
             hclk: Hertz::from_raw(hclk),
             pclk1: Hertz::from_raw(pclk1),
             pclk2: Hertz::from_raw(pclk2),
@@ -469,6 +468,10 @@ impl ClockConfig {
                 ApbPsc::Div1 => hclk,              // == pclk2
                 _ => hclk / (apb2_psc as u32 / 2), // == pclk2 * 2
             }),
+        };
+        Rcu {
+            rcu: self.rcu,
+            clocks,
         }
     }
 }
@@ -547,12 +550,22 @@ pub enum ResetFlag {
     OptionByteLoader,
 }
 
-/// Owns the RCU peripheral; obtained from [`RcuExt::constrain`].
+/// Owns the RCU peripheral with its clock tree already frozen; obtained from
+/// [`UnfrozenRcu::freeze`].
+///
+/// Every driver takes this type, so none of them can be built before the tree is
+/// configured — there is no other way to get one.
 pub struct Rcu {
     rcu: pac::Rcu,
+    clocks: Clocks,
 }
 
 impl Rcu {
+    /// The frequencies the tree was frozen at.
+    pub fn clocks(&self) -> Clocks {
+        self.clocks
+    }
+
     /// Routes an internal clock node out onto `PA8` (AF0) or `PA9` (AF5).
     ///
     /// The pin still has to be put into the matching alternate function. Applied
@@ -621,15 +634,16 @@ impl Rcu {
     }
 }
 
-/// Extension trait turning the raw RCU peripheral into the managed [`Rcu`].
+/// Extension trait turning the raw RCU peripheral into the managed [`UnfrozenRcu`].
 pub trait RcuExt {
-    /// Consumes the raw peripheral and returns the managed wrapper.
-    fn constrain(self) -> Rcu;
+    /// Consumes the raw peripheral and returns the managed wrapper, which
+    /// [`freeze`](UnfrozenRcu::freeze) turns into an [`Rcu`].
+    fn constrain(self) -> UnfrozenRcu;
 }
 
 impl RcuExt for pac::Rcu {
-    fn constrain(self) -> Rcu {
-        Rcu { rcu: self }
+    fn constrain(self) -> UnfrozenRcu {
+        UnfrozenRcu { rcu: self }
     }
 }
 

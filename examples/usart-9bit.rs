@@ -22,11 +22,10 @@ use gd32e2_hal::usart::{Oversampling, Usart, UsartConfig9};
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let clocks = ClockConfig::default()
-        .sysclk(SysClk::Pll(PllFreq::Mhz48))
-        .freeze(&mut rcu, &mut dp.fmc);
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
 
     let gpioa = dp.gpioa.split(&mut rcu);
     let tx = gpioa.pa9.into_alternate::<1>();
@@ -37,7 +36,7 @@ fn main() -> ! {
     let config = UsartConfig9::default()
         .baud(115_200.bps())
         .oversampling(Oversampling::X16);
-    let mut usart0 = Usart::new_word(&mut rcu, dp.usart0, tx, rx, &clocks, config);
+    let mut usart0 = Usart::new_word(&mut rcu, dp.usart0, tx, rx, config);
 
     defmt::info!("9-bit echo ready, waiting for a word on PA10");
 

@@ -3,14 +3,14 @@
 //! Single-channel blocking conversions, software triggered. The ADC needs its own
 //! clock, which is *not* started by default — call
 //! [`ClockConfig::adc_sel`](crate::rcu::ClockConfig::adc_sel) before constructing an [`Adc`],
-//! or [`Clocks::ck_adc`](crate::rcu::Clocks::ck_adc) is zero and [`Adc::new`]
-//! panics on the division rather than hanging in calibration.
+//! or [`Clocks::ck_adc`](crate::rcu::Clocks::ck_adc) is zero and
+//! [`constrain`](AdcExt::constrain) panics on the division rather than hanging
+//! in calibration.
 //!
 //! ```ignore
-//! let clocks = ClockConfig::default()
-//!     .adc_sel(AdcSel::Prescaled(AdcPsc::Apb2Div8))
-//!     .freeze(&mut rcu, &mut dp.fmc);
-//! let mut adc = Adc::new(&mut rcu, dp.adc, clocks);
+//! let config = ClockConfig::default().adc_sel(AdcSel::Prescaled(AdcPsc::Apb2Div8));
+//! let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
+//! let mut adc = dp.adc.constrain(&mut rcu);
 //! let pin = parts.pa0.into_analog();
 //! let raw = adc.read(&pin, SampTime::Cycles55_5);
 //! ```
@@ -106,31 +106,8 @@ pub struct Adc {
 }
 
 impl Adc {
-    /// Enables the peripheral, powers it up and runs the calibration sequence.
-    ///
-    /// Blocks until calibration completes.
-    ///
-    /// # Panics
-    ///
-    /// If the ADC clock was never selected — [`Clocks::ck_adc`](crate::rcu::Clocks::ck_adc)
-    /// is then zero and the calibration delay divides by it. Configure the clock
-    /// with [`ClockConfig::adc_sel`](crate::rcu::ClockConfig::adc_sel) first.
-    pub fn new(rcu: &mut Rcu, adc: pac::Adc, clocks: Clocks) -> Self {
-        <pac::Adc as Enable>::enable(rcu);
-        <pac::Adc as Reset>::reset(rcu);
-        adc.ctl1().modify(|_, w| w.adcon().enabled());
-        cortex_m::asm::delay(
-            (CALIBRATION_DELAY_CYCLES * clocks.hclk().to_Hz()).div_ceil(clocks.ck_adc().to_Hz()),
-        );
-        adc.ctl1().modify(|_, w| w.rstclb().start());
-        adc.ctl1().modify(|_, w| w.clb().start());
-        while adc.ctl1().read().clb().is_not_complete() {}
-        adc.ctl1()
-            .modify(|_, w| w.eterc().enabled().etsrc().swrcst());
-        Self { adc, clocks }
-    }
-    /// The clock is left enabled and no reset is performed — a later `new()`
-    /// does both anyway.
+    /// The clock is left enabled and no reset is performed — a later
+    /// [`constrain`](AdcExt::constrain) does both anyway.
     pub fn release(self) -> pac::Adc {
         self.adc
     }
@@ -282,14 +259,32 @@ impl Adc {
 
 /// Entry point on the raw peripheral, mirroring [`GpioExt`](crate::gpio::GpioExt).
 pub trait AdcExt {
-    /// Consumes the peripheral and returns it clocked, reset and calibrated.
+    /// Enables the peripheral, powers it up and runs the calibration sequence.
     ///
-    /// Same thing [`Adc::new`] does, reached from the peripheral instead.
-    fn constrain(self, rcu: &mut Rcu, clocks: Clocks) -> Adc;
+    /// Blocks until calibration completes.
+    ///
+    /// # Panics
+    ///
+    /// If the ADC clock was never selected — [`Clocks::ck_adc`](crate::rcu::Clocks::ck_adc)
+    /// is then zero and the calibration delay divides by it. Configure the clock
+    /// with [`ClockConfig::adc_sel`](crate::rcu::ClockConfig::adc_sel) first.
+    fn constrain(self, rcu: &mut Rcu) -> Adc;
 }
 
 impl AdcExt for pac::Adc {
-    fn constrain(self, rcu: &mut Rcu, clocks: Clocks) -> Adc {
-        Adc::new(rcu, self, clocks)
+    fn constrain(self, rcu: &mut Rcu) -> Adc {
+        let clocks = rcu.clocks();
+        <pac::Adc as Enable>::enable(rcu);
+        <pac::Adc as Reset>::reset(rcu);
+        self.ctl1().modify(|_, w| w.adcon().enabled());
+        cortex_m::asm::delay(
+            (CALIBRATION_DELAY_CYCLES * clocks.hclk().to_Hz()).div_ceil(clocks.ck_adc().to_Hz()),
+        );
+        self.ctl1().modify(|_, w| w.rstclb().start());
+        self.ctl1().modify(|_, w| w.clb().start());
+        while self.ctl1().read().clb().is_not_complete() {}
+        self.ctl1()
+            .modify(|_, w| w.eterc().enabled().etsrc().swrcst());
+        Adc { adc: self, clocks }
     }
 }

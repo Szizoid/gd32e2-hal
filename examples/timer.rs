@@ -30,15 +30,14 @@ const SAMPLE_GAP: MillisDuration = MillisDuration::from_millis(200);
 
 #[entry]
 fn main() -> ! {
-    let mut dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
-    let clocks = ClockConfig::default()
-        .sysclk(SysClk::Pll(PllFreq::Mhz48))
-        .freeze(&mut rcu, &mut dp.fmc);
+    let dp = pac::Peripherals::take().unwrap();
+    let mut fmc = dp.fmc.constrain();
+    let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
 
     let period: SecsDuration = 5u32.secs();
-    let mut timer = dp.timer5.constrain(&mut rcu, clocks).start_interval(period);
-    let mut delay = dp.timer13.constrain(&mut rcu, clocks).into_delay();
+    let mut timer = dp.timer5.constrain(&mut rcu).start_interval(period);
+    let mut delay = dp.timer13.constrain(&mut rcu).into_delay();
 
     let raw_period = period.as_secs();
     defmt::info!("TIMER5 started, rolling over every {} s", raw_period);

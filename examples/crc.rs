@@ -17,6 +17,7 @@ use panic_halt as _;
 use gd32e2_hal::crc::{Crc, CrcConfig, ReverseInput, ReverseOutput};
 use gd32e2_hal::pac;
 use gd32e2_hal::prelude::*;
+use gd32e2_hal::rcu::ClockConfig;
 
 /// The standard CRC-8/SMBUS check value for `CHECK_INPUT`.
 const EXPECTED: u8 = 0xF4;
@@ -26,7 +27,8 @@ const CHECK_INPUT: &[u8] = b"123456789";
 #[entry]
 fn main() -> ! {
     let dp = pac::Peripherals::take().unwrap();
-    let mut rcu = dp.rcu.constrain();
+    let mut fmc = dp.fmc.constrain();
+    let mut rcu = dp.rcu.constrain().freeze(&mut fmc, ClockConfig::default());
 
     let config = CrcConfig::new(ReverseInput::Disabled, ReverseOutput::Disabled);
     let mut crc = Crc::new_8bit(&mut rcu, dp.crc, 0x07, config);
