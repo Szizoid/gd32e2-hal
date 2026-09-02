@@ -1,14 +1,22 @@
 //! Flash memory controller.
 //!
-//! Only the flash wait states are covered, and they are not set from here: they
-//! have to be raised before the system clock speeds up, so
+//! The wait states are not set from here: they have to be raised before the
+//! system clock speeds up, so
 //! [`UnfrozenRcu::freeze`](crate::rcu::UnfrozenRcu::freeze) borrows this type and
-//! writes them itself. Programming and erasing are not implemented.
+//! writes them itself.
+//!
+//! Erasing and programming need `CTL` unlocked, which happens for the body of
+//! [`Fmc::with_unlocked`] and no longer. Option bytes are not covered.
 //!
 //! ```ignore
 //! let mut fmc = dp.fmc.constrain();
 //! let config = ClockConfig::default().sysclk(SysClk::Pll(PllFreq::Mhz48));
 //! let mut rcu = dp.rcu.constrain().freeze(&mut fmc, config);
+//!
+//! fmc.with_unlocked(|f| {
+//!     f.erase_page(Page::P63)?;
+//!     f.program(Page::P63, 0, 0xDEAD_BEEF)
+//! })?;
 //! ```
 
 use crate::pac;
@@ -20,6 +28,62 @@ const WS2_MAX_HCLK: u32 = 72_000_000;
 const UNLOCK_KEY1: u32 = 0x45670123;
 const UNLOCK_KEY2: u32 = 0xCDEF89AB;
 
+const BASE: u32 = 0x0800_0000;
+const PAGE_SIZE: u32 = 0x400;
+/// Bytes per programmed word, `PGW` being left at its reset width of 32 bits.
+const WORD_SIZE: u32 = 4;
+
+macro_rules! pages {
+    ($($n:literal),* $(,)?) => {
+        paste::paste! {
+            /// An erasable 1 KB page of the main flash.
+            ///
+            /// The discriminant is the address the page starts at, so it goes
+            /// into `ADDR` as it is. How many pages exist follows the flash of
+            /// the part being built for: 16, 32 or 64.
+            #[allow(missing_docs)]
+            #[derive(Clone, Copy, PartialEq, Eq)]
+            #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+            #[repr(u32)]
+            pub enum Page {
+                $([<P $n>] = BASE + $n * PAGE_SIZE),*
+            }
+        }
+    };
+}
+
+#[cfg(chip_x4)]
+#[rustfmt::skip]
+pages!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+
+#[cfg(chip_x6)]
+#[rustfmt::skip]
+pages!(
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+);
+
+#[cfg(chip_x8)]
+#[rustfmt::skip]
+pages!(
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+    32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+    48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
+);
+
+/// What an erase or a program operation failed on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Error {
+    /// The page is protected by the option bytes.
+    WriteProtected,
+    /// The address is not aligned to the programming width.
+    ProgramAlignment,
+    /// The cell was not erased before programming.
+    Program,
+}
+
 /// The flash controller with `CTL` unlocked, borrowed for the body of
 /// [`Fmc::with_unlocked`] and locked again when that call returns.
 pub struct UnlockedFmc<'a> {
@@ -30,6 +94,50 @@ impl<'a> UnlockedFmc<'a> {
     fn lock(self) {
         self.fmc.fmc.ctl().modify(|_, w| w.lk().lock());
     }
+
+    /// Erases one page, blocking until it is done.
+    ///
+    /// The whole page reads back as `0xFF`, so a page holding code or data still
+    /// in use has to be picked by the caller, not by us — nothing here checks
+    /// what is in it.
+    pub fn erase_page(&mut self, page: Page) -> Result<(), Error> {
+        self.fmc.fmc.ctl().modify(|_, w| w.per().page_erase());
+        self.fmc.fmc.addr().write(|w| w.addr().bits(page as u32));
+        self.fmc.fmc.ctl().modify(|_, w| w.start().start());
+        let result = self.fmc.wait_busy();
+        self.fmc.fmc.ctl().modify(|_, w| w.per().clear_bit());
+        result
+    }
+    /// Erases the whole main flash, blocking until it is done.
+    ///
+    /// That includes the code running the call, so this only makes sense from
+    /// SRAM or from a debugger.
+    pub fn mass_erase(&mut self) -> Result<(), Error> {
+        self.fmc.fmc.ctl().modify(|_, w| w.mer().mass_erase());
+        self.fmc.fmc.ctl().modify(|_, w| w.start().start());
+        let result = self.fmc.wait_busy();
+        self.fmc.fmc.ctl().modify(|_, w| w.mer().clear_bit());
+        result
+    }
+    /// Programs one 32-bit word, `index` counting words from the start of
+    /// `page`, and blocks until it is done.
+    ///
+    /// Programming only clears bits, so the word has to be erased first: writing
+    /// over anything but `0xFFFF_FFFF` returns [`Error::Program`].
+    pub fn program(&mut self, page: Page, index: u8, word: u32) -> Result<(), Error> {
+        self.fmc.fmc.ctl().modify(|_, w| w.pg().program());
+        let addr = page as u32 + index as u32 * WORD_SIZE;
+        // The write itself is the command: `PG` makes the FMC latch the address
+        // and the data off the bus, so there is no `ADDR` and no `START` here.
+        // The address is in the flash and a multiple of four by construction —
+        // `Page` gives the base and 256 words is exactly what `u8` counts.
+        unsafe {
+            core::ptr::write_volatile(addr as *mut u32, word);
+        };
+        let result = self.fmc.wait_busy();
+        self.fmc.fmc.ctl().modify(|_, w| w.pg().clear_bit());
+        result
+    }
 }
 
 /// Owns the flash memory controller.
@@ -38,6 +146,17 @@ pub struct Fmc {
 }
 
 impl Fmc {
+    /// Blocks until the running operation ends, then clears `ENDF` and reports
+    /// how it went.
+    fn wait_busy(&mut self) -> Result<(), Error> {
+        while self.fmc.stat().read().busy().is_active() {}
+        self.fmc.stat().write(|w| w.endf().clear());
+        match self.take_error() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     fn unlock(&mut self) -> UnlockedFmc<'_> {
         self.fmc.key().write(|w| w.key().bits(UNLOCK_KEY1));
         self.fmc.key().write(|w| w.key().bits(UNLOCK_KEY2));
@@ -76,6 +195,26 @@ impl Fmc {
                 unreachable!()
             }
         });
+    }
+
+    /// Returns the error the last operation ended with, clearing its flag.
+    ///
+    /// `ENDF` is left alone: it marks success and never stands together with an
+    /// error.
+    pub fn take_error(&mut self) -> Option<Error> {
+        let stat = self.fmc.stat().read();
+        if stat.wperr().is_error() {
+            self.fmc.stat().write(|w| w.wperr().clear());
+            Some(Error::WriteProtected)
+        } else if stat.pgaerr().bit_is_set() {
+            self.fmc.stat().write(|w| w.pgaerr().bit(true));
+            Some(Error::ProgramAlignment)
+        } else if stat.pgerr().is_error() {
+            self.fmc.stat().write(|w| w.pgerr().clear());
+            Some(Error::Program)
+        } else {
+            None
+        }
     }
 }
 

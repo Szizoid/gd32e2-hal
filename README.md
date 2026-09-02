@@ -114,9 +114,16 @@ twice the bus clock otherwise. Frequencies are `fugit` aliases from `src/time.rs
 (`Hertz`), re-exported. `HXTAL` is out of scope — no crystal on this board.
 
 **FMC** (`src/fmc.rs`) — `dp.fmc.constrain()` (`FmcExt`), no clock gating: the
-flash controller is always clocked. Owns the peripheral and covers the wait
-states only, which `UnfrozenRcu::freeze` writes through a borrow. Program and
-erase are not implemented.
+flash controller is always clocked. Owns the peripheral and the wait states,
+which `UnfrozenRcu::freeze` writes through a borrow. `with_unlocked(|f| ...)`
+unlocks `CTL` for the body of the call and locks it again; `UnlockedFmc` cannot
+outlive that call, so an unlocked flash is not expressible. It carries
+`erase_page(Page)`, `mass_erase()` and `program(Page, index, word)`. `Page` is an
+enum over the pages of the part being built for (16 / 32 / 64), its discriminant
+the page address; `index` counts the 256 words of one page, so an address outside
+the flash or off a word boundary cannot be formed. Errors come from `FMC_STAT`
+through `take_error`. Programming is 32-bit, `PGW` left at its reset value; there
+is no slice variant and option bytes are not covered. Not verified on hardware.
 
 **USART** (`src/usart.rs`) — `Usart<USARTX, TX, RX, WORD = Byte>` owns the
 peripheral and both pins. `TxPin` / `RxPin` markers (from `usart_pins!`) reject a
@@ -466,7 +473,7 @@ cargo build --release --no-default-features --features gd32e230x4
       and the second DMA channel map.
 - [ ] `PMU` — sleep / deep-sleep / standby, the wakeup pin, LDO. Waking needs
       `EXTI` first.
-- [ ] `FMC` program and erase, with `embedded-storage` on top.
+- [ ] `embedded-storage` (`ReadNorFlash` / `NorFlash`) over the FMC.
 - [ ] `RTC` — the calendar. Runs off IRC40K without a crystal, at IRC40K accuracy.
 - [ ] `CMP` — the analog comparator; its `CMP_OUT` is already in the AF map.
 
@@ -621,9 +628,16 @@ open-drain; `embedded-hal` 1.0 `OutputPin` / `InputPin` / `StatefulOutputPin`
 плате не запаян.
 
 **FMC** (`src/fmc.rs`) — `dp.fmc.constrain()` (`FmcExt`), без включения такта:
-контроллер флеша тактуется всегда. Владеет периферией, покрывает только wait
-states, которые пишет `UnfrozenRcu::freeze` по заимствованию. Запись и стирание
-не реализованы.
+контроллер флеша тактуется всегда. Владеет периферией и wait state'ами, которые
+пишет `UnfrozenRcu::freeze` по заимствованию. `with_unlocked(|f| ...)` снимает
+замок с `CTL` на тело вызова и ставит обратно; `UnlockedFmc` вызов не переживает,
+поэтому отпертый флеш в API не выражается. На нём — `erase_page(Page)`,
+`mass_erase()` и `program(Page, index, word)`. `Page` — enum по страницам того
+партномера, под который идёт сборка (16 / 32 / 64), дискриминант равен адресу
+страницы; `index` считает 256 слов страницы, поэтому адрес вне флеша или не по
+границе слова не собрать. Ошибки — из `FMC_STAT` через `take_error`.
+Программирование 32-битное, `PGW` остаётся в сбросовом значении; варианта по
+срезу нет, option bytes не покрыты. На железе не проверено.
 
 **USART** (`src/usart.rs`) — `Usart<USARTX, TX, RX, WORD = Byte>` владеет
 периферией и обоими пинами. Маркеры `TxPin` / `RxPin` (из `usart_pins!`)
@@ -965,7 +979,7 @@ cargo build --release --no-default-features --features gd32e230x4
       каналов DMA.
 - [ ] `PMU` — sleep / deep-sleep / standby, wakeup-нога, LDO. Пробуждение
       требует сначала `EXTI`.
-- [ ] Запись и стирание `FMC`, сверху `embedded-storage`.
+- [ ] `embedded-storage` (`ReadNorFlash` / `NorFlash`) поверх FMC.
 - [ ] `RTC` — календарь. Без кварца пойдёт от IRC40K, с его же точностью.
 - [ ] `CMP` — аналоговый компаратор; его `CMP_OUT` уже есть в карте AF.
 
