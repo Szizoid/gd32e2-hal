@@ -72,6 +72,16 @@ pages!(
     48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
 );
 
+/// An FMC event that can raise an interrupt.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Event {
+    /// An erase or a program operation finished (`ENDF`).
+    End,
+    /// An operation failed (`ERRIE`); which way is [`Fmc::take_error`].
+    Error,
+}
+
 /// What an erase or a program operation failed on.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -138,6 +148,26 @@ impl<'a> UnlockedFmc<'a> {
         self.fmc.fmc.ctl().modify(|_, w| w.pg().clear_bit());
         result
     }
+
+    /// Raises an interrupt on `event`, which still has to be unmasked in the
+    /// NVIC.
+    ///
+    /// `ENDIE` and `ERRIE` sit in `CTL`, which the lock covers whole, so this
+    /// can only be done from inside [`Fmc::with_unlocked`]. The interrupt itself
+    /// outlives the call: locking `CTL` again leaves both bits standing.
+    pub fn listen(&mut self, event: Event) {
+        self.fmc.fmc.ctl().modify(|_, w| match event {
+            Event::End => w.endie().enabled(),
+            Event::Error => w.errie().enabled(),
+        });
+    }
+    /// Stops `event` from raising an interrupt.
+    pub fn unlisten(&mut self, event: Event) {
+        self.fmc.fmc.ctl().modify(|_, w| match event {
+            Event::End => w.endie().disabled(),
+            Event::Error => w.errie().disabled(),
+        });
+    }
 }
 
 /// Owns the flash memory controller.
@@ -150,7 +180,7 @@ impl Fmc {
     /// how it went.
     fn wait_busy(&mut self) -> Result<(), Error> {
         while self.fmc.stat().read().busy().is_active() {}
-        self.fmc.stat().write(|w| w.endf().clear());
+        self.clear_interrupt(Event::End);
         match self.take_error() {
             Some(error) => Err(error),
             None => Ok(()),
@@ -215,6 +245,31 @@ impl Fmc {
         } else {
             None
         }
+    }
+
+    /// Whether `event` currently raises an interrupt.
+    ///
+    /// Reading `CTL` is not covered by the lock, so a handler can ask without
+    /// unlocking anything.
+    pub fn is_listening(&self, event: Event) -> bool {
+        let ctl = self.fmc.ctl().read();
+        match event {
+            Event::End => ctl.endie().is_enabled(),
+            Event::Error => ctl.errie().is_enabled(),
+        }
+    }
+
+    /// Clears the flag behind `event`, which is what stops it re-entering the
+    /// handler.
+    ///
+    /// For [`Event::Error`] this drops every error flag at once; use
+    /// [`take_error`](Self::take_error) instead to learn which one it was, it
+    /// clears the flag as well.
+    pub fn clear_interrupt(&mut self, event: Event) {
+        self.fmc.stat().write(|w| match event {
+            Event::End => w.endf().clear(),
+            Event::Error => w.wperr().clear().pgaerr().bit(true).pgerr().clear(),
+        });
     }
 }
 

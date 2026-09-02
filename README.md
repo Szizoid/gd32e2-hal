@@ -122,8 +122,11 @@ outlive that call, so an unlocked flash is not expressible. It carries
 enum over the pages of the part being built for (16 / 32 / 64), its discriminant
 the page address; `index` counts the 256 words of one page, so an address outside
 the flash or off a word boundary cannot be formed. Errors come from `FMC_STAT`
-through `take_error`. Programming is 32-bit, `PGW` left at its reset value; there
-is no slice variant and option bytes are not covered. Not verified on hardware.
+through `take_error`. `listen` / `unlisten` for `Event::End` and `Event::Error`
+are on `UnlockedFmc` as well — `ENDIE` and `ERRIE` sit in `CTL` — while
+`is_listening` and `clear_interrupt` are on `Fmc`, where a handler can reach
+them. Programming is 32-bit, `PGW` left at its reset value; there is no slice
+variant and option bytes are not covered.
 
 **USART** (`src/usart.rs`) — `Usart<USARTX, TX, RX, WORD = Byte>` owns the
 peripheral and both pins. `TxPin` / `RxPin` markers (from `usart_pins!`) reject a
@@ -636,8 +639,10 @@ open-drain; `embedded-hal` 1.0 `OutputPin` / `InputPin` / `StatefulOutputPin`
 партномера, под который идёт сборка (16 / 32 / 64), дискриминант равен адресу
 страницы; `index` считает 256 слов страницы, поэтому адрес вне флеша или не по
 границе слова не собрать. Ошибки — из `FMC_STAT` через `take_error`.
-Программирование 32-битное, `PGW` остаётся в сбросовом значении; варианта по
-срезу нет, option bytes не покрыты. На железе не проверено.
+`listen` / `unlisten` для `Event::End` и `Event::Error` — тоже на `UnlockedFmc`
+(`ENDIE` и `ERRIE` лежат в `CTL`), а `is_listening` и `clear_interrupt` — на
+`Fmc`, откуда до них дотянется обработчик. Программирование 32-битное, `PGW`
+остаётся в сбросовом значении; варианта по срезу нет, option bytes не покрыты.
 
 **USART** (`src/usart.rs`) — `Usart<USARTX, TX, RX, WORD = Byte>` владеет
 периферией и обоими пинами. Маркеры `TxPin` / `RxPin` (из `usart_pins!`)
