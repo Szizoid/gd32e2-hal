@@ -128,8 +128,14 @@ are on `UnlockedFmc` as well — `ENDIE` and `ERRIE` sit in `CTL` — while
 them. Read-only alongside them: `is_protected(Page)` (one `OB_WP` bit covers four
 pages, and it reads inverted), `protection_level`, `option_error`, `user_option`,
 `data_option`, `product_id_code`, plus `set_prefetch` / `is_prefetch_enabled`.
-Programming is 32-bit, `PGW` left at its reset value; there is no slice variant,
-and the option bytes are read but never written.
+Programming is 32-bit, `PGW` left at its reset value, and there is no slice
+variant. The option bytes go through `OptionBytes`, read whole with
+`read_option_bytes` and written whole with `write_option_bytes`, erasing them
+taking every byte at once; `reload_option_bytes` puts a written block in force
+and returns `!`, being a system reset. The protection level is set by
+`no_protection` / `protection_low` / `protection_high_forever` rather than by a
+field: the last one cannot be undone, and leaving `protection_low` mass-erases
+the flash. Only the data bytes have been exercised on hardware.
 
 **USART** (`src/usart.rs`) — `Usart<USARTX, TX, RX, WORD = Byte>` owns the
 peripheral and both pins. `TxPin` / `RxPin` markers (from `usart_pins!`) reject a
@@ -648,8 +654,14 @@ open-drain; `embedded-hal` 1.0 `OutputPin` / `InputPin` / `StatefulOutputPin`
 `is_protected(Page)` (один бит `OB_WP` покрывает четыре страницы и читается
 инверсно), `protection_level`, `option_error`, `user_option`, `data_option`,
 `product_id_code`, плюс `set_prefetch` / `is_prefetch_enabled`. Программирование
-32-битное, `PGW` остаётся в сбросовом значении; варианта по срезу нет, option
-bytes читаются, но не пишутся.
+32-битное, `PGW` остаётся в сбросовом значении, варианта по срезу нет. Option
+bytes идут через `OptionBytes`: читаются целиком (`read_option_bytes`) и
+пишутся целиком (`write_option_bytes`), потому что стирание берёт весь блок;
+`reload_option_bytes` вводит записанный блок в силу и возвращает `!` — это
+системный сброс. Уровень защиты ставится методами `no_protection` /
+`protection_low` / `protection_high_forever`, а не полем: последний необратим, а
+выход из `protection_low` стирает флеш целиком. На железе прогнаны только байты
+данных.
 
 **USART** (`src/usart.rs`) — `Usart<USARTX, TX, RX, WORD = Byte>` владеет
 периферией и обоими пинами. Маркеры `TxPin` / `RxPin` (из `usart_pins!`)

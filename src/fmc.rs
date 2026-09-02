@@ -6,7 +6,10 @@
 //! writes them itself.
 //!
 //! Erasing and programming need `CTL` unlocked, which happens for the body of
-//! [`Fmc::with_unlocked`] and no longer. Option bytes are not covered.
+//! [`Fmc::with_unlocked`] and no longer. The option bytes are covered too, as a
+//! block: [`OptionBytes`] is read, changed and written back whole, because
+//! erasing them takes every byte at once. A written block only takes effect on
+//! the next load, [`Fmc::reload_option_bytes`] or a power-up.
 //!
 //! ```ignore
 //! let mut fmc = dp.fmc.constrain();
@@ -34,6 +37,55 @@ const PAGE_SIZE: u32 = 0x400;
 const PAGES_PER_WP_BIT: u32 = 4;
 /// Bytes per programmed word, `PGW` being left at its reset width of 32 bits.
 const WORD_SIZE: u32 = 4;
+
+/// `OB_WP` with every group free, protection being active low.
+const WP_ALL_FREE: u32 = 0xFFFF_FFFF;
+/// Start of the option byte block (user manual, Table 2-3).
+const OB_BASE: u32 = 0x1FFF_F800;
+
+/// Bit positions inside `OB_USER` (user manual, Table 2-3). Bits 3 and 7 are
+/// reserved and are carried through untouched.
+const BIT_NWDG_SW: u8 = 0;
+const BIT_NRST_DPSLP: u8 = 1;
+const BIT_NRST_STDBY: u8 = 2;
+const BIT_BOOT1_N: u8 = 4;
+const BIT_VDDA_VISOR: u8 = 5;
+const BIT_SRAM_PARITY: u8 = 6;
+
+/// Packs two option bytes and their complements into one programmed word.
+///
+/// Every byte of the block is stored next to its inverse, which is what `OBERR`
+/// checks on load; the pair is written out here rather than left to the
+/// controller.
+fn ob_word(low: u8, high: u8) -> u32 {
+    let pair = |byte: u8| byte as u32 | ((!byte as u32) << 8);
+    pair(low) | (pair(high) << 16)
+}
+
+/// The `OB_WP` bit covering `page`, one bit standing for four pages.
+fn wp_bit(page: Page) -> u32 {
+    let number = (page as u32 - BASE) / PAGE_SIZE;
+    1 << (number / PAGES_PER_WP_BIT)
+}
+
+/// Whether an `OB_WP` mask protects the group holding `page`; a protected group
+/// reads 0.
+fn wp_protected(wp: u32, page: Page) -> bool {
+    wp & wp_bit(page) == 0
+}
+
+/// Reads one bit of `OB_USER`.
+fn user_bit(user: u8, bit: u8) -> bool {
+    user & (1 << bit) != 0
+}
+
+/// Returns `OB_USER` with one bit set to `on`, the rest untouched.
+fn set_user_bit(user: u8, bit: u8, on: bool) -> u8 {
+    match on {
+        true => user | (1 << bit),
+        false => user & !(1 << bit),
+    }
+}
 
 macro_rules! pages {
     ($($n:literal),* $(,)?) => {
@@ -110,6 +162,241 @@ pub enum ProtectionLevel {
     High,
 }
 
+impl ProtectionLevel {
+    /// The `OB_SPC` code standing for this level.
+    ///
+    /// A separate type rather than a discriminant of this one: the same level is
+    /// spelled one way in `OB_SPC` and another in the `PLEVEL` field this enum is
+    /// also read from.
+    fn spc(self) -> Spc {
+        match self {
+            ProtectionLevel::None => Spc::None,
+            ProtectionLevel::Low => Spc::Low,
+            ProtectionLevel::High => Spc::High,
+        }
+    }
+}
+
+/// The `OB_SPC` byte itself (user manual, Table 2-3), the discriminant being the
+/// code that goes into the option byte.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[repr(u8)]
+pub enum Spc {
+    /// No protection.
+    None = 0xA5,
+    /// Low protection. Every code other than the two named here means this one
+    /// as well, so reading the byte back can yield a different number.
+    Low = 0x00,
+    /// High protection, which cannot be undone.
+    High = 0xCC,
+}
+
+/// Which free watchdog the part starts with (`nWDG_SW`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum FreeWatchdog {
+    /// Started by hardware: the watchdog runs from reset and has to be fed from
+    /// the first instruction on.
+    Hardware,
+    /// Started by software, which is what
+    /// [`Fwdgt::start`](crate::watchdog::FwdgtRunning) expects.
+    Software,
+}
+
+/// What entering deep-sleep or standby does (`nRST_DPSLP`, `nRST_STDBY`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum LowPowerEntry {
+    /// The part resets instead of entering the mode.
+    Reset,
+    /// The part enters the mode.
+    Enter,
+}
+
+/// The level `BOOT1` is taken to have (`BOOT1_n`, stored inverted).
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Boot1 {
+    /// `BOOT1` reads as 0.
+    Low,
+    /// `BOOT1` reads as 1.
+    High,
+}
+
+/// Whether the supply monitor watches VDDA (`VDDA_VISOR`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum VddaMonitor {
+    /// Not watched.
+    Disabled,
+    /// Watched; the part is held in reset while VDDA is too low.
+    Enabled,
+}
+
+/// Whether the SRAM parity check is on (`SRAM_PARITY_CHECK`, stored inverted).
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum SramParity {
+    /// Not checked.
+    Disabled,
+    /// Checked.
+    Enabled,
+}
+
+/// The option byte block as a whole, read with
+/// [`Fmc::read_option_bytes`] and written back with
+/// [`UnlockedFmc::write_option_bytes`].
+///
+/// Writing goes through the whole block because erasing does: option bytes lose
+/// every byte at once, so a single field cannot be changed on its own. Read the
+/// block, change what you need, write it back.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct OptionBytes {
+    protection: ProtectionLevel,
+    user: u8,
+    data: u16,
+    wp: u32,
+}
+
+impl Default for OptionBytes {
+    /// The state the part leaves the factory in: no protection, and every other
+    /// byte erased.
+    fn default() -> Self {
+        Self {
+            protection: ProtectionLevel::None,
+            user: 0xFF,
+            data: 0xFFFF,
+            wp: WP_ALL_FREE,
+        }
+    }
+}
+
+impl OptionBytes {
+    /// Leaves the flash readable by a debugger.
+    pub fn no_protection(mut self) -> Self {
+        self.protection = ProtectionLevel::None;
+        self
+    }
+    /// Refuses debugger access. Going back to
+    /// [`no_protection`](Self::no_protection) later mass-erases the main flash.
+    pub fn protection_low(mut self) -> Self {
+        self.protection = ProtectionLevel::Low;
+        self
+    }
+    /// Refuses debugger access **for good**: after this the option bytes
+    /// themselves can no longer be erased or reprogrammed, so no later call can
+    /// undo it and the part keeps this setting for the rest of its life.
+    pub fn protection_high_forever(mut self) -> Self {
+        self.protection = ProtectionLevel::High;
+        self
+    }
+    /// Picks which free watchdog the part starts with.
+    pub fn free_watchdog(mut self, watchdog: FreeWatchdog) -> Self {
+        self.user = set_user_bit(self.user, BIT_NWDG_SW, watchdog == FreeWatchdog::Software);
+        self
+    }
+    /// Says what entering deep-sleep does.
+    pub fn deep_sleep(mut self, entry: LowPowerEntry) -> Self {
+        self.user = set_user_bit(self.user, BIT_NRST_DPSLP, entry == LowPowerEntry::Enter);
+        self
+    }
+    /// Says what entering standby does.
+    pub fn standby(mut self, entry: LowPowerEntry) -> Self {
+        self.user = set_user_bit(self.user, BIT_NRST_STDBY, entry == LowPowerEntry::Enter);
+        self
+    }
+    /// Sets the level `BOOT1` is taken to have.
+    pub fn boot1(mut self, boot1: Boot1) -> Self {
+        self.user = set_user_bit(self.user, BIT_BOOT1_N, boot1 == Boot1::Low);
+        self
+    }
+    /// Turns the VDDA monitor on or off.
+    pub fn vdda_monitor(mut self, monitor: VddaMonitor) -> Self {
+        self.user = set_user_bit(self.user, BIT_VDDA_VISOR, monitor == VddaMonitor::Enabled);
+        self
+    }
+    /// Turns the SRAM parity check on or off.
+    pub fn sram_parity(mut self, parity: SramParity) -> Self {
+        self.user = set_user_bit(self.user, BIT_SRAM_PARITY, parity == SramParity::Disabled);
+        self
+    }
+    /// Sets the two user data bytes, which the silicon never reads itself.
+    pub fn data(mut self, data: u16) -> Self {
+        self.data = data;
+        self
+    }
+    /// Closes `page` to erasing and programming.
+    ///
+    /// One `OB_WP` bit covers four pages, so this closes the three neighbours of
+    /// `page` along with it.
+    pub fn protect(mut self, page: Page) -> Self {
+        self.wp &= !wp_bit(page);
+        self
+    }
+    /// Opens `page`, and with it the three pages sharing its `OB_WP` bit.
+    pub fn unprotect(mut self, page: Page) -> Self {
+        self.wp |= wp_bit(page);
+        self
+    }
+
+    /// The protection level this block asks for.
+    pub fn protection(&self) -> ProtectionLevel {
+        self.protection
+    }
+    /// Which free watchdog the part starts with.
+    pub fn get_free_watchdog(&self) -> FreeWatchdog {
+        match user_bit(self.user, BIT_NWDG_SW) {
+            true => FreeWatchdog::Software,
+            false => FreeWatchdog::Hardware,
+        }
+    }
+    /// What entering deep-sleep does.
+    pub fn get_deep_sleep(&self) -> LowPowerEntry {
+        match user_bit(self.user, BIT_NRST_DPSLP) {
+            true => LowPowerEntry::Enter,
+            false => LowPowerEntry::Reset,
+        }
+    }
+    /// What entering standby does.
+    pub fn get_standby(&self) -> LowPowerEntry {
+        match user_bit(self.user, BIT_NRST_STDBY) {
+            true => LowPowerEntry::Enter,
+            false => LowPowerEntry::Reset,
+        }
+    }
+    /// The level `BOOT1` is taken to have.
+    pub fn get_boot1(&self) -> Boot1 {
+        match user_bit(self.user, BIT_BOOT1_N) {
+            true => Boot1::Low,
+            false => Boot1::High,
+        }
+    }
+    /// Whether the VDDA monitor is on.
+    pub fn get_vdda_monitor(&self) -> VddaMonitor {
+        match user_bit(self.user, BIT_VDDA_VISOR) {
+            true => VddaMonitor::Enabled,
+            false => VddaMonitor::Disabled,
+        }
+    }
+    /// Whether the SRAM parity check is on.
+    pub fn get_sram_parity(&self) -> SramParity {
+        match user_bit(self.user, BIT_SRAM_PARITY) {
+            true => SramParity::Disabled,
+            false => SramParity::Enabled,
+        }
+    }
+    /// The two user data bytes.
+    pub fn data_bytes(&self) -> u16 {
+        self.data
+    }
+    /// Whether this block closes `page` to erasing and programming.
+    pub fn is_protected(&self, page: Page) -> bool {
+        wp_protected(self.wp, page)
+    }
+}
+
 /// The flash controller with `CTL` unlocked, borrowed for the body of
 /// [`Fmc::with_unlocked`] and locked again when that call returns.
 pub struct UnlockedFmc<'a> {
@@ -162,6 +449,66 @@ impl<'a> UnlockedFmc<'a> {
         };
         let result = self.fmc.wait_busy();
         self.fmc.fmc.ctl().modify(|_, w| w.pg().clear_bit());
+        result
+    }
+
+    /// Erases the option byte block and programs `ob` in its place, blocking
+    /// until it is done.
+    ///
+    /// The whole block goes at once because erasing takes it all: read it with
+    /// [`Fmc::read_option_bytes`], change what you need, write it back.
+    ///
+    /// Nothing here takes effect until the option bytes are loaded again, by
+    /// [`Fmc::reload_option_bytes`] or by the next power-up.
+    pub fn write_option_bytes(&mut self, ob: &OptionBytes) -> Result<(), Error> {
+        // `OBER` and `OBPG` answer to a second lock of their own.
+        self.fmc.fmc.obkey().write(|w| w.obkey().bits(UNLOCK_KEY1));
+        self.fmc.fmc.obkey().write(|w| w.obkey().bits(UNLOCK_KEY2));
+        self.fmc.fmc.ctl().modify(|_, w| w.obwen().set_bit());
+        let result = self
+            .erase_option_bytes()
+            .and_then(|()| self.program_option_bytes(ob));
+        self.fmc.fmc.ctl().modify(|_, w| w.obwen().disable());
+        result
+    }
+    /// Erases the whole option byte block, every byte going back to `0xFF`.
+    fn erase_option_bytes(&mut self) -> Result<(), Error> {
+        self.fmc
+            .fmc
+            .ctl()
+            .modify(|_, w| w.ober().option_byte_erase());
+        self.fmc.fmc.ctl().modify(|_, w| w.start().start());
+        let result = self.fmc.wait_busy();
+        self.fmc.fmc.ctl().modify(|_, w| w.ober().clear_bit());
+        result
+    }
+    /// Programs the erased block, one word per pair of option bytes.
+    fn program_option_bytes(&mut self, ob: &OptionBytes) -> Result<(), Error> {
+        let data = ob.data.to_le_bytes();
+        let wp = ob.wp.to_le_bytes();
+        let words = [
+            ob_word(ob.protection.spc() as u8, ob.user),
+            ob_word(data[0], data[1]),
+            ob_word(wp[0], wp[1]),
+            ob_word(wp[2], wp[3]),
+        ];
+
+        self.fmc
+            .fmc
+            .ctl()
+            .modify(|_, w| w.obpg().option_byte_programming());
+        let mut result = Ok(());
+        for (index, word) in words.iter().enumerate() {
+            let addr = OB_BASE + index as u32 * WORD_SIZE;
+            // As in `program`, the write is the command. The address is a word
+            // of the option byte block, which the loop cannot leave.
+            unsafe { core::ptr::write_volatile(addr as *mut u32, *word) };
+            result = self.fmc.wait_busy();
+            if result.is_err() {
+                break;
+            }
+        }
+        self.fmc.fmc.ctl().modify(|_, w| w.obpg().clear_bit());
         result
     }
 
@@ -248,10 +595,7 @@ impl Fmc {
     /// This is what stands behind [`Error::WriteProtected`]. Protection comes in
     /// groups of four pages, so neighbours share the answer.
     pub fn is_protected(&self, page: Page) -> bool {
-        let number = (page as u32 - BASE) / PAGE_SIZE;
-        let wp_bit = number / PAGES_PER_WP_BIT;
-        // `OB_WP` reads 0 for a protected group and 1 for a free one.
-        self.fmc.wp().read().bits() & (1 << wp_bit) == 0
+        wp_protected(self.fmc.wp().read().bits(), page)
     }
     /// The security protection level the option bytes ask for.
     pub fn protection_level(&self) -> ProtectionLevel {
@@ -282,6 +626,33 @@ impl Fmc {
     /// The product ID code, fixed in silicon and read-only.
     pub fn product_id_code(&self) -> u32 {
         self.fmc.pid().read().pid().bits()
+    }
+
+    /// The option bytes as they were loaded at reset.
+    ///
+    /// This is the block to change and hand to
+    /// [`UnlockedFmc::write_option_bytes`]; it reads what is in force, so a
+    /// block written since the last reset is not what comes back.
+    pub fn read_option_bytes(&self) -> OptionBytes {
+        OptionBytes {
+            protection: self.protection_level(),
+            user: self.user_option(),
+            data: self.data_option(),
+            wp: self.fmc.wp().read().bits(),
+        }
+    }
+
+    /// Reloads the option bytes, which resets the part and therefore never
+    /// returns.
+    ///
+    /// This is how a written block takes effect without cycling the power.
+    /// `OBRLD` is the one bit of `CTL` the lock leaves writable, so no
+    /// unlocking is needed.
+    pub fn reload_option_bytes(&mut self) -> ! {
+        self.fmc.ctl().modify(|_, w| w.obrld().set_bit());
+        loop {
+            cortex_m::asm::nop();
+        }
     }
 
     /// Turns the prefetch buffer on or off; it comes up on after reset.
