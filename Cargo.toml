@@ -81,6 +81,9 @@ gd32e2 = { version = "0.9.1", features = ["gd32e230", "rt", "critical-section"] 
 # Integer-only time units: rates and durations as distinct kinds, with the
 # scale carried in the type. Replaces the newtypes `time` used to define.
 fugit = "0.4.0"
+# Pastes identifiers together, which macro_rules! cannot do on its own: the
+# flash page names (fmc.rs) are built from their numbers.
+paste = "1.0"
 
 # Needed only to link a runnable binary, i.e. examples/: the reset handler and
 # vector table, a #[panic_handler], and an impl for the critical-section that

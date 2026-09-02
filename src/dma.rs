@@ -89,9 +89,8 @@ pub(crate) trait ChannelOps {
 }
 
 macro_rules! channels {
-    ($($N:literal => $ctl:ident, $cnt:ident, $paddr:ident, $maddr:ident,
-                     $ftfif:ident, $errif:ident, $gifc:ident;)+) => {
-        $(
+    ($($N:literal),+ $(,)?) => {
+        paste::paste! { $(
             impl ChannelOps for Channel<$N> {
                 /// Writes the whole of `CHxCTL` in one go: direction, width,
                 /// priority, memory increment on, peripheral increment off, and
@@ -100,7 +99,7 @@ macro_rules! channels {
                 /// A `write`, not a `modify`, so leftover bits from an earlier use
                 /// reset to zero. Must run while `CHEN` is 0.
                 fn configure(&mut self, dir: Dir, width: Width, prio: Prio) {
-                    self.reg().$ctl().write(|w| {
+                    self.reg().[<ch $N ctl>]().write(|w| {
                         let w = w.pnaga()
                                  .fixed()
                                  .mnaga()
@@ -134,51 +133,45 @@ macro_rules! channels {
                 }
                 /// Points the channel at the peripheral data register.
                 fn set_paddr(&mut self, addr: u32) {
-                    self.reg().$paddr().write(|w| unsafe { w.bits(addr) });
+                    self.reg().[<ch $N paddr>]().write(|w| unsafe { w.bits(addr) });
                 }
                 /// Points the channel at the memory buffer.
                 fn set_maddr(&mut self, addr: u32) {
-                    self.reg().$maddr().write(|w| unsafe { w.bits(addr) });
+                    self.reg().[<ch $N maddr>]().write(|w| unsafe { w.bits(addr) });
                 }
                 /// Sets how many transfers the channel performs.
                 fn set_cnt(&mut self, cnt: u16) {
-                    self.reg().$cnt().write(|w| w.cnt().bits(cnt));
+                    self.reg().[<ch $N cnt>]().write(|w| w.cnt().bits(cnt));
                 }
                 /// Transfers still outstanding; counts down as the channel runs.
                 fn cnt(&self) -> u16 {
-                    self.reg().$cnt().read().cnt().bits()
+                    self.reg().[<ch $N cnt>]().read().cnt().bits()
                 }
                 /// Starts or stops the channel.
                 fn set_enabled(&mut self, enabled: bool) {
-                    self.reg().$ctl().modify(|_, w| w.chen().bit(enabled));
+                    self.reg().[<ch $N ctl>]().modify(|_, w| w.chen().bit(enabled));
                 }
                 /// Whether the channel has finished its last transfer.
                 fn is_complete(&self) -> bool {
-                    self.reg().intf().read().$ftfif().bit_is_set()
+                    self.reg().intf().read().[<ftfif $N>]().bit_is_set()
                 }
                 /// Whether the channel hit a bus error.
                 fn is_error(&self) -> bool {
-                    self.reg().intf().read().$errif().bit_is_set()
+                    self.reg().intf().read().[<errif $N>]().bit_is_set()
                 }
                 /// Clears every interrupt flag of this channel.
                 ///
                 /// `INTC` is write-one-to-clear, so zeroes leave the other
                 /// channels' bits alone. Never make this a `modify`.
                 fn clear_flags(&mut self) {
-                    self.reg().intc().write(|w| w.$gifc().set_bit());
+                    self.reg().intc().write(|w| w.[<gifc $N>]().set_bit());
                 }
             }
-        )+
+        )+ }
     };
 }
 
-channels! {
-    0 => ch0ctl, ch0cnt, ch0paddr, ch0maddr, ftfif0, errif0, gifc0;
-    1 => ch1ctl, ch1cnt, ch1paddr, ch1maddr, ftfif1, errif1, gifc1;
-    2 => ch2ctl, ch2cnt, ch2paddr, ch2maddr, ftfif2, errif2, gifc2;
-    3 => ch3ctl, ch3cnt, ch3paddr, ch3maddr, ftfif3, errif3, gifc3;
-    4 => ch4ctl, ch4cnt, ch4paddr, ch4maddr, ftfif4, errif4, gifc4;
-}
+channels!(0, 1, 2, 3, 4);
 
 /// A type usable as a DMA transfer unit, mapping to its [`Width`].
 ///

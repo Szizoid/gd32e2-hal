@@ -727,45 +727,43 @@ pub trait ChannelEnable<const C: u8>: Instance {
 }
 
 macro_rules! channel_enable {
-    {$($Timer:ty => [$(($Ch:expr, $chen:ident, $chie:ident, $chif:ident)$(,)?)+]$(,)?)+} => {
-        $($(impl ChannelEnable<$Ch> for $Timer {
+    {$($Timer:ty => [$($Ch:literal$(,)?)+]$(,)?)+} => {
+        paste::paste! { $($(impl ChannelEnable<$Ch> for $Timer {
             fn set_chxen(&mut self, on: bool) {
                 self.chctl2().modify(|_, w| match on {
-                    true => w.$chen().enabled(),
-                    false => w.$chen().disabled(),
+                    true => w.[<ch $Ch en>]().enabled(),
+                    false => w.[<ch $Ch en>]().disabled(),
                 })
             }
             fn set_chxie(&mut self, on: bool) {
-                self.dmainten().modify(|_, w| w.$chie().bit(on));
+                self.dmainten().modify(|_, w| w.[<ch $Ch ie>]().bit(on));
             }
             fn read_chxie(&self) -> bool {
-                self.dmainten().read().$chie().bit_is_set()
+                self.dmainten().read().[<ch $Ch ie>]().bit_is_set()
             }
             fn read_chxif(&self) -> bool {
-                self.intf().read().$chif().bit_is_set()
+                self.intf().read().[<ch $Ch if>]().bit_is_set()
             }
             // `INTF` is rc_w0, as for `UPIF`: `write` would clear the flags of
             // every other channel along with this one.
             fn clear_chxif(&mut self) {
-                self.intf().modify(|_, w| w.$chif().clear())
+                self.intf().modify(|_, w| w.[<ch $Ch if>]().clear())
             }
-        })+)+
+        })+)+ }
     };
 }
 
 channel_enable! {
-    pac::Timer0 => [(0, ch0en, ch0ie, ch0if), (1, ch1en, ch1ie, ch1if),
-        (2, ch2en, ch2ie, ch2if), (3, ch3en, ch3ie, ch3if)],
-    pac::Timer2 => [(0, ch0en, ch0ie, ch0if), (1, ch1en, ch1ie, ch1if),
-        (2, ch2en, ch2ie, ch2if), (3, ch3en, ch3ie, ch3if)],
-    pac::Timer13 => [(0, ch0en, ch0ie, ch0if)],
-    pac::Timer15 => [(0, ch0en, ch0ie, ch0if)],
-    pac::Timer16 => [(0, ch0en, ch0ie, ch0if)]
+    pac::Timer0 => [0, 1, 2, 3],
+    pac::Timer2 => [0, 1, 2, 3],
+    pac::Timer13 => [0],
+    pac::Timer15 => [0],
+    pac::Timer16 => [0]
 }
 
 #[cfg(has_timer14)]
 channel_enable! {
-    pac::Timer14 => [(0, ch0en, ch0ie, ch0if), (1, ch1en, ch1ie, ch1if)]
+    pac::Timer14 => [0, 1]
 }
 
 /// Register operations on compare channel `C` of a timer.
@@ -788,47 +786,44 @@ pub trait PwmOps<const C: u8>: ChannelEnable<C> {
 macro_rules! pwm {
     {$($Timer:ty => [
         $(
-            ($Ch:expr, ($chctl_reg:ident, $chms:ident, $chcomctl:ident, $chcomsen:ident), ($chcv:ident, $chval:ident), $chp:ident)$(,)?
+            ($Ch:literal, $chctl_reg:ident)$(,)?
         )+]$(,)?)+
     } => {
-        $($(impl PwmOps<$Ch> for $Timer {
+        paste::paste! { $($(impl PwmOps<$Ch> for $Timer {
             fn apply_pwm_mode(&mut self) {
-                self.chctl2().modify(|_, w| w.$chp().not_inverted());
+                self.chctl2().modify(|_, w| w.[<ch $Ch p>]().not_inverted());
                 self.$chctl_reg().modify(|_, w| {
-                    w.$chms()
+                    w.[<ch $Ch ms>]()
                         .output()
-                        .$chcomctl()
+                        .[<ch $Ch comctl>]()
                         .pwm_mode0()
-                        .$chcomsen()
+                        .[<ch $Ch comsen>]()
                         .enabled()
                 });
             }
             #[allow(unused_unsafe)]
             fn set_chxcv(&mut self, cv: u16) {
-                self.$chcv().write(|w| unsafe { w.$chval().bits(cv) });
+                self.[<ch $Ch cv>]().write(|w| unsafe { w.[<ch $Ch val>]().bits(cv) });
             }
-        })+)+
+        })+)+ }
     };
 }
 
+// Channels 0 and 1 live in `CHCTL0`, 2 and 3 in `CHCTL1`, which is the one name
+// that does not follow from the channel number.
 pwm! {
-    pac::Timer0 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0p),
-        (1, (chctl0_output, ch1ms, ch1comctl, ch1comsen), (ch1cv, ch1val), ch1p),
-        (2, (chctl1_output, ch2ms, ch2comctl, ch2comsen), (ch2cv, ch2val), ch2p),
-        (3, (chctl1_output, ch3ms, ch3comctl, ch3comsen), (ch3cv, ch3val), ch3p)],
-    pac::Timer2 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0p),
-        (1, (chctl0_output, ch1ms, ch1comctl, ch1comsen), (ch1cv, ch1val), ch1p),
-        (2, (chctl1_output, ch2ms, ch2comctl, ch2comsen), (ch2cv, ch2val), ch2p),
-        (3, (chctl1_output, ch3ms, ch3comctl, ch3comsen), (ch3cv, ch3val), ch3p)],
-    pac::Timer13 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0p)],
-    pac::Timer15 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0p)],
-    pac::Timer16 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0p)]
+    pac::Timer0 => [(0, chctl0_output), (1, chctl0_output),
+        (2, chctl1_output), (3, chctl1_output)],
+    pac::Timer2 => [(0, chctl0_output), (1, chctl0_output),
+        (2, chctl1_output), (3, chctl1_output)],
+    pac::Timer13 => [(0, chctl0_output)],
+    pac::Timer15 => [(0, chctl0_output)],
+    pac::Timer16 => [(0, chctl0_output)]
 }
 
 #[cfg(has_timer14)]
 pwm! {
-    pac::Timer14 => [(0, (chctl0_output, ch0ms, ch0comctl, ch0comsen), (ch0cv, ch0val), ch0p),
-        (1, (chctl0_output, ch1ms, ch1comctl, ch1comsen), (ch1cv, ch1val), ch1p)]
+    pac::Timer14 => [(0, chctl0_output), (1, chctl0_output)]
 }
 
 /// The output switch shared by every channel of a timer that has one.
@@ -1184,58 +1179,57 @@ pub trait CaptureOps<const C: u8>: ChannelEnable<C> {
 macro_rules! capture {
     {$($Timer:ty => [
         $(
-            ($Ch:expr, ($chctl_reg:ident, $chms:ident, $ci:ident, $capflt:ident, $cappsc:ident), ($chcv:ident, $chval:ident), ($chp:ident $(, $chnp:ident)?), $chof:ident$(,)?)$(,)?
+            ($Ch:literal, $chctl_reg:ident $(, $chnp:ident)?)$(,)?
         )+]$(,)?)+
     } => {
-        $($(impl CaptureOps<$Ch> for $Timer {
+        paste::paste! { $($(impl CaptureOps<$Ch> for $Timer {
             fn apply_capture_mode(&mut self) {
                 // `CHxNP` exists only on channels with a complementary output;
                 // channel 3 has neither.
                 $(self.chctl2().modify(|_, w| w.$chnp().not_inverted());)?
+                // `ci0` is the channel's own input on every channel — the PAC
+                // names the variants relative to the channel, not by line number.
                 self.$chctl_reg().modify(|_, w| {
-                    w.$chms()
-                        .$ci()
-                        .$capflt()
+                    w.[<ch $Ch ms>]()
+                        .ci0()
+                        .[<ch $Ch capflt>]()
                         .no_filter()
-                        .$cappsc()
+                        .[<ch $Ch cappsc>]()
                         .div1()
                 })
             }
             fn select_edge(&mut self, edge: Edge) {
                 self.chctl2().modify(|_, w| match edge {
-                    Edge::Rising => w.$chp().not_inverted(),
-                    Edge::Falling => w.$chp().inverted()
+                    Edge::Rising => w.[<ch $Ch p>]().not_inverted(),
+                    Edge::Falling => w.[<ch $Ch p>]().inverted()
                 })
             }
             fn read_chxcv(&self) -> u16 {
-                self.$chcv().read().$chval().bits()
+                self.[<ch $Ch cv>]().read().[<ch $Ch val>]().bits()
             }
             fn read_chxof(&self) -> bool {
-                self.intf().read().$chof().bit_is_set()
+                self.intf().read().[<ch $Ch of>]().bit_is_set()
             }
             fn clear_chxof(&mut self) {
-                self.intf().modify(|_, w| w.$chof().clear())
+                self.intf().modify(|_, w| w.[<ch $Ch of>]().clear())
             }
-        })+)+
+        })+)+ }
     };
 }
 
+// As in `pwm!`, the `CHCTL0`/`CHCTL1` split is the one name the channel number
+// does not give. `CHxNP` is passed where the channel has one; channel 3 does not.
 capture! {
-    pac::Timer0 => [(0, (chctl0_input, ch0ms, ci0, ch0capflt, ch0cappsc), (ch0cv, ch0val), (ch0p, ch0np), ch0of),
-        (1, (chctl0_input, ch1ms, ci0, ch1capflt, ch1cappsc), (ch1cv, ch1val), (ch1p, ch1np), ch1of),
-        (2, (chctl1_input, ch2ms, ci0, ch2capflt, ch2cappsc), (ch2cv, ch2val), (ch2p, ch2np), ch2of),
-        (3, (chctl1_input, ch3ms, ci0, ch3capflt, ch3cappsc), (ch3cv, ch3val), (ch3p), ch3of)],
-    pac::Timer2 => [(0, (chctl0_input, ch0ms, ci0, ch0capflt, ch0cappsc), (ch0cv, ch0val), (ch0p, ch0np), ch0of),
-        (1, (chctl0_input, ch1ms, ci0, ch1capflt, ch1cappsc), (ch1cv, ch1val), (ch1p, ch1np), ch1of),
-        (2, (chctl1_input, ch2ms, ci0, ch2capflt, ch2cappsc), (ch2cv, ch2val), (ch2p, ch2np), ch2of),
-        (3, (chctl1_input, ch3ms, ci0, ch3capflt, ch3cappsc), (ch3cv, ch3val), (ch3p), ch3of)],
-    pac::Timer13 => [(0, (chctl0_input, ch0ms, ci0, ch0capflt, ch0cappsc), (ch0cv, ch0val), (ch0p, ch0np), ch0of)],
-    pac::Timer15 => [(0, (chctl0_input, ch0ms, ci0, ch0capflt, ch0cappsc), (ch0cv, ch0val), (ch0p, ch0np), ch0of)],
-    pac::Timer16 => [(0, (chctl0_input, ch0ms, ci0, ch0capflt, ch0cappsc), (ch0cv, ch0val), (ch0p, ch0np), ch0of)]
+    pac::Timer0 => [(0, chctl0_input, ch0np), (1, chctl0_input, ch1np),
+        (2, chctl1_input, ch2np), (3, chctl1_input)],
+    pac::Timer2 => [(0, chctl0_input, ch0np), (1, chctl0_input, ch1np),
+        (2, chctl1_input, ch2np), (3, chctl1_input)],
+    pac::Timer13 => [(0, chctl0_input, ch0np)],
+    pac::Timer15 => [(0, chctl0_input, ch0np)],
+    pac::Timer16 => [(0, chctl0_input, ch0np)]
 }
 
 #[cfg(has_timer14)]
 capture! {
-    pac::Timer14 => [(0, (chctl0_input, ch0ms, ci0, ch0capflt, ch0cappsc), (ch0cv, ch0val), (ch0p, ch0np), ch0of),
-        (1, (chctl0_input, ch1ms, ci0, ch1capflt, ch1cappsc), (ch1cv, ch1val), (ch1p, ch1np), ch1of)]
+    pac::Timer14 => [(0, chctl0_input, ch0np), (1, chctl0_input, ch1np)]
 }
