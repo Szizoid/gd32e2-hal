@@ -125,8 +125,11 @@ the flash or off a word boundary cannot be formed. Errors come from `FMC_STAT`
 through `take_error`. `listen` / `unlisten` for `Event::End` and `Event::Error`
 are on `UnlockedFmc` as well — `ENDIE` and `ERRIE` sit in `CTL` — while
 `is_listening` and `clear_interrupt` are on `Fmc`, where a handler can reach
-them. Programming is 32-bit, `PGW` left at its reset value; there is no slice
-variant and option bytes are not covered.
+them. Read-only alongside them: `is_protected(Page)` (one `OB_WP` bit covers four
+pages, and it reads inverted), `protection_level`, `option_error`, `user_option`,
+`data_option`, `product_id_code`, plus `set_prefetch` / `is_prefetch_enabled`.
+Programming is 32-bit, `PGW` left at its reset value; there is no slice variant,
+and the option bytes are read but never written.
 
 **USART** (`src/usart.rs`) — `Usart<USARTX, TX, RX, WORD = Byte>` owns the
 peripheral and both pins. `TxPin` / `RxPin` markers (from `usart_pins!`) reject a
@@ -641,8 +644,12 @@ open-drain; `embedded-hal` 1.0 `OutputPin` / `InputPin` / `StatefulOutputPin`
 границе слова не собрать. Ошибки — из `FMC_STAT` через `take_error`.
 `listen` / `unlisten` для `Event::End` и `Event::Error` — тоже на `UnlockedFmc`
 (`ENDIE` и `ERRIE` лежат в `CTL`), а `is_listening` и `clear_interrupt` — на
-`Fmc`, откуда до них дотянется обработчик. Программирование 32-битное, `PGW`
-остаётся в сбросовом значении; варианта по срезу нет, option bytes не покрыты.
+`Fmc`, откуда до них дотянется обработчик. Рядом только на чтение:
+`is_protected(Page)` (один бит `OB_WP` покрывает четыре страницы и читается
+инверсно), `protection_level`, `option_error`, `user_option`, `data_option`,
+`product_id_code`, плюс `set_prefetch` / `is_prefetch_enabled`. Программирование
+32-битное, `PGW` остаётся в сбросовом значении; варианта по срезу нет, option
+bytes читаются, но не пишутся.
 
 **USART** (`src/usart.rs`) — `Usart<USARTX, TX, RX, WORD = Byte>` владеет
 периферией и обоими пинами. Маркеры `TxPin` / `RxPin` (из `usart_pins!`)

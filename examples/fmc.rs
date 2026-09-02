@@ -6,12 +6,15 @@
 //!
 //! Erase and program share one `with_unlocked`, showing that the closure body
 //! takes a whole sequence rather than a single call. Reads go through plain
-//! pointers: the flash is memory-mapped and readable without unlocking anything. The last step programs a word twice without
-//! erasing in between, which the silicon must refuse with
+//! pointers: the flash is memory-mapped and readable without unlocking
+//! anything. The last step programs a word twice without erasing in between,
+//! which the silicon must refuse with
 //! [`Error::Program`](gd32e2_hal::fmc::Error::Program) — bits only ever go from
 //! one to zero.
 //!
-//! Covers: `with_unlocked`, `erase_page`, `program`, `take_error`.
+//! Covers: `with_unlocked`, `erase_page`, `program`, `take_error`, and the
+//! read-only side — `product_id_code`, `protection_level`, `option_error`,
+//! `user_option`, `data_option`, `is_protected`, `is_prefetch_enabled`.
 
 #![no_std]
 #![no_main]
@@ -47,8 +50,24 @@ fn main() -> ! {
     let _rcu = dp.rcu.constrain().freeze(&mut fmc, ClockConfig::default());
 
     defmt::info!(
-        "page at {:#010x}, before: {:#010x}",
+        "product id {:#010x}, prefetch {}",
+        fmc.product_id_code(),
+        fmc.is_prefetch_enabled()
+    );
+    defmt::info!(
+        "protection {}, option error {}, user {:#04x}, data {:#06x}",
+        fmc.protection_level(),
+        fmc.option_error(),
+        fmc.user_option(),
+        fmc.data_option()
+    );
+
+    // The erase below only works because this page is not write-protected; that
+    // is the state behind Error::WriteProtected.
+    defmt::info!(
+        "page at {:#010x}, protected {}, before: {:#010x}",
         PAGE as u32,
+        fmc.is_protected(PAGE),
         read_word(0)
     );
 

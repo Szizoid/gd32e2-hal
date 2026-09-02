@@ -30,6 +30,8 @@ const UNLOCK_KEY2: u32 = 0xCDEF89AB;
 
 const BASE: u32 = 0x0800_0000;
 const PAGE_SIZE: u32 = 0x400;
+/// Pages covered by one `OB_WP` bit (user manual, Table 2-4).
+const PAGES_PER_WP_BIT: u32 = 4;
 /// Bytes per programmed word, `PGW` being left at its reset width of 32 bits.
 const WORD_SIZE: u32 = 4;
 
@@ -92,6 +94,20 @@ pub enum Error {
     ProgramAlignment,
     /// The cell was not erased before programming.
     Program,
+}
+
+/// How far the option bytes lock the flash against being read out.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ProtectionLevel {
+    /// No protection: the debugger reads and writes the flash freely.
+    None,
+    /// Debugger access is refused. Leaving this level mass-erases the main
+    /// flash, so the contents cannot be recovered by lowering it.
+    Low,
+    /// As `Low`, and the option bytes themselves can no longer be erased or
+    /// reprogrammed — the part stays this way for good.
+    High,
 }
 
 /// The flash controller with `CTL` unlocked, borrowed for the body of
@@ -225,6 +241,59 @@ impl Fmc {
                 unreachable!()
             }
         });
+    }
+
+    /// Whether the option bytes protect `page` from being erased or programmed.
+    ///
+    /// This is what stands behind [`Error::WriteProtected`]. Protection comes in
+    /// groups of four pages, so neighbours share the answer.
+    pub fn is_protected(&self, page: Page) -> bool {
+        let number = (page as u32 - BASE) / PAGE_SIZE;
+        let wp_bit = number / PAGES_PER_WP_BIT;
+        // `OB_WP` reads 0 for a protected group and 1 for a free one.
+        self.fmc.wp().read().bits() & (1 << wp_bit) == 0
+    }
+    /// The security protection level the option bytes ask for.
+    pub fn protection_level(&self) -> ProtectionLevel {
+        let plevel = self.fmc.obstat().read().plevel();
+        if plevel.is_none() {
+            ProtectionLevel::None
+        } else if plevel.is_low() {
+            ProtectionLevel::Low
+        } else {
+            ProtectionLevel::High
+        }
+    }
+    /// Whether the option bytes failed their checksum, in which case the
+    /// defaults were loaded instead of them.
+    pub fn option_error(&self) -> bool {
+        self.fmc.obstat().read().oberr().is_error()
+    }
+    /// The user option byte, raw: this HAL does not write the option bytes, so
+    /// its bits are left to the caller to read against the manual.
+    pub fn user_option(&self) -> u8 {
+        self.fmc.obstat().read().ob_user().bits()
+    }
+    /// The two user data bytes of the option block, raw — the silicon attaches
+    /// no meaning to them.
+    pub fn data_option(&self) -> u16 {
+        self.fmc.obstat().read().ob_data().bits()
+    }
+    /// The product ID code, fixed in silicon and read-only.
+    pub fn product_id_code(&self) -> u32 {
+        self.fmc.pid().read().pid().bits()
+    }
+
+    /// Turns the prefetch buffer on or off; it comes up on after reset.
+    ///
+    /// Off, every fetch waits out the wait states of its own, which is slower on
+    /// average but takes the buffer out of the timing.
+    pub fn set_prefetch(&mut self, on: bool) {
+        self.fmc.ws().modify(|_, w| w.pfen().bit(on));
+    }
+    /// Whether the prefetch buffer is on.
+    pub fn is_prefetch_enabled(&self) -> bool {
+        self.fmc.ws().read().pfen().bit_is_set()
     }
 
     /// Returns the error the last operation ended with, clearing its flag.
