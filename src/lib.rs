@@ -58,6 +58,7 @@ compile_error!("select a chip: enable exactly one of the `gd32e230*` features");
 pub use gd32e2::gd32e230 as pac;
 
 pub mod adc;
+pub mod cmp;
 pub mod crc;
 pub mod dma;
 pub mod fmc;

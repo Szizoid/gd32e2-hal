@@ -609,6 +609,34 @@ impl Rcu {
         self.rcu.rstsck().modify(|_, w| w.irc40ken().on());
         while self.rcu.rstsck().read().irc40kstb().is_not_ready() {}
     }
+    /// Stops the internal 40 kHz oscillator.
+    ///
+    /// FWDGT and the RTC run off it; both stop with it.
+    pub fn disable_irc40k(&mut self) {
+        self.rcu.rstsck().modify(|_, w| w.irc40ken().off());
+    }
+
+    /// Clocks SYSCFG and the comparator.
+    ///
+    /// `CFGCMPEN` gates both blocks at once, so this is not [`Enable`]: naming the
+    /// pair is the only warning that the peripheral next door goes with it.
+    pub fn enable_cfgcmp(&mut self) {
+        self.rcu.apb2en().modify(|_, w| w.cfgcmpen().enabled());
+    }
+    /// Stops the clock of SYSCFG and the comparator.
+    ///
+    /// One bit gates both blocks: SYSCFG stops too.
+    pub fn disable_cfgcmp(&mut self) {
+        self.rcu.apb2en().modify(|_, w| w.cfgcmpen().disabled());
+    }
+    /// Pulses the reset line of SYSCFG and the comparator.
+    ///
+    /// One bit resets both blocks: the EXTI source selection and the remaps in
+    /// SYSCFG return to their defaults too.
+    pub fn reset_cfgcmp(&mut self) {
+        self.rcu.apb2rst().modify(|_, w| w.cfgcmprst().reset());
+        self.rcu.apb2rst().modify(|_, w| w.cfgcmprst().clear_bit());
+    }
 
     /// Whether `flag` took part in the last reset.
     ///

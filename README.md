@@ -202,6 +202,19 @@ early-wakeup interrupt has no `unlisten`, and the flag re-arms while the counter
 sits at `0x40`. `FWDGT_HOLD`/`WWDGT_HOLD` are in the DBG block, which is not
 implemented, so both keep counting while a debugger holds the core.
 
+**CMP** (`src/cmp.rs`) — the whole block, one comparator in one register.
+`Cmp::new(rcu, cmp, pos, inv, config)` takes both inputs by value, each only in
+`Analog`: `InvertingInput` is implemented for the four `VREFINT` taps (0.3 / 0.6
+/ 0.9 / 1.2 V) and for `PA4`, `PA5`, `PA0`, `PA2`; `NonInvertingInput` for `PA1`
+alone or for the `(PA1, PA4)` pair, which is what closes `CMPSW` — owning `PA4`
+there keeps it from also being the inverting input. `CmpConfig` carries speed,
+hysteresis, output routing and polarity. `enable` goes to `CmpRunning`, whose
+`output()` is read before the polarity multiplexer, so `Polarity` shows only on
+the pin, EXTI and the timer. `lock` freezes the register until the next system
+reset and leaves a type with no `disable` and no `release`. The clock is shared
+with SYSCFG (`CFGCMPEN`), so `release` leaves it on. EXTI is not implemented, so
+the comparator cannot raise an interrupt yet.
+
 **Prelude** (`src/prelude.rs`) — split per peripheral (`prelude::gpio`, `::rcu`,
 `::dma`, `::fmc`, `::adc`, `::spi`, `::i2c`, `::timer`, `::watchdog`, `::time`,
 `::usart`). `usart` has `io` and `nb` for the two serial flavours — one or the
@@ -306,7 +319,6 @@ Firmware that resets the board on purpose — the watchdogs, `reload_option_byte
       `EXTI` first.
 - [ ] `embedded-storage` (`ReadNorFlash` / `NorFlash`) over the FMC.
 - [ ] `RTC` — the calendar. Runs off IRC40K without a crystal, at IRC40K accuracy.
-- [ ] `CMP` — the analog comparator; its `CMP_OUT` is already in the AF map.
 
 **Finishing what is there**
 
@@ -544,6 +556,19 @@ I²C target на 50 кГц; fast и fast plus, прерывания и пере�
 пока счётчик стоит на `0x40`. `FWDGT_HOLD`/`WWDGT_HOLD` живут в блоке DBG,
 которого нет, поэтому оба сторожа считают и под остановленным отладчиком.
 
+**CMP** (`src/cmp.rs`) — блок целиком, один компаратор в одном регистре.
+`Cmp::new(rcu, cmp, pos, inv, config)` забирает оба входа по значению и только в
+`Analog`: `InvertingInput` реализован для четырёх отводов `VREFINT` (0.3 / 0.6 /
+0.9 / 1.2 В) и для `PA4`, `PA5`, `PA0`, `PA2`; `NonInvertingInput` — для `PA1`
+либо для пары `(PA1, PA4)`, которая и замыкает `CMPSW`: владение `PA4` там же
+запрещает отдать её инвертирующим входом. `CmpConfig` несёт скорость,
+гистерезис, маршрут выхода и полярность. `enable` даёт `CmpRunning`, чей
+`output()` читается до мультиплексора полярности, поэтому `Polarity` видна
+только на ноге, EXTI и таймере. `lock` замораживает регистр до системного сброса
+и оставляет тип без `disable` и без `release`. Такт общий с SYSCFG
+(`CFGCMPEN`), поэтому `release` его не гасит. EXTI не реализован, прерывание от
+компаратора пока недоступно.
+
 **Прелюдия** (`src/prelude.rs`) — разбита по периферии (`prelude::gpio`, `::rcu`,
 `::dma`, `::fmc`, `::adc`, `::spi`, `::i2c`, `::timer`, `::watchdog`, `::time`,
 `::usart`). У `usart` есть `io` и `nb` под два стиля последовательного API — одно
@@ -646,7 +671,6 @@ probe-rs read  --chip GD32E230K8 b32 0x48000014 1   # например GPIOA_OCT
       сначала `EXTI`.
 - [ ] `embedded-storage` (`ReadNorFlash` / `NorFlash`) поверх FMC.
 - [ ] `RTC` — календарь. Без кварца пойдёт от IRC40K, с его же точностью.
-- [ ] `CMP` — аналоговый компаратор; его `CMP_OUT` уже есть в карте AF.
 
 **Доделать имеющееся**
 
