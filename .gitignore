@@ -1,6 +1,7 @@
 /target
 /docs/*.pdf
 /others-hal
+/.zed
 **/*.bk
 **/*.rs.bk
 **/*.bak
