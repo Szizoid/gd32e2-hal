@@ -1,6 +1,6 @@
 # gd32e2-hal
 
-[![CI](https://github.com/Szizoid/gd32e2-hal/actions/workflows/ci.yml/badge.svg)](https://github.com/Szizoid/gd32e2-hal/actions/workflows/ci.yml)
+[![CI/CD](https://github.com/Szizoid/gd32e2-hal/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/Szizoid/gd32e2-hal/actions/workflows/ci-cd.yml)
 
 [English](#english) · [Русский](#русский)
 
